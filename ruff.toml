@@ -1,0 +1,35 @@
+target-version = "py311"
+line-length = 100
+extend-exclude = [
+    "xtrace_harness/viewer",
+]
+
+[format]
+quote-style = "preserve"
+skip-magic-trailing-comma = false
+
+[lint]
+select = [
+    "E9",
+    "F",
+    "UP006",
+    "UP007",
+    "UP035",
+    "UP045",
+    "BLE001",
+    "S101",
+    "B006",
+    "A001",
+    "A002",
+    "N",
+    "PLC0415",
+    "E402",
+]
+
+[lint.per-file-ignores]
+"**/__init__.py" = [
+    "F401",
+]
+"tests/**" = [
+    "S101",
+]
