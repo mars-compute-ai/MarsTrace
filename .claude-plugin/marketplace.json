@@ -1,0 +1,13 @@
+{
+  "name": "marscompute",
+  "owner": {
+    "name": "MarsCompute"
+  },
+  "plugins": [
+    {
+      "name": "xtrace",
+      "source": "./",
+      "description": "Trace CUDA kernels on MarsCompute GPUs with Xtrace and read the traces in the terminal"
+    }
+  ]
+}

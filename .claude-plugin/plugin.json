@@ -1,0 +1,7 @@
+{
+  "name": "xtrace",
+  "description": "Trace CUDA kernels on MarsCompute GPUs with Xtrace and read the traces in the terminal",
+  "version": "0.1.0",
+  "homepage": "https://marscompute.ai",
+  "repository": "https://github.com/mars-compute-ai/xtrace-harness"
+}
