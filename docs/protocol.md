@@ -1,196 +1,170 @@
-# Xtrace job protocol
+# From xtrace.toml to the Xtrace API
 
-This document is the contract between the harness and MarsCompute. It covers the job
-directory, the job specification, the REST and MCP interfaces, and the result files.
+The harness turns a job directory into calls to the Xtrace API of the MarsCompute Control
+Plane. This document maps every key of `xtrace.toml` onto that API and lists the calls in
+the order the harness makes them.
 
-## 1. The job
+## 1. Source of truth
 
-A job is data. It names a compiled kernel, how to launch it, what its buffers hold, and
-which of its instructions to trace. The platform runs no program of the user's: it loads
-the binary on a GPU of the chosen class, allocates and fills the buffers, and launches
-the kernel itself.
+The platform's contracts define the API: the zod schemas in
+`packages/contracts/src/xtrace.ts` of mars-compute-ai/marscompute-maas, exported as JSON
+Schema to `packages/contracts/json-schema/xtrace/*.schema.json`. Where this document and
+those schemas disagree, the schemas win.
 
-A job directory holds a manifest, `xtrace.toml`, and the files it names:
+The harness vendors the exported schemas into `xtrace_harness/schemas/`:
+
+```bash
+python scripts/sync_schemas.py <maas checkout>           # copy them
+python scripts/sync_schemas.py <maas checkout> --check   # exit 1 when the copy is stale
+```
+
+The tests validate every request body the client builds, and every launch manifest it
+uploads, against the vendored schema of the same name (`upload-begin`, `upload-complete`,
+`inspection-request`, `estimate-input`, `submit-input`, `launch-manifest`). A schema that
+is not vendored yet is skipped.
+
+## 2. The job directory
+
+A job is data: a cubin, a description of its launch, the buffers' contents and what to
+measure. The platform runs no program of the user's.
+
+| File | Holds | Uploaded as |
+| --- | --- | --- |
+| `xtrace.toml` | the manifest | translated, see section 3 |
+| the cubin | the kernel; PTX is not accepted | artifact `cubin` |
+| the sources | optional; the viewer shows them beside the listing | not uploaded |
+| the tensors file | optional safetensors with the contents of `init = "tensor"` buffers | artifact `safetensors` |
+| the reference file | optional safetensors with the expected contents of the `[validation]` output | artifact `reference` |
+
+Every path stays inside the directory. `.xtrace-cache/` beside a cubin holds its cached
+inspections, keyed by the cubin's sha256 and the kernel symbol.
+
+## 3. Mapping
+
+| `xtrace.toml` | API |
+| --- | --- |
+| `hardware = "<environment_id>"` | `compute` = the `compute` of the capabilities entry with that `environment_id`; its `architecture` becomes `target.architecture` |
+| `intent` (required) | `prompt` |
+| `[kernel] binary` | artifact kind `cubin` → `bundle.cubin_artifact_id` |
+| `[kernel] name` | `target.kernel_symbol` |
+| `[kernel] sources` | not uploaded |
+| `tensors` | artifact kind `safetensors` → `bundle.tensors_artifact_id` |
+| `reference` + `[validation]` (`output`, `atol`, `rtol`) | artifact kind `reference` → `bundle.reference_artifact_id`; manifest `validation` `{output_key, atol, rtol}` |
+| `[[buffers]] name, dtype, shape, init, seed` | manifest `buffers[]` `{id, dtype, shape, init, seed \| tensor_key}` |
+| `[[buffers]] output = true` | `buffer` arguments that name it get `access = "read_write"`, others `"read"` |
+| `[launch] grid, block, cluster, shared_bytes` | `target.grid`, `target.block`, `target.cluster` (then `launch_kind = "cluster"`, else `"ordinary"`), `target.dynamic_shared_memory_bytes` |
+| `[launch] args` | `arguments[]` with `index` = position |
+| `[[trace.sites]] index` | `sites[].instruction_index` |
+| `[[trace.sites]] line` | the first instruction of that line in the inspection's listing that is in `eligible_sites` |
+| `value_register`, `value_width_bits` | `probe = "value"`, `value_register`, `value_width_bits`; `capture_values = true` |
+| `value_is_smid` | `probe = "smid"`; `capture_values = true` |
+| `warp_level` (alike on every site) | `granularity` `"warp"`, else `"thread"` |
+| `per_thread_records` (default 32) | `max_records` = records × rows; rows are the launch's threads, or its warps |
+| `[trace] clock`, `schedule`, `[trace.scope_roles]` | `clock`, `schedule`, `scope_roles` |
+| `[[trace.regions]] enter, leave, label` | `regions[]` `{region_id = label, start_site_id = "s<enter>", end_site_id = "s<leave>"}` |
+| `[trace] stages` with `[trace.range_profile]`, `[trace.pc_sampling]` | `stages`, `range_profile`, `pc_sampling` |
+| `[planner] model, max_calls, max_input_tokens, max_output_tokens` (instead of `[trace]`) | `analysis = {mode: "platform_planned", model, max_calls, max_input_tokens_total, max_output_tokens_total, capture_values: false}` |
+| `[limits] max_cost_usd, max_gpu_seconds, max_wall_seconds, max_attempts, max_trace_bytes` | `limits` `{max_total_cost_micro_usd, max_active_gpu_seconds, max_wall_seconds, max_attempts, max_trace_bytes}`; an absent key takes the capabilities' `limits` |
+
+Site `n` is the n-th `[[trace.sites]]` entry and has `site_id = "s<n>"`. A region label is
+1 to 200 letters, digits, `_`, `.`, `:` or `-`; an unlabelled region is `s<enter>-s<leave>`.
+`[trace]` with sites becomes `analysis = {mode: "explicit_plan", trace_plan}` with
+`tier = "sass"`.
+
+### 3.1 Element types
+
+| `dtype` | Manifest | | `dtype` | Manifest |
+| --- | --- | --- | --- | --- |
+| `bool` | `bool` | | `bf16` | `bfloat16` |
+| `u8` | `uint8` | | `u32` | `uint32` |
+| `i8` | `int8` | | `i32` | `int32` |
+| `f8e4m3` | `float8_e4m3fn` | | `f32` | `float32` |
+| `f8e5m2` | `float8_e5m2` | | `u64` | `uint64` |
+| `u16` | `uint16` | | `i64` | `int64` |
+| `i16` | `int16` | | `f64` | `float64` |
+| `f16` | `float16` | | | |
+
+`init` is `zeros` (default), `ones`, `random` (with `seed`, a uint32, default 0) or `tensor`
+(the tensor of the buffer's name in the tensors file, of the same type and shape).
+
+### 3.2 Arguments
+
+| `kind` | Fields | Manifest |
+| --- | --- | --- |
+| `buffer` | `buffer`, `offset_bytes` (multiple of 16) | `{index, kind: "buffer", buffer_id, byte_offset, access}` |
+| `scalar` | `dtype` (`i8` `u8` `i16` `u16` `i32` `u32` `i64` `u64` `f32` `f64`), `value` | `{index, kind: "scalar", abi_type, value}`; an integer beyond 2^53 is a decimal string |
+| `tensor_map` | `buffer`, `offset_bytes`, `data_type`, `global_dims`, `global_strides_bytes`, `box_dims`, `element_strides`, `interleave`, `swizzle`, `l2_promotion`, `oob_fill` | the same fields with `buffer_id`, `byte_offset` and the manifest's `data_type` names (`f16` → `float16`, `tf32` → `tfloat32`, `f32_ftz` → `float32_ftz`, …); `element_strides` defaults to all 1, the enumerations to `none` |
+| `bytes` | `hex`, `relocations` `[{offset, buffer, offset_bytes}]` | `{index, kind: "bytes", hex, relocations: [{offset, buffer_id, byte_offset}]}` |
+
+The fields of a tensor map are `cuTensorMapEncodeTiled`'s, innermost dimension first. The
+harness checks the argument count and every argument's size against the parameter layout
+of the inspection when one is cached or needed.
+
+## 4. Calls
+
+Every call carries `Authorization: Bearer <MARSCOMPUTE_API_KEY>` (an `mc_live_v1_...` key)
+to `https://control.marscompute.ai`, or to `MARSCOMPUTE_API_URL` when it is set.
+
+| Step | Call | Harness |
+| --- | --- | --- |
+| hardware | `GET /v1/xtrace/capabilities` | `xtrace hardware` |
+| credit | `GET /v1/xtrace/credit` | `xtrace credit` |
+| upload | `POST /v1/xtrace/artifacts/uploads` `{kind, name, size_bytes, sha256, content_type}` → grant; `PUT` the bytes to `upload_url`, or each range to its `parts[].upload_url` keeping each part's `ETag`; `POST /v1/xtrace/artifacts/{id}/complete` `{sha256, size_bytes, parts?}` | every command that uploads |
+| inspect | `POST /v1/xtrace/inspections` `{schema_version: "marscompute.xtrace.inspection-request.v1", cubin_artifact_id, kernel_symbol?}`; poll `GET /v1/xtrace/inspections/{id}`; download `result` | `xtrace inspect`, `xtrace sass`, and `estimate` / `submit` when a site names a line |
+| quote | `POST /v1/xtrace/quotes` with the estimate input | `xtrace estimate` |
+| submit | `POST /v1/xtrace/jobs` with the estimate input, `quote_id` and `idempotency_key`, and the same key in `Idempotency-Key` | `xtrace submit` |
+| state | `GET /v1/xtrace/jobs/{id}`, polled every `poll_after_milliseconds` | `xtrace job`, `--wait` |
+| list | `GET /v1/xtrace/jobs?limit=&cursor=` | `xtrace jobs` |
+| cancel | `POST /v1/xtrace/jobs/{id}/cancel` with `{}` | `xtrace cancel` |
+| result | `GET /v1/xtrace/jobs/{id}/result` → `manifest` and `downloads` | `xtrace fetch` |
+
+`estimate` and `submit` upload the cubin, the launch manifest (kind `launch_manifest`,
+named `manifest.json`), and the tensors and reference files when the job has them. A
+submission whose answer never arrived is sent again with the same idempotency key, which
+never starts a second job. Inspections are free and limited per tenant to 4 at a time and
+120 an hour.
+
+## 5. Results
+
+`xtrace fetch` checks every file against its download grant and the result manifest,
+decompresses gzip-encoded files, and writes them by name next to `result-manifest.json`:
 
 | File | Holds |
 | --- | --- |
-| the binary | a cubin, or PTX that the driver compiles on the GPU |
-| the sources | optional source files, shown beside the SASS listing |
-| the tensors file | optional safetensors file with the contents of `init = "file"` buffers |
+| `xtrace.json` | the trace report, read by `xtrace show` |
+| `summary.json` | `quality` (`usable`, `partial`, `unusable`), `reason_codes`, `correctness`, record counts and per-stage summaries |
+| `correctness.json` | each check's `status` and per-output comparison: against the reference, and each instrumented stage against the uninstrumented launch |
+| `trace-plan.json`, `provenance.json`, `baseline.json`, `runner.log` | the plan that ran, the environment, the uninstrumented timings, the job's log |
+| `range_profile.json`, `pc_sampling.json`, `pc_sampling_stats.json` | the profiler stages, when selected |
+| `result-manifest.json` | the result manifest: status, quality, reason codes, correctness, files and environment |
 
-The **bundle** is a gzip'd tar of the manifest and those files, nothing else, at most
-512 MiB. Every path stays inside the directory.
+## 6. Errors
 
-An **inspect** job reads the binary and returns the kernel's SASS listing and parameter
-layout; it does not launch the kernel. A **trace** job launches the kernel once untraced
-and once with the sites instrumented, restoring every buffer to its initial contents
-before each launch, and returns the trace.
+A refusal answers `{"error": {"code", "message", "correlation_id"}}`. The harness prints
+the code, the message and the correlation id.
 
-## 2. The manifest and the job specification
-
-| Key | Meaning |
-| --- | --- |
-| `kind` | `inspect` or `trace` (default) |
-| `hardware` | the hardware class, from `xtrace hardware` |
-| `timeout_seconds` | the job's wall-clock limit on the GPU, 300 by default |
-| `intent` | optional: what the user wants to learn, in their words, at most 2000 characters |
-| `tensors` | optional: the safetensors file |
-| `[kernel]` | `binary`, `name` (the entry point as the binary names it), `sources` |
-| `[[buffers]]` | `name`, `dtype`, `shape`, `init` (`zeros`, `ones`, `random` or `file`), `output` |
-| `[launch]` | `grid`, `block`, `cluster` (1 to 3 extents each), `shared_bytes` (dynamic shared memory), `args` |
-| `[trace]` | the sites and regions, below |
-
-Element types are `bool`, `u8`, `i8`, `f8e4m3`, `f8e5m2`, `u16`, `i16`, `f16`, `bf16`,
-`u32`, `i32`, `f32`, `u64`, `i64` and `f64`. A `file` buffer takes the tensor of the same
-name from the tensors file, with the same type and shape. An `output` buffer is returned
-in `outputs.safetensors`, and the trace job checks that the traced launch wrote the same
-bytes into it as the untraced one.
-
-`launch.args` lists the kernel's parameters in order:
-
-| `kind` | Fields | Passes |
+| Code | Status | Meaning |
 | --- | --- | --- |
-| `buffer` | `buffer`, `offset_bytes` | the buffer's device address plus the offset |
-| `scalar` | `dtype`, `value` | the number, of an integer or float type |
-| `tensor_map` | `buffer`, `offset_bytes`, `data_type`, `global_dims`, `global_strides_bytes`, `box_dims`, `element_strides`, `interleave`, `swizzle`, `l2_promotion`, `oob_fill` | a `CUtensorMap` the platform encodes with `cuTensorMapEncodeTiled` over the buffer; the fields are that call's parameters, innermost dimension first |
-| `bytes` | `hex`, `relocations` | a by-value struct; each relocation writes a buffer's address (`buffer`, `offset_bytes`) at an 8-byte aligned `offset` |
+| `insufficient_credit` | 402 | the credit cannot hold the quote; the error carries `top_up_url`, the console page where credit is added |
+| `inspection_rate_limited` | 429 | too many inspections at once or this hour |
+| `invalid_payload` | 400 | a body does not match its schema |
 
-The tensor map's enumerations read `data_type`: `u8` `u16` `u32` `i32` `u64` `i64` `f16`
-`f32` `f64` `bf16` `f32_ftz` `tf32` `tf32_ftz`; `interleave`: `none` `16b` `32b`;
-`swizzle`: `none` `32b` `64b` `128b`; `l2_promotion`: `none` `64b` `128b` `256b`;
-`oob_fill`: `none` `nan`.
+A failed inspection carries `failure.code`: `binary_invalid`, `arch_unsupported` or
+`kernel_not_found`. A failed job carries `error` with `code`, `message`,
+`classification` and `retryable`.
 
-A trace job's `[trace]` table:
+## 7. Cost
 
-| Key | Meaning |
-| --- | --- |
-| `clock` | `gpu` (device-wide nanosecond timer, default), `sm` (per-SM cycle counter) or `anchor` (cycle counter rebuilt to nanoseconds; warp-level sites only) |
-| `per_thread_records` | records each thread keeps before its ring wraps |
-| `schedule` | `first_feasible` (default) or `least_makespan`, how carefully probes are placed |
-| `[[trace.sites]]` | the instructions that record, in order; a site's position is its id |
-| `[[trace.regions]]` | pairs of sites that bound an interval: `enter`, `leave`, `label` |
-| `[trace.scope_roles]` | region label to the warp role that executes it, for the report's lanes |
+A quote freezes `limits.max_total_cost_micro_usd`, the most the job can cost, and
+`rate_snapshot.gpu_micro_usd_per_hour`. Admission holds the cap against the tenant's
+credit; the job settles at what it used. `xtrace submit` prints both and asks before it
+submits, unless `--yes`.
 
-A site names one instruction by `index` (from `xtrace sass`) or by `line`
-(`<file>:<line>`, the first instruction emitted for that line; the binary needs line
-info). It may record a value beside its timestamp: `value_register` (`R<n>` or `UR<n>`),
-`value_width_bits` (32 or 64) or `value_is_smid`. `warp_level = true` writes one record
-per warp instead of one per thread.
+## 8. Local MCP server
 
-`xtrace upload` and `xtrace submit` turn the manifest into the JSON specification the
-interfaces take; `examples/matmul` gives:
-
-```json
-{
-  "schema": "xtrace.job/1",
-  "kind": "trace",
-  "kernel": {"binary": "matmul.cubin", "name": "square_matrix_mul", "sources": ["matmul.cu"]},
-  "tensors": null,
-  "buffers": [
-    {"name": "a", "dtype": "i32", "shape": [256, 256], "init": "random", "output": false},
-    {"name": "b", "dtype": "i32", "shape": [256, 256], "init": "random", "output": false},
-    {"name": "c", "dtype": "i32", "shape": [256, 256], "init": "zeros", "output": true}
-  ],
-  "launch": {
-    "grid": [16, 16, 1], "block": [16, 16, 1], "cluster": null, "shared_bytes": 0,
-    "args": [
-      {"kind": "buffer", "buffer": "a", "offset_bytes": 0},
-      {"kind": "buffer", "buffer": "b", "offset_bytes": 0},
-      {"kind": "buffer", "buffer": "c", "offset_bytes": 0},
-      {"kind": "scalar", "dtype": "i32", "value": 256}
-    ]
-  },
-  "timeout_seconds": 120,
-  "intent": "how long each thread spends in the dot-product loop, and how evenly the blocks run",
-  "trace": {
-    "clock": "gpu",
-    "per_thread_records": null,
-    "schedule": "first_feasible",
-    "sites": [
-      {"line": "matmul.cu:8", "value_width_bits": 32, "value_is_smid": false, "warp_level": false},
-      {"line": "matmul.cu:11", "value_width_bits": 32, "value_is_smid": false, "warp_level": false}
-    ],
-    "regions": [[0, 1, "dot product"]],
-    "scope_roles": {}
-  }
-}
-```
-
-## 3. REST interface
-
-Every request carries `Authorization: Bearer <MarsCompute API key>`. Errors answer
-`{"error": {"code", "message"}}` with the request's `x-request-id`.
-
-| Method and path | Does |
-| --- | --- |
-| `GET /v1/xtrace/hardware` | the hardware classes: `id`, `gpu`, `arch`, `gpu_second_micro_usd`, `job_micro_usd`, `timeout_seconds_max`, `available` |
-| `GET /v1/xtrace/balance` | the tenant's available credit, `available_micro_usd` |
-| `POST /v1/xtrace/uploads` | `{size_bytes, sha256}` grants an upload: `id`, `upload_url` (signed PUT), `expires_at` |
-| `POST /v1/xtrace/uploads/{id}/complete` | checks the uploaded bundle against its size and digest |
-| `POST /v1/xtrace/jobs` | `{upload_id, hardware, spec}` with an `Idempotency-Key` admits a job and reserves its maximum cost |
-| `GET /v1/xtrace/jobs` | the account's latest jobs, `?limit=` |
-| `GET /v1/xtrace/jobs/{id}` | one job |
-| `POST /v1/xtrace/jobs/{id}/cancel` | asks a job to stop |
-
-A job reads:
-
-```json
-{
-  "id": "xtj_...",
-  "kind": "trace",
-  "state": "succeeded",
-  "hardware": "h100-sxm",
-  "created_at": "...", "started_at": "...", "finished_at": "...",
-  "gpu_seconds": 4.2,
-  "reserved_micro_usd": 0, "charge_micro_usd": 0,
-  "error": null,
-  "summary": {},
-  "files": [{"name": "trace.json", "size_bytes": 150393, "url": "https://..."}]
-}
-```
-
-`state` is one of `queued`, `running`, `cancel_requested`, `succeeded`, `failed`,
-`cancelled` and `expired`. A failed job's `error.code` is one of `binary_invalid`,
-`kernel_not_found`, `arch_unsupported`, `launch_invalid`, `launch_failed`,
-`site_unresolved`, `site_not_instrumentable`, `timeout` and `platform_failure`. A file's
-`url` is signed and valid for five minutes; fetch the job again for a fresh one.
-
-## 4. MCP interface
-
-The MCP server is at `https://api.marscompute.ai/mcp` (Streamable HTTP, the same bearer
-key). Its tools mirror the REST interface, except for moving bytes, which a tool call
-cannot carry:
-
-| Tool | Arguments | Returns |
-| --- | --- | --- |
-| `xtrace_list_hardware` | none | the hardware classes |
-| `xtrace_get_balance` | none | the available credit |
-| `xtrace_submit_job` | `upload_id`, `hardware`, `spec` | the admitted job |
-| `xtrace_get_job` | `job_id` | the job, with its summary and file links |
-| `xtrace_list_jobs` | `limit` | the latest jobs |
-| `xtrace_cancel_job` | `job_id` | the job |
-
-`xtrace upload <directory>` uploads the bundle and prints the `upload_id` and `spec` to
-pass to `xtrace_submit_job`; `xtrace fetch <job>` downloads the files `xtrace_get_job`
-links to.
-
-## 5. Result files
-
-| File | Job | Holds |
-| --- | --- | --- |
-| `inspect.json` | inspect | `xtrace.inspect/1`: the binary's kernels, and the named kernel's registers, static shared memory, parameters (index, offset, size) and instructions (index, pc, SASS text, source line, basic block) |
-| `trace.json` | trace | the trace report, read by `xtrace show` |
-| `report.html` | trace | the same report as an interactive page |
-| `summary.json` | trace | the headline figures `xtrace_get_job` returns, with `outputs_match` |
-| `outputs.safetensors` | trace | the `output` buffers after the untraced launch, at most 256 MiB |
-| `log.txt` | both | the job's messages: what was loaded and launched, warnings, the cause of a failure |
-
-## 6. Cost
-
-A trace job is charged a fixed price per job plus a price per GPU-second of the time the
-kernel's launches held the GPU, at the prices `xtrace hardware` lists when the job is
-admitted. An inspect job is charged the fixed price only. Admission reserves the price
-of the whole timeout against the tenant's credit and refuses the job with
-`insufficient_credit` when the credit does not cover it. A job that fails because of the
-platform is not charged; one whose launch fails, or that reaches its timeout, is charged
-for the time it ran.
+`xtrace mcp` serves the commands as MCP tools over stdio (JSON-RPC 2.0, one message per
+line), on local paths: `xtrace_hardware`, `xtrace_credit`, `xtrace_cubin_find`,
+`xtrace_cubin_show`, `xtrace_inspect`, `xtrace_sass`, `xtrace_estimate`, `xtrace_submit`,
+`xtrace_jobs`, `xtrace_job`, `xtrace_wait`, `xtrace_cancel`, `xtrace_fetch` and
+`xtrace_show`. `xtrace_submit` takes `accept_max_cost_usd` and refuses a quote whose cap
+exceeds it. `.mcp.json` registers the server for Claude Code.
