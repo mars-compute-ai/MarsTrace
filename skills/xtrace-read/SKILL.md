@@ -1,13 +1,14 @@
 ---
 name: xtrace-read
-description: Read an Xtrace trace report of a CUDA kernel in the terminal with `xtrace show` — per-region statistics, per-thread timelines, pipeline bubbles, concurrency over time, outlier threads, the longest instances, and the region a user selected in the HTML panel. Use whenever there is a trace.json from a MarsCompute Xtrace job to analyse, or when the user pastes a selection token starting with gwtrace/1.
+description: Read an Xtrace trace report of a CUDA kernel in the terminal with `xtrace show` — per-region statistics, per-thread timelines, pipeline bubbles, concurrency over time, outlier threads, the longest instances, and the region a user selected in the HTML panel. Use whenever there is an xtrace.json from a MarsCompute Xtrace job to analyse, or its summary.json and correctness.json to judge, or when the user pastes a selection token starting with gwtrace/1.
 ---
 
 # Reading an Xtrace report
 
-A trace job returns `trace.json` (the report), `report.html` (the same report as an
-interactive page) and `summary.json` (the headline figures `xtrace_get_job` shows). Read
-the report with `xtrace show`; it needs no GPU and no network.
+A job's results land in `xtrace-results/<job>/` (`xtrace fetch`): `xtrace.json` (the
+trace report), `summary.json` (quality, reason codes and headline figures),
+`correctness.json` (the output checks) and `result-manifest.json`. Read the report with
+`xtrace show`; it needs no GPU and no network.
 
 ## 1. Use `xtrace show`, not a JSON parser
 
@@ -26,15 +27,15 @@ re-derives it all, and usually disagrees with the report in ways that look plaus
   block's, not the run's.
 
 ```bash
-xtrace show trace.json                    # header, region stats, timeline
-xtrace show trace.json --stats            # per-site records, paired regions, per-region stats
-xtrace show trace.json --bubbles          # active, bubble and lifetime per row, worst rows
-xtrace show trace.json --timeline --sample 32 --sort-by bubble --human
-xtrace show trace.json --concurrency      # rows active per time bin
-xtrace show trace.json --outliers         # rows whose active time is an outlier
-xtrace show trace.json --longest <REGION> # the single longest instance of a region
-xtrace show trace.json --longest-bubble   # the largest gaps between intervals
-xtrace show trace.json --json             # the views above, machine-readable
+xtrace show xtrace.json                    # header, region stats, timeline
+xtrace show xtrace.json --stats            # per-site records, paired regions, per-region stats
+xtrace show xtrace.json --bubbles          # active, bubble and lifetime per row, worst rows
+xtrace show xtrace.json --timeline --sample 32 --sort-by bubble --human
+xtrace show xtrace.json --concurrency      # rows active per time bin
+xtrace show xtrace.json --outliers         # rows whose active time is an outlier
+xtrace show xtrace.json --longest <REGION> # the single longest instance of a region
+xtrace show xtrace.json --longest-bubble   # the largest gaps between intervals
+xtrace show xtrace.json --json             # the views above, machine-readable
 ```
 
 Filters compose with every view:
@@ -51,14 +52,48 @@ Read `--json` when you compute with the numbers; read the plain output when you 
 them. Never parse the plain output. `--json` does not carry the per-site and
 paired-region tables; read those from `--stats`.
 
-## 2. Find the bubbles
+## 2. Gate the trace first
+
+Read `summary.json` and `correctness.json` before any number of the report.
+
+`quality` is `usable`, `partial` or `unusable`. `reason_codes` says why it is not
+`usable`; each code limits what the trace can support:
+
+| Reason code | What it means for the reading |
+| --- | --- |
+| `empty_trace` | nothing recorded: the sites never executed under this launch. No timeline exists |
+| `sites_without_records` | some sites never executed on the traced path; regions using them are empty |
+| `record_capacity_reached_possible_wrap` | some rows filled their ring: counts are lower bounds and the earliest records are lost. Raise `per_thread_records` or use `warp_level` |
+| `unpaired_region_boundaries` | a region's pair rate is below 100%: unequal enter and leave counts, or a wrapped ring. Say which before using its numbers |
+| `regions_without_intervals` | a declared region produced no interval: its sites are backwards or on disjoint paths |
+| `correctness_failed` | an output differs: the traced run computed something else. Do not report its timeline until the cause is known |
+| `missing_reference` | no reference was given, so only traced against untraced was checked |
+| `empty_profile`, `missing_metric_values`, `sampling_loss_unknown`, `dropped_or_unattributed_samples`, `source_mapping_unavailable` | a profiler stage is incomplete; its numbers are partial |
+
+A code not in this table is still a limit: quote it to the user rather than ignore it.
+
+`correctness.json` holds one check per comparison: against the reference (when the job
+had `[validation]`), and each instrumented stage against the uninstrumented launch
+(`instrumented_vs_uninstrumented`, `range_profile_vs_uninstrumented`, ...). Each has a
+`status` (`passed`, `failed`, `not_verified`) and, per output buffer, the element count,
+the mismatches and the largest error. A failed instrumented check means the traced run
+diverged; a failed reference check means the kernel or the launch description is wrong.
+
+Then check the trace against the kernel's structure with `--stats`:
+
+- **Records per row match your model.** A loop of N iterations gives N records per row at
+  a loop-body site. A different count means the site is not where you thought.
+- **Every declared site appears**, and **spans make sense**: an interval close to the
+  whole kernel is a wait you did not split out; a leave before its enter means the region
+  is backwards.
+
+## 3. Find the bubbles
 
 A bubble is time a row spends between its regions: waiting on a barrier, on memory, on
 another warp role. Work from the whole to the part:
 
-1. **Is the trace trustworthy?** `--stats`: every region's pair rate, and records per
-   row against the count the kernel's structure predicts (skill `xtrace-remote`, section
-   5). Stop and fix the sites if either is off.
+1. **Is the trace trustworthy?** Section 2: quality, reason codes, correctness, and
+   `--stats` against the kernel's structure. Stop and fix the sites if any is off.
 2. **How much is idle?** `--bubbles` gives the bubble ratio and the rows with the most
    bubble time. A ratio of a few percent is a busy kernel; tens of percent is a pipeline
    that stalls.
@@ -78,9 +113,9 @@ Report bubbles as measurements: name the region pair, the rows, the duration and
 share of the row's lifetime, the view that shows it, and what the time unit is. Then
 say what would explain it, and what trace would tell the explanations apart.
 
-## 3. A selection token is the user pointing at the panel
+## 4. A selection token is the user pointing at the panel
 
-`report.html` draws the trace as lanes over time. A user drags out a stretch of time and
+The trace panel of a job draws the trace as lanes over time. A user drags out a stretch of time and
 a set of lanes, right-clicks, and copies one line:
 
 ```
@@ -90,7 +125,7 @@ gwtrace/1 kernel=square_matrix_mul#ef46 t=4365:11462ns lane=block:15-33 order=ro
 Hand it to the viewer verbatim:
 
 ```bash
-xtrace show trace.json --select 'gwtrace/1 ...' --stats
+xtrace show xtrace.json --select 'gwtrace/1 ...' --stats
 ```
 
 - **Do not rewrite it into `--tid` or `--stime`.** Its lane ids count across the launch
@@ -100,9 +135,9 @@ xtrace show trace.json --select 'gwtrace/1 ...' --stats
 - **A refusal is information.** "copied from a panel over a different kernel" means the
   user is looking at another report. Ask which one; do not hunt for a matching region.
 
-## 4. When unsure, ask the user to select
+## 5. When unsure, ask the user to select
 
-Ask the user to look at `report.html` and select the region when:
+Ask the user to open the job's trace panel and select the region when:
 
 - two readings of the numbers both fit and imply different fixes;
 - a count or duration contradicts the kernel's structure and you cannot tell whether the
@@ -111,10 +146,10 @@ Ask the user to look at `report.html` and select the region when:
 - the user describes something they saw ("the middle is idle", "one warp lags") that the
   aggregates do not locate.
 
-Ask concretely: name the file, what to look for, the gesture (drag the region,
+Ask concretely: name the job, what to look for, the gesture (drag the region,
 right-click, copy the selection) and what you will do with it. Do not guess and proceed:
 an analysis of the wrong region reports a real number about the wrong thing.
 
-## 5. Related skills
+## 6. Related skills
 
-- `xtrace-remote`: prepare, submit and gate the trace this report came from.
+- `xtrace-remote`: prepare and submit the trace this report came from.
