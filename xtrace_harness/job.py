@@ -1,14 +1,14 @@
-import gzip
-import hashlib
-import io
+import decimal
+import json
+import math
 import os
 import re
-import tarfile
 import tomllib
 from dataclasses import dataclass, field
 from typing import Any
 from xtrace_harness.binary import KernelBinary
 from xtrace_harness.error import ManifestError
+from xtrace_harness.listing import KernelListing
 from xtrace_harness.tensors import TensorFile
 
 
@@ -17,24 +17,31 @@ class TraceSite:
     """One instruction of the traced kernel that writes a timestamp, and optionally a value.
 
     A site names its instruction either by its index in the kernel's SASS listing, or by a
-    source line, which the platform resolves to the first instruction emitted for it.
+    source line, which an inspection of the cubin resolves to the first instruction of that
+    line that takes a probe.
 
     Args:
         index: the instruction index, as ``xtrace sass`` lists it
         line: ``<file>:<line>`` of the kernel source, when the cubin carries line info
         value_register: the register recorded beside the timestamp, ``R<n>`` or ``UR<n>``
-        value_width_bits: 32, or 64 to record the register pair starting there
+        value_width_bits: 32, or 64 to record the register pair starting at an even ``R<n>``
         value_is_smid: record the SM the block runs on instead of a register
         warp_level: one record per warp, written by an elected lane, instead of per thread
     """
 
-    # the register names a site may record
-    REGISTER_PATTERN = re.compile(r"^(U?)R(\d+)$")
-    # the value widths a site may record
+    REGISTER_PATTERN = re.compile(r"^(UR|R)(\d+)$")
+    # the highest register number of each register file a site may record
+    MAP_REGISTER_MAX = {
+        "R": 254,
+        "UR": 62,
+    }
+    VALUE_WIDTH_DEFAULT = 32
+    VALUE_WIDTH_WIDE = 64
     LIST_VALUE_WIDTH = (
-        32,
-        64,
+        VALUE_WIDTH_DEFAULT,
+        VALUE_WIDTH_WIDE,
     )
+    LINE_PATTERN = re.compile(r"^.+:\d+$")
     SET_KEY = {
         "index",
         "line",
@@ -47,7 +54,7 @@ class TraceSite:
     index: int | None = None
     line: str | None = None
     value_register: str | None = None
-    value_width_bits: int = 32
+    value_width_bits: int | None = None
     value_is_smid: bool = False
     warp_level: bool = False
 
@@ -73,10 +80,7 @@ class TraceSite:
             index=map_site.get("index"),
             line=map_site.get("line"),
             value_register=map_site.get("value_register"),
-            value_width_bits=map_site.get(
-                "value_width_bits",
-                32,
-            ),
+            value_width_bits=map_site.get("value_width_bits"),
             value_is_smid=map_site.get(
                 "value_is_smid",
                 False,
@@ -96,57 +100,119 @@ class TraceSite:
         Raises:
             ManifestError: the site is ambiguous or names an unknown register or width
         """
+        where = f"site {site_id}"
         if (self.index is None) == (self.line is None):
-            raise ManifestError(f"site {site_id}: give exactly one of 'index' and 'line'")
-        if (
-            self.index is not None
-            and self.index < 0
-        ):
-            raise ManifestError(f"site {site_id}: 'index' must not be negative")
+            raise ManifestError(f"{where}: give exactly one of 'index' and 'line'")
+        if self.index is not None:
+            JobManifest.check_integer(
+                value=self.index,
+                where=f"{where} index",
+                low=0,
+            )
         if (
             self.line is not None
-            and not re.match(
-                r"^.+:\d+$",  # pattern
-                self.line,    # string
+            and (
+                not isinstance(
+                    self.line,  # obj
+                    str,        # class_or_tuple
+                )
+                or not TraceSite.LINE_PATTERN.match(self.line)
             )
         ):
-            raise ManifestError(f"site {site_id}: 'line' must read '<file>:<line>'")
+            raise ManifestError(f"{where}: 'line' must read '<file>:<line>'")
         if (
-            self.value_register is not None
-            and not TraceSite.REGISTER_PATTERN.match(self.value_register)
+            not isinstance(
+                self.value_is_smid,  # obj
+                bool,                # class_or_tuple
+            )
+            or not isinstance(
+                self.warp_level,  # obj
+                bool,             # class_or_tuple
+            )
         ):
-            raise ManifestError(f"site {site_id}: 'value_register' must read R<n> or UR<n>")
-        if self.value_width_bits not in TraceSite.LIST_VALUE_WIDTH:
-            raise ManifestError(f"site {site_id}: 'value_width_bits' must be 32 or 64")
+            raise ManifestError(f"{where}: 'value_is_smid' and 'warp_level' are true or false")
         if (
             self.value_is_smid
             and self.value_register is not None
         ):
-            raise ManifestError(f"site {site_id}: record either the SM id or a register, not both")
+            raise ManifestError(f"{where}: record either the SM id or a register, not both")
+        if (
+            self.value_width_bits is not None
+            and self.value_register is None
+        ):
+            raise ManifestError(f"{where}: 'value_width_bits' needs 'value_register'")
+        if self.value_register is None:
+            return
+        match = TraceSite.REGISTER_PATTERN.match(str(self.value_register))
+        if (
+            match is None
+            or int(match.group(2)) > TraceSite.MAP_REGISTER_MAX[match.group(1)]
+        ):
+            raise ManifestError(f"{where}: 'value_register' must be R0 to R254 or UR0 to UR62")
+        width = self.width_bits()
+        if width not in TraceSite.LIST_VALUE_WIDTH:
+            raise ManifestError(f"{where}: 'value_width_bits' must be 32 or 64")
+        if (
+            width == TraceSite.VALUE_WIDTH_WIDE
+            and (
+                match.group(1) != "R"
+                or int(match.group(2)) % 2 != 0
+            )
+        ):
+            raise ManifestError(f"{where}: a 64-bit value needs an even R register, not {self.value_register}")
 
-    def to_json(self) -> dict[str, Any]:
-        """The site as the job specification carries it.
+    def width_bits(self) -> int:
+        """The width of the recorded register value.
 
         Returns:
-            the site's fields, without the ones left unset
+            32 or 64
+        """
+        if self.value_width_bits is None:
+            return TraceSite.VALUE_WIDTH_DEFAULT
+        return self.value_width_bits
+
+    def probe(self) -> str:
+        """What the site records beside its timestamp.
+
+        Returns:
+            ``timing``, ``value`` or ``smid``
+        """
+        if self.value_is_smid:
+            return "smid"
+        if self.value_register is not None:
+            return "value"
+        return "timing"
+
+    def to_api(
+        self,
+        site_id: int,
+        instruction_index: int,
+    ) -> dict[str, Any]:
+        """The site as the trace plan carries it.
+
+        Args:
+            site_id: the site's position in the manifest
+            instruction_index: the instruction it probes, resolved from a line when needed
+
+        Returns:
+            the site
         """
         map_site: dict[str, Any] = {
-            "value_width_bits": self.value_width_bits,
-            "value_is_smid": self.value_is_smid,
-            "warp_level": self.warp_level,
+            "site_id": f"s{site_id}",
+            "instruction_index": instruction_index,
+            "probe": self.probe(),
         }
-        if self.index is not None:
-            map_site["index"] = self.index
-        if self.line is not None:
-            map_site["line"] = self.line
         if self.value_register is not None:
             map_site["value_register"] = self.value_register
+            map_site["value_width_bits"] = self.width_bits()
         return map_site
 
 
 @dataclass
 class TraceRegion:
     """A region of the kernel bounded by two sites: the one entering it and the one leaving it."""
+
+    LABEL_PATTERN = re.compile(r"^[A-Za-z0-9_.:-]{1,200}$")
 
     enter: int
     leave: int
@@ -174,44 +240,66 @@ class TraceRegion:
             },
             where="[[trace.regions]]",
         )
-        if (
-            not isinstance(
-                map_region.get("enter"),  # obj
-                int,                      # class_or_tuple
-            )
-            or not isinstance(
-                map_region.get("leave"),  # obj
-                int,                      # class_or_tuple
-            )
+        for key in (
+            "enter",
+            "leave",
         ):
-            raise ManifestError("each [[trace.regions]] entry needs integer 'enter' and 'leave'")
+            JobManifest.check_integer(
+                value=map_region.get(key),
+                where=f"[[trace.regions]] {key}",
+                low=0,
+            )
         return cls(
             enter=map_region["enter"],
             leave=map_region["leave"],
-            label=str(
-                map_region.get(
-                    "label",
-                    f"{map_region['enter']}->{map_region['leave']}",
-                )
+            label=map_region.get(
+                "label",
+                f"s{map_region['enter']}-s{map_region['leave']}",
             ),
         )
 
-    def to_json(self) -> list[Any]:
-        """The region as the trace report keeps it.
+    def validate(self, site_count: int) -> None:
+        """Check the region's label and the sites it names.
 
-        Returns:
-            ``[enter, leave, label]``
+        Args:
+            site_count: how many sites the manifest declares
+
+        Raises:
+            ManifestError: the label is not an identifier or a site is absent
         """
-        return [
+        if not TraceRegion.LABEL_PATTERN.match(str(self.label)):
+            raise ManifestError(
+                f"region label '{self.label}' must be 1 to 200 letters, digits, '_', '.', ':' "
+                "or '-'"
+            )
+        for site_id in (
             self.enter,
             self.leave,
-            self.label,
-        ]
+        ):
+            if site_id >= site_count:
+                raise ManifestError(
+                    f"region '{self.label}' names site {site_id}, but the manifest has "
+                    f"{site_count} site(s)"
+                )
+        if self.enter == self.leave:
+            raise ManifestError(f"region '{self.label}' enters and leaves at the same site")
+
+    def to_api(self) -> dict[str, str]:
+        """The region as the trace plan carries it.
+
+        Returns:
+            the region id and its two site ids
+        """
+        return {
+            "region_id": self.label,
+            "start_site_id": f"s{self.enter}",
+            "end_site_id": f"s{self.leave}",
+        }
 
 
 @dataclass
 class TraceOptions:
-    """How a trace job instruments the kernel and what its report pairs into intervals."""
+    """The ``[trace]`` table: which instructions record, how, and what else the GPU measures."""
 
     LIST_CLOCK = (
         "gpu",
@@ -222,18 +310,48 @@ class TraceOptions:
         "first_feasible",
         "least_makespan",
     )
-    PER_THREAD_RECORDS_MAX = 4096
+    LIST_STAGE = (
+        "xtrace",
+        "range_profile",
+        "pc_sampling",
+    )
+    SET_KEY = {
+        "clock",
+        "schedule",
+        "per_thread_records",
+        "stages",
+        "sites",
+        "regions",
+        "scope_roles",
+        "range_profile",
+        "pc_sampling",
+    }
+    PER_THREAD_RECORDS_DEFAULT = 32
+    PER_THREAD_RECORDS_MAX = 65536
+    MAX_RECORDS_MAX = 1_000_000_000
+    SITE_COUNT_MAX = 4096
+    REGION_COUNT_MAX = 2048
+    SCOPE_ROLE_COUNT_MAX = 64
+    SCOPE_ROLE_CHARACTERS_MAX = 64
+    METRIC_PATTERN = re.compile(r"^[A-Za-z][A-Za-z0-9_.]{0,199}$")
+    METRIC_COUNT_MAX = 16
+    INVOCATIONS_MIN = 2
+    INVOCATIONS_MAX = 128
+    REPEATS_MAX = 100
 
     clock: str = "gpu"
-    per_thread_records: int | None = None
     schedule: str = "first_feasible"
+    per_thread_records: int = PER_THREAD_RECORDS_DEFAULT
+    list_stage: list[str] = field(default_factory=lambda: ["xtrace"])
     list_site: list[TraceSite] = field(default_factory=list)
     list_region: list[TraceRegion] = field(default_factory=list)
-    # region label -> the warp role that executes it, for the report's lane grouping
+    # region label -> the warp role that executes it, for the report's lanes
     map_scope_role: dict[str, str] = field(default_factory=dict)
+    map_range_profile: dict[str, Any] | None = None
+    map_pc_sampling: dict[str, Any] | None = None
 
     @classmethod
-    def from_table(cls, map_trace: dict[str, Any]) -> "TraceOptions":
+    def from_table(cls, map_trace: Any) -> "TraceOptions":
         """Read the ``[trace]`` table.
 
         Args:
@@ -241,22 +359,67 @@ class TraceOptions:
 
         Returns:
             the options
+
+        Raises:
+            ManifestError: the table has unknown keys
         """
+        JobManifest.check_table(
+            value=map_trace,
+            set_key=TraceOptions.SET_KEY,
+            where="[trace]",
+        )
+        map_range_profile = map_trace.get("range_profile")
+        if map_range_profile is not None:
+            JobManifest.check_table(
+                value=map_range_profile,
+                set_key={
+                    "metrics",
+                    "max_invocations",
+                },
+                where="[trace.range_profile]",
+            )
+        map_pc_sampling = map_trace.get("pc_sampling")
+        if map_pc_sampling is not None:
+            JobManifest.check_table(
+                value=map_pc_sampling,
+                set_key={"repeats"},
+                where="[trace.pc_sampling]",
+            )
+        map_scope_role = map_trace.get(
+            "scope_roles",
+            {},
+        )
+        if not isinstance(
+            map_scope_role,  # obj
+            dict,            # class_or_tuple
+        ):
+            raise ManifestError("[trace.scope_roles] must be a table of region label = role")
         return cls(
             clock=map_trace.get(
                 "clock",
                 "gpu",
             ),
-            per_thread_records=map_trace.get("per_thread_records"),
             schedule=map_trace.get(
                 "schedule",
                 "first_feasible",
+            ),
+            per_thread_records=map_trace.get(
+                "per_thread_records",
+                TraceOptions.PER_THREAD_RECORDS_DEFAULT,
+            ),
+            list_stage=list(
+                map_trace.get(
+                    "stages",
+                    ["xtrace"],
+                )
             ),
             list_site=[TraceSite.from_table(map_site) for map_site in map_trace.get("sites", [])],
             list_region=[
                 TraceRegion.from_table(map_region) for map_region in map_trace.get("regions", [])
             ],
-            map_scope_role=dict(map_trace.get("scope_roles", {})),
+            map_scope_role=dict(map_scope_role),
+            map_range_profile=map_range_profile,
+            map_pc_sampling=map_pc_sampling,
         )
 
     def validate(self) -> None:
@@ -271,59 +434,386 @@ class TraceOptions:
             raise ManifestError(
                 f"trace.schedule must be one of {', '.join(TraceOptions.LIST_SCHEDULE)}"
             )
+        JobManifest.check_integer(
+            value=self.per_thread_records,
+            where="trace.per_thread_records",
+            low=1,
+            high=TraceOptions.PER_THREAD_RECORDS_MAX,
+        )
+        self._validate_stages()
         if (
-            self.per_thread_records is not None
-            and not 1 <= self.per_thread_records <= TraceOptions.PER_THREAD_RECORDS_MAX
+            "xtrace" in self.list_stage
+            and not self.list_site
         ):
-            raise ManifestError(
-                f"trace.per_thread_records must lie in [1, {TraceOptions.PER_THREAD_RECORDS_MAX}]"
-            )
-        if not self.list_site:
-            raise ManifestError("a trace job needs at least one [[trace.sites]] entry")
+            raise ManifestError("the xtrace stage needs at least one [[trace.sites]] entry")
+        if len(self.list_site) > TraceOptions.SITE_COUNT_MAX:
+            raise ManifestError(f"a trace has at most {TraceOptions.SITE_COUNT_MAX} sites")
         for site_id, site in enumerate(self.list_site):
             site.validate(site_id)
+        if len({site.warp_level for site in self.list_site}) > 1:
+            raise ManifestError("set warp_level alike on every site: a trace records per thread or per warp")
         if (
             self.clock == "anchor"
-            and not all(site.warp_level for site in self.list_site)
+            and self.granularity() != "warp"
         ):
             raise ManifestError("trace.clock = 'anchor' needs every site to be warp_level")
+        if len(self.list_region) > TraceOptions.REGION_COUNT_MAX:
+            raise ManifestError(f"a trace has at most {TraceOptions.REGION_COUNT_MAX} regions")
+        set_label = set()
         for region in self.list_region:
-            for site_id in (
-                region.enter,
-                region.leave,
+            region.validate(len(self.list_site))
+            if region.label in set_label:
+                raise ManifestError(f"region label '{region.label}' is used twice")
+            set_label.add(region.label)
+        if len(self.map_scope_role) > TraceOptions.SCOPE_ROLE_COUNT_MAX:
+            raise ManifestError(f"[trace.scope_roles] has at most {TraceOptions.SCOPE_ROLE_COUNT_MAX} entries")
+        for label, role in self.map_scope_role.items():
+            if label not in set_label:
+                raise ManifestError(f"[trace.scope_roles] names region '{label}', which [[trace.regions]] lacks")
+            if (
+                not isinstance(
+                    role,  # obj
+                    str,   # class_or_tuple
+                )
+                or not 1 <= len(role) <= TraceOptions.SCOPE_ROLE_CHARACTERS_MAX
             ):
-                if not 0 <= site_id < len(self.list_site):
-                    raise ManifestError(
-                        f"region '{region.label}' names site {site_id}, "
-                        f"but the manifest has {len(self.list_site)} site(s)"
-                    )
-            if region.enter == region.leave:
-                raise ManifestError(f"region '{region.label}' enters and leaves at the same site")
+                raise ManifestError(
+                    f"[trace.scope_roles] {label}: a role is 1 to "
+                    f"{TraceOptions.SCOPE_ROLE_CHARACTERS_MAX} characters"
+                )
 
-    def to_json(self) -> dict[str, Any]:
-        """The options as the job specification carries them.
+    def _validate_stages(self) -> None:
+        """Check the selected stages and that each profiler stage has exactly its own options."""
+        if (
+            not self.list_stage
+            or len(set(self.list_stage)) != len(self.list_stage)
+            or not set(self.list_stage) <= set(TraceOptions.LIST_STAGE)
+        ):
+            raise ManifestError(
+                f"trace.stages lists distinct stages from {', '.join(TraceOptions.LIST_STAGE)}"
+            )
+        if ("range_profile" in self.list_stage) != (self.map_range_profile is not None):
+            raise ManifestError("[trace.range_profile] is given exactly when trace.stages has 'range_profile'")
+        if ("pc_sampling" in self.list_stage) != (self.map_pc_sampling is not None):
+            raise ManifestError("[trace.pc_sampling] is given exactly when trace.stages has 'pc_sampling'")
+        if self.map_range_profile is not None:
+            list_metric = self.map_range_profile.get("metrics")
+            if (
+                not isinstance(
+                    list_metric,  # obj
+                    list,         # class_or_tuple
+                )
+                or not 1 <= len(list_metric) <= TraceOptions.METRIC_COUNT_MAX
+                or len(set(list_metric)) != len(list_metric)
+                or not all(
+                    isinstance(
+                        metric,  # obj
+                        str,     # class_or_tuple
+                    )
+                    and TraceOptions.METRIC_PATTERN.match(metric)
+                    for metric in list_metric
+                )
+            ):
+                raise ManifestError(
+                    f"[trace.range_profile] metrics lists 1 to {TraceOptions.METRIC_COUNT_MAX} "
+                    "distinct metric names"
+                )
+            JobManifest.check_integer(
+                value=self.map_range_profile.get("max_invocations"),
+                where="[trace.range_profile] max_invocations",
+                low=TraceOptions.INVOCATIONS_MIN,
+                high=TraceOptions.INVOCATIONS_MAX,
+            )
+        if self.map_pc_sampling is not None:
+            JobManifest.check_integer(
+                value=self.map_pc_sampling.get("repeats"),
+                where="[trace.pc_sampling] repeats",
+                low=1,
+                high=TraceOptions.REPEATS_MAX,
+            )
+
+    def granularity(self) -> str:
+        """Whether the trace records per thread or per warp.
 
         Returns:
-            the clock, record depth, schedule, sites, regions and scope roles
+            ``thread`` or ``warp``
+        """
+        if (
+            self.list_site
+            and all(site.warp_level for site in self.list_site)
+        ):
+            return "warp"
+        return "thread"
+
+    def needs_listing(self) -> bool:
+        """Whether a site names a source line, which only an inspection resolves.
+
+        Returns:
+            whether one does
+        """
+        return any(site.line is not None for site in self.list_site)
+
+    def to_plan(
+        self,
+        listing: KernelListing | None,
+        launch: "LaunchSpec",
+    ) -> dict[str, Any]:
+        """The trace plan the API takes, with every site resolved to an instruction index.
+
+        Args:
+            listing: the inspected kernel, needed when a site names a line
+            launch: the launch, whose rows size the record budget
+
+        Returns:
+            the plan
+
+        Raises:
+            ManifestError: a line site has no listing, or two sites probe one instruction
+            HarnessError: the listing refuses a site
+        """
+        granularity = self.granularity()
+        rows = launch.rows(granularity)
+        max_records = self.per_thread_records * rows
+        if max_records > TraceOptions.MAX_RECORDS_MAX:
+            raise ManifestError(
+                f"per_thread_records {self.per_thread_records} x {rows} {granularity} rows is "
+                f"{max_records} records; the platform takes at most {TraceOptions.MAX_RECORDS_MAX}"
+            )
+        list_api_site = []
+        map_site_of_index: dict[int, int] = {}
+        for site_id, site in enumerate(self.list_site):
+            if site.line is not None:
+                if listing is None:
+                    raise ManifestError(f"site {site_id} names line '{site.line}', which needs an inspection")
+                instruction_index = listing.resolve_line(site.line)
+            else:
+                instruction_index = int(site.index or 0)
+                if listing is not None:
+                    listing.check_index(instruction_index)
+            if instruction_index in map_site_of_index:
+                raise ManifestError(
+                    f"sites {map_site_of_index[instruction_index]} and {site_id} both probe "
+                    f"instruction {instruction_index}"
+                )
+            map_site_of_index[instruction_index] = site_id
+            list_api_site.append(
+                site.to_api(
+                    site_id=site_id,
+                    instruction_index=instruction_index,
+                )
+            )
+        map_plan: dict[str, Any] = {
+            "tier": "sass",
+            "clock": self.clock,
+            "schedule": self.schedule,
+            "sites": list_api_site,
+            "regions": [region.to_api() for region in self.list_region],
+            "granularity": granularity,
+            "max_records": max_records,
+            "capture_values": any(site.probe() != "timing" for site in self.list_site),
+            "stages": list(self.list_stage),
+        }
+        if self.map_range_profile is not None:
+            map_plan["range_profile"] = {
+                "metrics": list(self.map_range_profile["metrics"]),
+                "max_invocations": self.map_range_profile["max_invocations"],
+            }
+        if self.map_pc_sampling is not None:
+            map_plan["pc_sampling"] = {"repeats": self.map_pc_sampling["repeats"]}
+        if self.map_scope_role:
+            map_plan["scope_roles"] = dict(self.map_scope_role)
+        return map_plan
+
+
+@dataclass
+class PlannerOptions:
+    """The ``[planner]`` table: the platform picks the trace sites from the intent, with a model."""
+
+    MAX_CALLS_MAX = 20
+    MAX_INPUT_TOKENS_MAX = 1_000_000
+    MAX_OUTPUT_TOKENS_MAX = 100_000
+    MODEL_PATTERN = re.compile(r"^[A-Za-z0-9_.:-]{1,200}$")
+
+    model: str
+    max_calls: int
+    max_input_tokens: int
+    max_output_tokens: int
+
+    @classmethod
+    def from_table(cls, map_planner: Any) -> "PlannerOptions":
+        """Read and check the ``[planner]`` table.
+
+        Args:
+            map_planner: the table
+
+        Returns:
+            the options
+
+        Raises:
+            ManifestError: a key is missing, unknown or out of range
+        """
+        JobManifest.check_table(
+            value=map_planner,
+            set_key={
+                "model",
+                "max_calls",
+                "max_input_tokens",
+                "max_output_tokens",
+            },
+            where="[planner]",
+        )
+        if not PlannerOptions.MODEL_PATTERN.match(str(map_planner.get("model", ""))):
+            raise ManifestError("[planner] needs 'model', one of the models 'xtrace hardware' lists")
+        for key, high in (
+            ("max_calls", PlannerOptions.MAX_CALLS_MAX),
+            ("max_input_tokens", PlannerOptions.MAX_INPUT_TOKENS_MAX),
+            ("max_output_tokens", PlannerOptions.MAX_OUTPUT_TOKENS_MAX),
+        ):
+            JobManifest.check_integer(
+                value=map_planner.get(key),
+                where=f"[planner] {key}",
+                low=1,
+                high=high,
+            )
+        return cls(
+            model=map_planner["model"],
+            max_calls=map_planner["max_calls"],
+            max_input_tokens=map_planner["max_input_tokens"],
+            max_output_tokens=map_planner["max_output_tokens"],
+        )
+
+    def to_analysis(self) -> dict[str, Any]:
+        """The planned analysis the API takes.
+
+        Returns:
+            the analysis, mode ``platform_planned``
         """
         return {
-            "clock": self.clock,
-            "per_thread_records": self.per_thread_records,
-            "schedule": self.schedule,
-            "sites": [site.to_json() for site in self.list_site],
-            "regions": [region.to_json() for region in self.list_region],
-            "scope_roles": dict(self.map_scope_role),
+            "mode": "platform_planned",
+            "model": self.model,
+            "max_calls": self.max_calls,
+            "max_input_tokens_total": self.max_input_tokens,
+            "max_output_tokens_total": self.max_output_tokens,
+            "capture_values": False,
         }
 
 
 @dataclass
+class JobLimits:
+    """The ``[limits]`` table: the most a job may cost and use, over the platform's defaults."""
+
+    MICRO_PER_UNIT = 1_000_000
+    # manifest key -> (API key, highest value)
+    MAP_KEY = {
+        "max_gpu_seconds": ("max_active_gpu_seconds", 86400),
+        "max_wall_seconds": ("max_wall_seconds", 172800),
+        "max_attempts": ("max_attempts", 10),
+        "max_trace_bytes": ("max_trace_bytes", 1099511627776),
+    }
+    COST_KEY = "max_cost_usd"
+
+    map_limit: dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def from_table(cls, map_limits: Any) -> "JobLimits":
+        """Read and check the ``[limits]`` table.
+
+        Args:
+            map_limits: the table
+
+        Returns:
+            the limits
+
+        Raises:
+            ManifestError: a key is unknown or out of range
+        """
+        JobManifest.check_table(
+            value=map_limits,
+            set_key=set(JobLimits.MAP_KEY) | {JobLimits.COST_KEY},
+            where="[limits]",
+        )
+        for key, (_, high) in JobLimits.MAP_KEY.items():
+            if key in map_limits:
+                JobManifest.check_integer(
+                    value=map_limits[key],
+                    where=f"[limits] {key}",
+                    low=1,
+                    high=high,
+                )
+        if JobLimits.COST_KEY in map_limits:
+            JobLimits.micro_usd(map_limits[JobLimits.COST_KEY])
+        return cls(map_limit=dict(map_limits))
+
+    @staticmethod
+    def micro_usd(usd: Any) -> str:
+        """A dollar amount as the API's micro-USD money string, rounded down.
+
+        Args:
+            usd: the amount in dollars
+
+        Returns:
+            the decimal string of whole micro-USD
+
+        Raises:
+            ManifestError: the amount is not a positive number
+        """
+        if (
+            isinstance(
+                usd,   # obj
+                bool,  # class_or_tuple
+            )
+            or not isinstance(
+                usd,           # obj
+                (int, float),  # class_or_tuple
+            )
+        ):
+            raise ManifestError("[limits] max_cost_usd must be a number of dollars")
+        micro = int(
+            (decimal.Decimal(str(usd)) * JobLimits.MICRO_PER_UNIT).to_integral_value(
+                rounding=decimal.ROUND_DOWN,
+            )
+        )
+        if micro <= 0:
+            raise ManifestError("[limits] max_cost_usd must be at least $0.000001")
+        return str(micro)
+
+    def to_api(self, map_default: dict[str, Any]) -> dict[str, Any]:
+        """The limits the API takes: the manifest's values over the platform's defaults.
+
+        Args:
+            map_default: the capabilities' ``limits``
+
+        Returns:
+            the limits
+
+        Raises:
+            ManifestError: the GPU-time allowance exceeds the wall-clock limit
+        """
+        map_api = dict(map_default)
+        for key, (api_key, _) in JobLimits.MAP_KEY.items():
+            if key in self.map_limit:
+                map_api[api_key] = self.map_limit[key]
+        if JobLimits.COST_KEY in self.map_limit:
+            map_api["max_total_cost_micro_usd"] = JobLimits.micro_usd(self.map_limit[JobLimits.COST_KEY])
+        if map_api.get("max_active_gpu_seconds", 0) > map_api.get(
+            "max_wall_seconds",
+            math.inf,
+        ):
+            raise ManifestError(
+                f"max_gpu_seconds {map_api['max_active_gpu_seconds']} exceeds max_wall_seconds "
+                f"{map_api['max_wall_seconds']}"
+            )
+        return map_api
+
+
+@dataclass
 class KernelSpec:
-    """The kernel a job traces: the binary that holds it, its entry point and its sources.
+    """The kernel a job traces: the cubin that holds it, its entry point and its sources.
 
     Args:
-        binary: the cubin or PTX file, relative to the job directory
-        name: the kernel's entry point, as the binary names it (mangled for C++)
-        list_source: source files shown beside the SASS listing, relative to the job directory
+        binary: the cubin, relative to the job directory
+        name: the kernel's entry point, as the cubin names it (mangled for C++)
+        list_source: source files the viewer shows beside the listing; never uploaded
     """
 
     binary: str
@@ -367,18 +857,6 @@ class KernelSpec:
             list_source=list(map_kernel.get("sources", [])),
         )
 
-    def to_json(self) -> dict[str, Any]:
-        """The kernel as the job specification carries it.
-
-        Returns:
-            the binary, the entry point and the sources
-        """
-        return {
-            "binary": self.binary,
-            "name": self.name,
-            "sources": list(self.list_source),
-        }
-
 
 @dataclass
 class BufferSpec:
@@ -388,41 +866,45 @@ class BufferSpec:
         name: the buffer's name, which launch arguments refer to
         dtype: the element type, e.g. ``f16`` or ``i32``
         list_shape: the extents; the buffer holds their product of elements
-        init: ``zeros``, ``ones``, ``random``, or ``file`` for the tensor of the same name in
-            the job's tensors file
-        is_output: the platform returns the buffer after the launch and checks that the traced
-            launch wrote the same bytes as the untraced one
+        init: ``zeros``, ``ones``, ``random``, or ``tensor`` for the tensor of the same name
+            in the job's tensors file
+        seed: the seed of a ``random`` buffer
+        is_output: launch arguments that name it may write it
     """
 
-    # element type -> bytes per element
-    MAP_DTYPE_BYTES = {
-        "bool": 1,
-        "u8": 1,
-        "i8": 1,
-        "f8e4m3": 1,
-        "f8e5m2": 1,
-        "u16": 2,
-        "i16": 2,
-        "f16": 2,
-        "bf16": 2,
-        "u32": 4,
-        "i32": 4,
-        "f32": 4,
-        "u64": 8,
-        "i64": 8,
-        "f64": 8,
+    # element type -> (manifest name, bytes per element)
+    MAP_DTYPE = {
+        "bool": ("bool", 1),
+        "u8": ("uint8", 1),
+        "i8": ("int8", 1),
+        "f8e4m3": ("float8_e4m3fn", 1),
+        "f8e5m2": ("float8_e5m2", 1),
+        "u16": ("uint16", 2),
+        "i16": ("int16", 2),
+        "f16": ("float16", 2),
+        "bf16": ("bfloat16", 2),
+        "u32": ("uint32", 4),
+        "i32": ("int32", 4),
+        "f32": ("float32", 4),
+        "u64": ("uint64", 8),
+        "i64": ("int64", 8),
+        "f64": ("float64", 8),
     }
     LIST_INIT = (
         "zeros",
         "ones",
         "random",
-        "file",
+        "tensor",
     )
+    NAME_PATTERN = re.compile(r"^[A-Za-z_]\w{0,199}$")
+    RANK_MAX = 8
+    SEED_MAX = 2**32 - 1
 
     name: str
     dtype: str
     list_shape: list[int]
     init: str = "zeros"
+    seed: int = 0
     is_output: bool = False
 
     @classmethod
@@ -445,6 +927,7 @@ class BufferSpec:
                 "dtype",
                 "shape",
                 "init",
+                "seed",
                 "output",
             },
             where="[[buffers]]",
@@ -456,6 +939,11 @@ class BufferSpec:
         ):
             if key not in map_buffer:
                 raise ManifestError(f"each [[buffers]] entry needs '{key}'")
+        if (
+            "seed" in map_buffer
+            and map_buffer.get("init") != "random"
+        ):
+            raise ManifestError(f"buffer '{map_buffer['name']}': 'seed' belongs to init = 'random'")
         return cls(
             name=map_buffer["name"],
             dtype=map_buffer["dtype"],
@@ -463,6 +951,10 @@ class BufferSpec:
             init=map_buffer.get(
                 "init",
                 "zeros",
+            ),
+            seed=map_buffer.get(
+                "seed",
+                0,
             ),
             is_output=bool(
                 map_buffer.get(
@@ -478,7 +970,7 @@ class BufferSpec:
         Returns:
             the size in bytes
         """
-        return BufferSpec.MAP_DTYPE_BYTES[self.dtype] * TensorFile.element_count(self.list_shape)
+        return BufferSpec.MAP_DTYPE[self.dtype][1] * TensorFile.element_count(self.list_shape)
 
     def validate(self, tensor_file: TensorFile | None) -> None:
         """Check the buffer's type and shape, and its tensor when it starts from the tensors file.
@@ -489,17 +981,13 @@ class BufferSpec:
         Raises:
             ManifestError: the buffer is malformed or does not match its tensor
         """
-        if not re.match(
-            r"^[A-Za-z_]\w*$",  # pattern
-            self.name,          # string
-        ):
-            raise ManifestError(f"buffer '{self.name}': the name must be an identifier")
-        if self.dtype not in BufferSpec.MAP_DTYPE_BYTES:
-            raise ManifestError(
-                f"buffer '{self.name}': dtype must be one of {', '.join(BufferSpec.MAP_DTYPE_BYTES)}"
-            )
+        where = f"buffer '{self.name}'"
+        if not BufferSpec.NAME_PATTERN.match(str(self.name)):
+            raise ManifestError(f"{where}: the name must be an identifier")
+        if self.dtype not in BufferSpec.MAP_DTYPE:
+            raise ManifestError(f"{where}: dtype must be one of {', '.join(BufferSpec.MAP_DTYPE)}")
         if (
-            not self.list_shape
+            not 1 <= len(self.list_shape) <= BufferSpec.RANK_MAX
             or not all(
                 isinstance(
                     extent,  # obj
@@ -509,40 +997,69 @@ class BufferSpec:
                 for extent in self.list_shape
             )
         ):
-            raise ManifestError(f"buffer '{self.name}': shape must be a list of positive integers")
-        if self.init not in BufferSpec.LIST_INIT:
             raise ManifestError(
-                f"buffer '{self.name}': init must be one of {', '.join(BufferSpec.LIST_INIT)}"
+                f"{where}: shape must be 1 to {BufferSpec.RANK_MAX} positive integers"
             )
-        if self.init != "file":
+        if self.init not in BufferSpec.LIST_INIT:
+            raise ManifestError(f"{where}: init must be one of {', '.join(BufferSpec.LIST_INIT)}")
+        JobManifest.check_integer(
+            value=self.seed,
+            where=f"{where} seed",
+            low=0,
+            high=BufferSpec.SEED_MAX,
+        )
+        if self.init != "tensor":
             return
         if tensor_file is None:
-            raise ManifestError(f"buffer '{self.name}' starts from a file, but the job names no 'tensors'")
+            raise ManifestError(f"{where} starts from a tensor, but the job names no 'tensors' file")
+        self.check_tensor(
+            tensor_file=tensor_file,
+            where=where,
+        )
+
+    def check_tensor(
+        self,
+        tensor_file: TensorFile,
+        where: str,
+    ) -> None:
+        """Check that a safetensors file holds a tensor of the buffer's name, type and shape.
+
+        Args:
+            tensor_file: the file
+            where: what the check is for, for the message
+
+        Raises:
+            ManifestError: the tensor is absent or differs
+        """
         tensor = tensor_file.map_tensor.get(self.name)
         if tensor is None:
-            raise ManifestError(f"buffer '{self.name}': {tensor_file.path} has no tensor of that name")
+            raise ManifestError(f"{where}: {tensor_file.path} has no tensor '{self.name}'")
         if (
             tensor.dtype != self.dtype
             or tensor.list_shape != self.list_shape
         ):
             raise ManifestError(
-                f"buffer '{self.name}' is {self.dtype}{self.list_shape}, but its tensor is "
-                f"{tensor.dtype}{tensor.list_shape}"
+                f"{where}: buffer '{self.name}' is {self.dtype}{self.list_shape}, but tensor "
+                f"'{self.name}' of {tensor_file.path} is {tensor.dtype}{tensor.list_shape}"
             )
 
-    def to_json(self) -> dict[str, Any]:
-        """The buffer as the job specification carries it.
+    def to_manifest(self) -> dict[str, Any]:
+        """The buffer as the launch manifest carries it.
 
         Returns:
-            the name, element type, shape, initial contents and output flag
+            the id, element type, shape and initial contents
         """
-        return {
-            "name": self.name,
-            "dtype": self.dtype,
+        map_buffer: dict[str, Any] = {
+            "id": self.name,
+            "dtype": BufferSpec.MAP_DTYPE[self.dtype][0],
             "shape": list(self.list_shape),
             "init": self.init,
-            "output": self.is_output,
         }
+        if self.init == "random":
+            map_buffer["seed"] = self.seed
+        if self.init == "tensor":
+            map_buffer["tensor_key"] = self.name
+        return map_buffer
 
 
 @dataclass
@@ -561,16 +1078,16 @@ class PointerRelocation:
     buffer: str
     offset_bytes: int = 0
 
-    def to_json(self) -> dict[str, Any]:
-        """The relocation as the job specification carries it.
+    def to_manifest(self) -> dict[str, Any]:
+        """The relocation as the launch manifest carries it.
 
         Returns:
             the offset, the buffer and the byte offset into it
         """
         return {
             "offset": self.offset,
-            "buffer": self.buffer,
-            "offset_bytes": self.offset_bytes,
+            "buffer_id": self.buffer,
+            "byte_offset": self.offset_bytes,
         }
 
 
@@ -591,22 +1108,21 @@ class LaunchArgument:
         "tensor_map",
         "bytes",
     )
-    MAP_SCALAR_RANGE = {
-        "i8": (-(2**7), 2**7 - 1),
-        "u8": (0, 2**8 - 1),
-        "i16": (-(2**15), 2**15 - 1),
-        "u16": (0, 2**16 - 1),
-        "i32": (-(2**31), 2**31 - 1),
-        "u32": (0, 2**32 - 1),
-        "i64": (-(2**63), 2**63 - 1),
-        "u64": (0, 2**64 - 1),
+    # scalar type -> (manifest ABI type, lowest value, highest value, bytes)
+    MAP_SCALAR = {
+        "i8": ("int8", -(2**7), 2**7 - 1, 1),
+        "u8": ("uint8", 0, 2**8 - 1, 1),
+        "i16": ("int16", -(2**15), 2**15 - 1, 2),
+        "u16": ("uint16", 0, 2**16 - 1, 2),
+        "i32": ("int32", -(2**31), 2**31 - 1, 4),
+        "u32": ("uint32", 0, 2**32 - 1, 4),
+        "i64": ("int64", -(2**63), 2**63 - 1, 8),
+        "u64": ("uint64", 0, 2**64 - 1, 8),
+        "f32": ("float32", None, None, 4),
+        "f64": ("float64", None, None, 8),
     }
-    SET_SCALAR_FLOAT = {
-        "f16",
-        "bf16",
-        "f32",
-        "f64",
-    }
+    # integers beyond this magnitude travel as decimal strings, which JSON readers keep exact
+    EXACT_INTEGER_MAX = 2**53 - 1
     SET_TENSOR_MAP_KEY = {
         "data_type",
         "global_dims",
@@ -618,23 +1134,24 @@ class LaunchArgument:
         "l2_promotion",
         "oob_fill",
     }
-    # the choices of each enumerated tensor map field, as cuTensorMapEncodeTiled names them
+    # the manifest names of the tensor map element types
+    MAP_TENSOR_MAP_DATA_TYPE = {
+        "u8": "uint8",
+        "u16": "uint16",
+        "u32": "uint32",
+        "i32": "int32",
+        "u64": "uint64",
+        "i64": "int64",
+        "f16": "float16",
+        "f32": "float32",
+        "f64": "float64",
+        "bf16": "bfloat16",
+        "f32_ftz": "float32_ftz",
+        "tf32": "tfloat32",
+        "tf32_ftz": "tfloat32_ftz",
+    }
+    # the choices of each enumerated tensor map field
     MAP_TENSOR_MAP_CHOICE = {
-        "data_type": (
-            "u8",
-            "u16",
-            "u32",
-            "i32",
-            "u64",
-            "i64",
-            "f16",
-            "f32",
-            "f64",
-            "bf16",
-            "f32_ftz",
-            "tf32",
-            "tf32_ftz",
-        ),
         "interleave": (
             "none",
             "16b",
@@ -658,6 +1175,11 @@ class LaunchArgument:
         ),
     }
     TENSOR_MAP_RANK_MAX = 5
+    BOX_EXTENT_MAX = 256
+    ELEMENT_STRIDE_MAX = 8
+    TENSOR_MAP_BYTES = 128
+    # alignment of a buffer offset and of a tensor map's strides
+    ADDRESS_ALIGNMENT_BYTES = 16
     # the largest by-value argument a kernel takes
     BYTES_MAX = 32 * 1024
 
@@ -681,7 +1203,7 @@ class LaunchArgument:
             the argument
 
         Raises:
-            ManifestError: the entry is not a table or has an unknown kind
+            ManifestError: the entry is not a table or has unknown keys
         """
         JobManifest.check_table(
             value=map_argument,
@@ -767,8 +1289,17 @@ class LaunchArgument:
         ):
             if self.buffer not in map_buffer:
                 raise ManifestError(f"{where}: names buffer '{self.buffer}', which [[buffers]] lacks")
-            if not 0 <= self.offset_bytes < map_buffer[self.buffer].nbytes():
-                raise ManifestError(f"{where}: offset_bytes lies outside buffer '{self.buffer}'")
+            JobManifest.check_integer(
+                value=self.offset_bytes,
+                where=f"{where} offset_bytes",
+                low=0,
+                high=map_buffer[self.buffer].nbytes() - 1,
+            )
+            if self.offset_bytes % LaunchArgument.ADDRESS_ALIGNMENT_BYTES != 0:
+                raise ManifestError(
+                    f"{where}: offset_bytes must be a multiple of "
+                    f"{LaunchArgument.ADDRESS_ALIGNMENT_BYTES}"
+                )
         if self.kind == "scalar":
             self._validate_scalar(where)
         if self.kind == "tensor_map":
@@ -781,32 +1312,41 @@ class LaunchArgument:
 
     def _validate_scalar(self, where: str) -> None:
         """Check a scalar's type and that its value fits it."""
-        if self.dtype in LaunchArgument.MAP_SCALAR_RANGE:
-            value_min, value_max = LaunchArgument.MAP_SCALAR_RANGE[self.dtype]
+        if self.dtype not in LaunchArgument.MAP_SCALAR:
+            raise ManifestError(
+                f"{where}: a scalar's dtype is one of {', '.join(LaunchArgument.MAP_SCALAR)}; pass "
+                "a 16-bit float as its bits in a u16"
+            )
+        _, value_min, value_max, _ = LaunchArgument.MAP_SCALAR[self.dtype]
+        if value_min is None:
             if (
-                not isinstance(
-                    self.value,  # obj
-                    int,         # class_or_tuple
-                )
-                or isinstance(
+                isinstance(
                     self.value,  # obj
                     bool,        # class_or_tuple
                 )
-                or not value_min <= self.value <= value_max
+                or not isinstance(
+                    self.value,    # obj
+                    (int, float),  # class_or_tuple
+                )
+                or not math.isfinite(self.value)
             ):
-                raise ManifestError(f"{where}: value must be an integer that fits {self.dtype}")
+                raise ManifestError(f"{where}: value must be a finite number")
             return
-        if self.dtype in LaunchArgument.SET_SCALAR_FLOAT:
-            if not isinstance(
+        if (
+            isinstance(
                 self.value,  # obj
-                (int, float),  # class_or_tuple
-            ):
-                raise ManifestError(f"{where}: value must be a number")
-            return
-        raise ManifestError(f"{where}: a scalar needs dtype, one of the integer or float types")
+                bool,        # class_or_tuple
+            )
+            or not isinstance(
+                self.value,  # obj
+                int,         # class_or_tuple
+            )
+            or not value_min <= self.value <= value_max
+        ):
+            raise ManifestError(f"{where}: value must be an integer that fits {self.dtype}")
 
     def _validate_tensor_map(self, where: str) -> None:
-        """Check that a TMA descriptor's extents agree in rank."""
+        """Check a TMA descriptor's enumerations, extents and strides."""
         for key in (
             "data_type",
             "global_dims",
@@ -815,21 +1355,65 @@ class LaunchArgument:
         ):
             if key not in self.map_tensor_map:
                 raise ManifestError(f"{where}: a tensor_map needs '{key}'")
+        if self.map_tensor_map["data_type"] not in LaunchArgument.MAP_TENSOR_MAP_DATA_TYPE:
+            raise ManifestError(
+                f"{where}: data_type must be one of "
+                f"{', '.join(LaunchArgument.MAP_TENSOR_MAP_DATA_TYPE)}"
+            )
         for key, list_choice in LaunchArgument.MAP_TENSOR_MAP_CHOICE.items():
-            if (
-                key in self.map_tensor_map
-                and self.map_tensor_map[key] not in list_choice
-            ):
+            if self.map_tensor_map.get(
+                key,
+                "none",
+            ) not in list_choice:
                 raise ManifestError(f"{where}: {key} must be one of {', '.join(list_choice)}")
         rank = len(self.map_tensor_map["global_dims"])
         if not 1 <= rank <= LaunchArgument.TENSOR_MAP_RANK_MAX:
-            raise ManifestError(f"{where}: global_dims must have 1 to {LaunchArgument.TENSOR_MAP_RANK_MAX} entries")
-        if len(self.map_tensor_map["global_strides_bytes"]) != rank - 1:
+            raise ManifestError(
+                f"{where}: global_dims must have 1 to {LaunchArgument.TENSOR_MAP_RANK_MAX} entries"
+            )
+        list_stride = self.map_tensor_map["global_strides_bytes"]
+        list_box = self.map_tensor_map["box_dims"]
+        list_element_stride = self.map_tensor_map.get(
+            "element_strides",
+            [1] * rank,
+        )
+        if len(list_stride) != rank - 1:
             raise ManifestError(f"{where}: global_strides_bytes needs one entry per dimension after the first")
-        if len(self.map_tensor_map["box_dims"]) != rank:
+        if len(list_box) != rank:
             raise ManifestError(f"{where}: box_dims needs one entry per dimension")
-        if len(self.map_tensor_map.get("element_strides", [1] * rank)) != rank:
+        if len(list_element_stride) != rank:
             raise ManifestError(f"{where}: element_strides needs one entry per dimension")
+        for extent in self.map_tensor_map["global_dims"]:
+            JobManifest.check_integer(
+                value=extent,
+                where=f"{where} global_dims",
+                low=1,
+            )
+        for stride in list_stride:
+            JobManifest.check_integer(
+                value=stride,
+                where=f"{where} global_strides_bytes",
+                low=LaunchArgument.ADDRESS_ALIGNMENT_BYTES,
+            )
+            if stride % LaunchArgument.ADDRESS_ALIGNMENT_BYTES != 0:
+                raise ManifestError(
+                    f"{where}: global_strides_bytes entries are multiples of "
+                    f"{LaunchArgument.ADDRESS_ALIGNMENT_BYTES}"
+                )
+        for extent in list_box:
+            JobManifest.check_integer(
+                value=extent,
+                where=f"{where} box_dims",
+                low=1,
+                high=LaunchArgument.BOX_EXTENT_MAX,
+            )
+        for stride in list_element_stride:
+            JobManifest.check_integer(
+                value=stride,
+                where=f"{where} element_strides",
+                low=1,
+                high=LaunchArgument.ELEMENT_STRIDE_MAX,
+            )
 
     def _validate_bytes(
         self,
@@ -843,37 +1427,126 @@ class LaunchArgument:
             raise ManifestError(f"{where}: hex is not hexadecimal") from err
         if not 0 < len(data) <= LaunchArgument.BYTES_MAX:
             raise ManifestError(f"{where}: a bytes argument holds 1 to {LaunchArgument.BYTES_MAX} bytes")
+        set_offset = set()
         for relocation in self.list_relocation:
             if (
-                relocation.offset < 0
+                not isinstance(
+                    relocation.offset,  # obj
+                    int,                # class_or_tuple
+                )
+                or relocation.offset < 0
                 or relocation.offset % PointerRelocation.POINTER_BYTES != 0
                 or relocation.offset + PointerRelocation.POINTER_BYTES > len(data)
             ):
-                raise ManifestError(f"{where}: relocation offset {relocation.offset} is unaligned or outside the bytes")
+                raise ManifestError(
+                    f"{where}: relocation offset {relocation.offset} is not 8-aligned inside "
+                    f"the {len(data)} bytes"
+                )
+            if relocation.offset in set_offset:
+                raise ManifestError(f"{where}: two relocations write offset {relocation.offset}")
+            set_offset.add(relocation.offset)
             if relocation.buffer not in map_buffer:
-                raise ManifestError(f"{where}: a relocation names buffer '{relocation.buffer}', which [[buffers]] lacks")
+                raise ManifestError(
+                    f"{where}: a relocation names buffer '{relocation.buffer}', which [[buffers]] lacks"
+                )
+            JobManifest.check_integer(
+                value=relocation.offset_bytes,
+                where=f"{where} relocation offset_bytes",
+                low=0,
+                high=map_buffer[relocation.buffer].nbytes() - 1,
+            )
 
-    def to_json(self) -> dict[str, Any]:
-        """The argument as the job specification carries it.
+    def size_bytes(self) -> int:
+        """The bytes the argument occupies in the kernel's parameter space.
 
         Returns:
-            the kind and the fields that kind uses
+            the size
         """
-        map_argument: dict[str, Any] = {"kind": self.kind}
-        if self.kind in (
-            "buffer",
-            "tensor_map",
-        ):
-            map_argument["buffer"] = self.buffer
-            map_argument["offset_bytes"] = self.offset_bytes
         if self.kind == "scalar":
-            map_argument["dtype"] = self.dtype
-            map_argument["value"] = self.value
+            return LaunchArgument.MAP_SCALAR[str(self.dtype)][3]
         if self.kind == "tensor_map":
-            map_argument.update(self.map_tensor_map)
+            return LaunchArgument.TENSOR_MAP_BYTES
         if self.kind == "bytes":
-            map_argument["hex"] = self.data_hex
-            map_argument["relocations"] = [relocation.to_json() for relocation in self.list_relocation]
+            return len(bytes.fromhex(self.data_hex or ""))
+        return PointerRelocation.POINTER_BYTES
+
+    def is_naming(self, buffer_name: str) -> bool:
+        """Whether the argument hands a buffer's address to the kernel.
+
+        Args:
+            buffer_name: the buffer
+
+        Returns:
+            whether it does, directly, through a tensor map or through a relocation
+        """
+        return (
+            self.buffer == buffer_name
+            or any(relocation.buffer == buffer_name for relocation in self.list_relocation)
+        )
+
+    def to_manifest(
+        self,
+        index: int,
+        map_buffer: dict[str, BufferSpec],
+    ) -> dict[str, Any]:
+        """The argument as the launch manifest carries it.
+
+        Args:
+            index: the argument's position in the kernel's signature
+            map_buffer: the job's buffers by name, whose output flag sets the access
+
+        Returns:
+            the argument
+        """
+        map_argument: dict[str, Any] = {
+            "index": index,
+            "kind": self.kind,
+        }
+        if self.kind == "buffer":
+            map_argument["buffer_id"] = self.buffer
+            map_argument["byte_offset"] = self.offset_bytes
+            map_argument["access"] = "read_write" if map_buffer[str(self.buffer)].is_output else "read"
+        if self.kind == "scalar":
+            abi_type = LaunchArgument.MAP_SCALAR[str(self.dtype)][0]
+            value: Any = self.value
+            if (
+                isinstance(
+                    value,  # obj
+                    int,    # class_or_tuple
+                )
+                and abs(value) > LaunchArgument.EXACT_INTEGER_MAX
+            ):
+                value = str(value)
+            map_argument["abi_type"] = abi_type
+            map_argument["value"] = value
+        if self.kind == "tensor_map":
+            rank = len(self.map_tensor_map["global_dims"])
+            map_argument.update(
+                {
+                    "buffer_id": self.buffer,
+                    "byte_offset": self.offset_bytes,
+                    "data_type": LaunchArgument.MAP_TENSOR_MAP_DATA_TYPE[self.map_tensor_map["data_type"]],
+                    "global_dims": list(self.map_tensor_map["global_dims"]),
+                    "global_strides_bytes": list(self.map_tensor_map["global_strides_bytes"]),
+                    "box_dims": list(self.map_tensor_map["box_dims"]),
+                    "element_strides": list(
+                        self.map_tensor_map.get(
+                            "element_strides",
+                            [1] * rank,
+                        )
+                    ),
+                }
+            )
+            for key in LaunchArgument.MAP_TENSOR_MAP_CHOICE:
+                map_argument[key] = self.map_tensor_map.get(
+                    key,
+                    "none",
+                )
+        if self.kind == "bytes":
+            map_argument["hex"] = (self.data_hex or "").lower()
+            map_argument["relocations"] = [
+                relocation.to_manifest() for relocation in self.list_relocation
+            ]
         return map_argument
 
 
@@ -883,6 +1556,20 @@ class LaunchSpec:
 
     THREADS_PER_BLOCK_MAX = 1024
     DIMENSION_COUNT = 3
+    GRID_EXTENT_MAX = (
+        2**31 - 1,
+        65535,
+        65535,
+    )
+    BLOCK_EXTENT_MAX = (
+        1024,
+        1024,
+        64,
+    )
+    CLUSTER_BLOCKS_MAX = 16
+    SHARED_BYTES_MAX = 233472
+    ARGUMENT_COUNT_MAX = 128
+    THREADS_PER_WARP = 32
 
     list_grid: list[int]
     list_block: list[int]
@@ -921,10 +1608,19 @@ class LaunchSpec:
             if key not in map_launch:
                 raise ManifestError(f"[launch] needs '{key}'")
         return cls(
-            list_grid=LaunchSpec._dimensions(map_launch["grid"]),
-            list_block=LaunchSpec._dimensions(map_launch["block"]),
+            list_grid=LaunchSpec._dimensions(
+                value=map_launch["grid"],
+                where="grid",
+            ),
+            list_block=LaunchSpec._dimensions(
+                value=map_launch["block"],
+                where="block",
+            ),
             list_cluster=(
-                LaunchSpec._dimensions(map_launch["cluster"])
+                LaunchSpec._dimensions(
+                    value=map_launch["cluster"],
+                    where="cluster",
+                )
                 if "cluster" in map_launch
                 else None
             ),
@@ -938,7 +1634,10 @@ class LaunchSpec:
         )
 
     @staticmethod
-    def _dimensions(value: Any) -> list[int]:
+    def _dimensions(
+        value: Any,
+        where: str,
+    ) -> list[int]:
         """A grid, block or cluster shape padded to three dimensions."""
         if isinstance(
             value,  # obj
@@ -956,11 +1655,15 @@ class LaunchSpec:
                     extent,  # obj
                     int,     # class_or_tuple
                 )
+                and not isinstance(
+                    extent,  # obj
+                    bool,    # class_or_tuple
+                )
                 and extent > 0
                 for extent in value
             )
         ):
-            raise ManifestError("grid, block and cluster are 1 to 3 positive integers")
+            raise ManifestError(f"[launch] {where} is 1 to 3 positive integers")
         return list(value) + [1] * (LaunchSpec.DIMENSION_COUNT - len(value))
 
     def validate(self, map_buffer: dict[str, BufferSpec]) -> None:
@@ -972,144 +1675,238 @@ class LaunchSpec:
         Raises:
             ManifestError: the shape is out of range or an argument is malformed
         """
+        for name, list_extent, list_extent_max in (
+            ("grid", self.list_grid, LaunchSpec.GRID_EXTENT_MAX),
+            ("block", self.list_block, LaunchSpec.BLOCK_EXTENT_MAX),
+        ):
+            for extent, extent_max in zip(
+                list_extent,
+                list_extent_max,
+            ):
+                if extent > extent_max:
+                    raise ManifestError(f"[launch] {name} {list_extent} exceeds {list(list_extent_max)}")
         threads_per_block = TensorFile.element_count(self.list_block)
         if threads_per_block > LaunchSpec.THREADS_PER_BLOCK_MAX:
-            raise ManifestError(f"a block has at most {LaunchSpec.THREADS_PER_BLOCK_MAX} threads, not {threads_per_block}")
-        if self.shared_bytes < 0:
-            raise ManifestError("shared_bytes must not be negative")
+            raise ManifestError(
+                f"a block has at most {LaunchSpec.THREADS_PER_BLOCK_MAX} threads, not {threads_per_block}"
+            )
+        JobManifest.check_integer(
+            value=self.shared_bytes,
+            where="[launch] shared_bytes",
+            low=0,
+            high=LaunchSpec.SHARED_BYTES_MAX,
+        )
         if self.list_cluster is not None:
             for grid_extent, cluster_extent in zip(
                 self.list_grid,
                 self.list_cluster,
             ):
                 if grid_extent % cluster_extent != 0:
-                    raise ManifestError("each grid extent must be a multiple of the cluster's")
+                    raise ManifestError(
+                        f"[launch] grid {self.list_grid} is not a multiple of cluster {self.list_cluster}"
+                    )
+            if TensorFile.element_count(self.list_cluster) > LaunchSpec.CLUSTER_BLOCKS_MAX:
+                raise ManifestError(f"a cluster holds at most {LaunchSpec.CLUSTER_BLOCKS_MAX} blocks")
+        if not 1 <= len(self.list_argument) <= LaunchSpec.ARGUMENT_COUNT_MAX:
+            raise ManifestError(
+                f"[launch] args lists 1 to {LaunchSpec.ARGUMENT_COUNT_MAX} kernel parameters"
+            )
         for argument_id, argument in enumerate(self.list_argument):
             argument.validate(
                 argument_id=argument_id,
                 map_buffer=map_buffer,
             )
 
-    def to_json(self) -> dict[str, Any]:
-        """The launch as the job specification carries it.
+    def rows(self, granularity: str) -> int:
+        """The rows a trace records into: every thread, or every warp, of the launch.
+
+        Args:
+            granularity: ``thread`` or ``warp``
 
         Returns:
-            the grid, block, cluster, dynamic shared memory and arguments
+            the row count
+
+        Raises:
+            ManifestError: warp-level recording on blocks of partial warps
         """
-        return {
+        block_count = TensorFile.element_count(self.list_grid)
+        threads_per_block = TensorFile.element_count(self.list_block)
+        if granularity == "thread":
+            return block_count * threads_per_block
+        if threads_per_block % LaunchSpec.THREADS_PER_WARP != 0:
+            raise ManifestError(
+                f"warp_level sites need blocks of whole warps; a block has {threads_per_block} threads"
+            )
+        return block_count * (threads_per_block // LaunchSpec.THREADS_PER_WARP)
+
+    def to_target(
+        self,
+        architecture: str,
+        kernel_symbol: str,
+    ) -> dict[str, Any]:
+        """The launch target as the launch manifest carries it.
+
+        Args:
+            architecture: the hardware's architecture
+            kernel_symbol: the kernel's entry point
+
+        Returns:
+            the target
+        """
+        map_target: dict[str, Any] = {
+            "architecture": architecture,
+            "kernel_symbol": kernel_symbol,
             "grid": list(self.list_grid),
             "block": list(self.list_block),
-            "cluster": list(self.list_cluster) if self.list_cluster is not None else None,
-            "shared_bytes": self.shared_bytes,
-            "args": [argument.to_json() for argument in self.list_argument],
+            "dynamic_shared_memory_bytes": self.shared_bytes,
+            "launch_kind": "ordinary",
+        }
+        if self.list_cluster is not None:
+            map_target["cluster"] = list(self.list_cluster)
+            map_target["launch_kind"] = "cluster"
+        return map_target
+
+
+@dataclass
+class ValidationSpec:
+    """The ``[validation]`` table: an output buffer checked against the job's reference file."""
+
+    TOLERANCE_MAX = 1
+
+    output: str
+    atol: float
+    rtol: float
+
+    @classmethod
+    def from_table(cls, map_validation: Any) -> "ValidationSpec":
+        """Read and check the ``[validation]`` table.
+
+        Args:
+            map_validation: the table
+
+        Returns:
+            the validation
+
+        Raises:
+            ManifestError: a key is missing, unknown or out of range
+        """
+        JobManifest.check_table(
+            value=map_validation,
+            set_key={
+                "output",
+                "atol",
+                "rtol",
+            },
+            where="[validation]",
+        )
+        if not isinstance(
+            map_validation.get("output"),  # obj
+            str,                           # class_or_tuple
+        ):
+            raise ManifestError("[validation] needs 'output', the buffer checked against the reference")
+        for key in (
+            "atol",
+            "rtol",
+        ):
+            value = map_validation.get(
+                key,
+                0,
+            )
+            if (
+                isinstance(
+                    value,  # obj
+                    bool,   # class_or_tuple
+                )
+                or not isinstance(
+                    value,         # obj
+                    (int, float),  # class_or_tuple
+                )
+                or not 0 <= value <= ValidationSpec.TOLERANCE_MAX
+            ):
+                raise ManifestError(f"[validation] {key} must be a number in [0, 1]")
+        return cls(
+            output=map_validation["output"],
+            atol=map_validation.get(
+                "atol",
+                0,
+            ),
+            rtol=map_validation.get(
+                "rtol",
+                0,
+            ),
+        )
+
+    def to_manifest(self) -> dict[str, Any]:
+        """The validation as the launch manifest carries it.
+
+        Returns:
+            the output key and the tolerances
+        """
+        return {
+            "output_key": self.output,
+            "atol": self.atol,
+            "rtol": self.rtol,
         }
 
 
 @dataclass
-class JobSpec:
-    """What one Xtrace job asks of the platform: the kernel, how to launch it and what to trace.
+class JobArtifact:
+    """A file of the job directory that is uploaded as an artifact.
 
-    An ``inspect`` job reads the kernel's binary and returns its SASS listing and parameter
-    layout, from which trace sites are picked; a ``trace`` job launches the kernel, first
-    untraced and then with those sites instrumented, and returns the trace report.
+    Args:
+        kind: the artifact kind, e.g. ``cubin``
+        path: the file
+        content_type: the media type it is uploaded with
     """
 
-    SCHEMA = "xtrace.job/1"
-    LIST_KIND = (
-        "inspect",
-        "trace",
-    )
-    TIMEOUT_SECONDS_DEFAULT = 300
-    INTENT_CHARACTERS_MAX = 2000
-
     kind: str
-    kernel: KernelSpec
-    tensors: str | None = None
-    list_buffer: list[BufferSpec] = field(default_factory=list)
-    launch: LaunchSpec | None = None
-    trace: TraceOptions | None = None
-    timeout_seconds: int = TIMEOUT_SECONDS_DEFAULT
-    intent: str | None = None
-
-    def validate(self, tensor_file: TensorFile | None) -> None:
-        """Check the specification before it is uploaded.
-
-        Args:
-            tensor_file: the job's tensors file, or None when it has none
-
-        Raises:
-            ManifestError: a field is missing, out of range or inconsistent
-        """
-        if self.kind not in JobSpec.LIST_KIND:
-            raise ManifestError(f"kind must be one of {', '.join(JobSpec.LIST_KIND)}")
-        if self.timeout_seconds <= 0:
-            raise ManifestError("'timeout_seconds' must be positive")
-        if (
-            self.intent is not None
-            and len(self.intent) > JobSpec.INTENT_CHARACTERS_MAX
-        ):
-            raise ManifestError(f"'intent' holds at most {JobSpec.INTENT_CHARACTERS_MAX} characters")
-        map_buffer: dict[str, BufferSpec] = {}
-        for buffer in self.list_buffer:
-            buffer.validate(tensor_file)
-            if buffer.name in map_buffer:
-                raise ManifestError(f"buffer '{buffer.name}' is defined twice")
-            map_buffer[buffer.name] = buffer
-        if self.launch is not None:
-            self.launch.validate(map_buffer)
-        if self.kind == "inspect":
-            return
-        if self.launch is None:
-            raise ManifestError("a trace job needs a [launch] table")
-        if self.trace is None:
-            raise ManifestError("a trace job needs a [trace] table")
-        self.trace.validate()
-
-    def to_json(self) -> dict[str, Any]:
-        """The specification as the platform's job API takes it.
-
-        Returns:
-            the specification, with its schema tag
-        """
-        map_spec: dict[str, Any] = {
-            "schema": JobSpec.SCHEMA,
-            "kind": self.kind,
-            "kernel": self.kernel.to_json(),
-            "tensors": self.tensors,
-            "buffers": [buffer.to_json() for buffer in self.list_buffer],
-            "launch": self.launch.to_json() if self.launch is not None else None,
-            "timeout_seconds": self.timeout_seconds,
-            "intent": self.intent,
-        }
-        if (
-            self.kind == "trace"
-            and self.trace is not None
-        ):
-            map_spec["trace"] = self.trace.to_json()
-        return map_spec
+    path: str
+    content_type: str = "application/octet-stream"
 
 
 @dataclass
 class JobManifest:
-    """A job directory's ``xtrace.toml``: the job specification, the hardware and the files it names."""
+    """A job directory's ``xtrace.toml``, checked, and its translation into the platform API."""
 
     FILE_NAME = "xtrace.toml"
+    SUBMIT_SCHEMA = "marscompute.xtrace.submit.v1"
+    LAUNCH_SCHEMA = "marscompute.kernel-launch.v1"
+    RESET_POLICY = "restore_pristine_before_every_invocation"
+    PROMPT_CHARACTERS_MAX = 32000
+    BUFFER_COUNT_MAX = 64
+    MANIFEST_NAME = "manifest.json"
+    # the manifest's required text keys and what each holds
+    MAP_REQUIRED_TEXT = {
+        "hardware": "the environment id from 'xtrace hardware'",
+        "intent": "what the trace should answer, in your words",
+    }
     SET_KEY = {
-        "kind",
         "hardware",
-        "timeout_seconds",
         "intent",
         "tensors",
+        "reference",
         "kernel",
         "buffers",
         "launch",
+        "validation",
         "trace",
+        "planner",
+        "limits",
     }
 
     directory: str
-    hardware: str | None
-    spec: JobSpec
+    hardware: str
+    intent: str
+    kernel: KernelSpec
     binary: KernelBinary
+    launch: LaunchSpec
+    list_buffer: list[BufferSpec] = field(default_factory=list)
+    tensors: str | None = None
+    reference: str | None = None
+    validation: ValidationSpec | None = None
+    trace: TraceOptions | None = None
+    planner: PlannerOptions | None = None
+    limits: JobLimits = field(default_factory=JobLimits)
 
     @staticmethod
     def check_table(
@@ -1136,24 +1933,81 @@ class JobManifest:
         if set_unknown:
             raise ManifestError(f"{where}: unknown key(s) {', '.join(sorted(set_unknown))}")
 
-    @classmethod
-    def load(
-        cls,
+    @staticmethod
+    def check_integer(
+        value: Any,
+        where: str,
+        low: int,
+        high: int | None = None,
+    ) -> None:
+        """Check that a manifest value is an integer in a range.
+
+        Args:
+            value: the value
+            where: the value's place in the manifest, for the message
+            low: the lowest value allowed
+            high: the highest value allowed, or None for no bound
+
+        Raises:
+            ManifestError: the value is not an integer in the range
+        """
+        if (
+            isinstance(
+                value,  # obj
+                bool,   # class_or_tuple
+            )
+            or not isinstance(
+                value,  # obj
+                int,    # class_or_tuple
+            )
+            or value < low
+            or (
+                high is not None
+                and value > high
+            )
+        ):
+            bound = f"from {low}" if high is None else f"in [{low}, {high}]"
+            raise ManifestError(f"{where} must be an integer {bound}, not {value!r}")
+
+    @staticmethod
+    def _check_path(
         directory: str,
-        kind: str | None = None,
-    ) -> "JobManifest":
+        relative_path: Any,
+        where: str,
+    ) -> str:
+        """Check that a file the manifest names lies inside the job directory and exists."""
+        if not isinstance(
+            relative_path,  # obj
+            str,            # class_or_tuple
+        ):
+            raise ManifestError(f"{where} must be a path")
+        if (
+            os.path.isabs(relative_path)
+            or os.path.normpath(relative_path).startswith("..")
+        ):
+            raise ManifestError(f"{where}: {relative_path} must lie inside the job directory")
+        path = os.path.join(
+            directory,
+            relative_path,
+        )
+        if not os.path.isfile(path):
+            raise ManifestError(f"{where}: {relative_path} does not exist in the job directory")
+        return path
+
+    @classmethod
+    def load(cls, directory: str) -> "JobManifest":
         """Read and check the manifest of a job directory.
 
         Args:
             directory: the job directory, holding ``xtrace.toml``
-            kind: ``inspect`` or ``trace`` to override the manifest's kind, or None
 
         Returns:
             the manifest
 
         Raises:
-            ManifestError: the manifest is missing or malformed, names an absent file, or
-                names a kernel its binary lacks
+            ManifestError: the manifest is missing, malformed or incomplete, names an absent
+                file, or names a kernel its cubin lacks
+            HarnessError: the binary is not a cubin
         """
         path = os.path.join(
             directory,
@@ -1174,152 +2028,356 @@ class JobManifest:
             set_key=JobManifest.SET_KEY,
             where=JobManifest.FILE_NAME,
         )
-        if "kernel" not in map_manifest:
-            raise ManifestError(f"{path}: a [kernel] table is required")
-        spec = JobSpec(
-            kind=kind or map_manifest.get(
-                "kind",
-                "trace",
-            ),
-            kernel=KernelSpec.from_table(map_manifest["kernel"]),
-            tensors=map_manifest.get("tensors"),
-            list_buffer=[BufferSpec.from_table(map_buffer) for map_buffer in map_manifest.get("buffers", [])],
-            launch=LaunchSpec.from_table(map_manifest["launch"]) if "launch" in map_manifest else None,
-            trace=TraceOptions.from_table(map_manifest["trace"]) if "trace" in map_manifest else None,
-            timeout_seconds=map_manifest.get(
-                "timeout_seconds",
-                JobSpec.TIMEOUT_SECONDS_DEFAULT,
-            ),
-            intent=map_manifest.get("intent"),
-        )
-        for relative_path in [
-            spec.kernel.binary,
-            spec.tensors,
-            *spec.kernel.list_source,
-        ]:
-            if relative_path is None:
-                continue
+        for key, meaning in JobManifest.MAP_REQUIRED_TEXT.items():
             if (
-                os.path.isabs(relative_path)
-                or os.path.normpath(relative_path).startswith("..")
-            ):
-                raise ManifestError(f"{path}: {relative_path} must lie inside the job directory")
-            if not os.path.isfile(
-                os.path.join(
-                    directory,
-                    relative_path,
+                not isinstance(
+                    map_manifest.get(key),  # obj
+                    str,                    # class_or_tuple
                 )
+                or not map_manifest[key].strip()
             ):
-                raise ManifestError(f"{path}: {relative_path} does not exist in the job directory")
-        tensor_file = None
-        if spec.tensors is not None:
-            tensor_file = TensorFile.load(
-                os.path.join(
-                    directory,
-                    spec.tensors,
-                )
-            )
-        spec.validate(tensor_file)
-        binary = KernelBinary.load(
-            os.path.join(
-                directory,
-                spec.kernel.binary,
-            )
-        )
-        if spec.kernel.name not in binary.list_kernel:
+                raise ManifestError(f"{path}: '{key}' is required: {meaning}")
+        if len(map_manifest["intent"]) > JobManifest.PROMPT_CHARACTERS_MAX:
+            raise ManifestError(f"{path}: 'intent' holds at most {JobManifest.PROMPT_CHARACTERS_MAX} characters")
+        for key in (
+            "kernel",
+            "launch",
+        ):
+            if key not in map_manifest:
+                raise ManifestError(f"{path}: a [{key}] table is required")
+        if ("trace" in map_manifest) == ("planner" in map_manifest):
             raise ManifestError(
-                f"{spec.kernel.binary} defines no kernel '{spec.kernel.name}'; it defines: "
-                f"{', '.join(binary.list_kernel) or 'none'}"
+                f"{path}: give either [trace] with the sites to probe or [planner] to have the "
+                "platform pick them"
             )
-        return cls(
+        if ("reference" in map_manifest) != ("validation" in map_manifest):
+            raise ManifestError(f"{path}: 'reference' and [validation] go together")
+        kernel = KernelSpec.from_table(map_manifest["kernel"])
+        binary_path = JobManifest._check_path(
             directory=directory,
-            hardware=map_manifest.get("hardware"),
-            spec=spec,
-            binary=binary,
+            relative_path=kernel.binary,
+            where="[kernel] binary",
         )
+        for relative_path in kernel.list_source:
+            JobManifest._check_path(
+                directory=directory,
+                relative_path=relative_path,
+                where="[kernel] sources",
+            )
+        manifest = cls(
+            directory=directory,
+            hardware=map_manifest["hardware"],
+            intent=map_manifest["intent"],
+            kernel=kernel,
+            binary=KernelBinary.load(binary_path),
+            launch=LaunchSpec.from_table(map_manifest["launch"]),
+            list_buffer=[BufferSpec.from_table(map_buffer) for map_buffer in map_manifest.get("buffers", [])],
+            tensors=map_manifest.get("tensors"),
+            reference=map_manifest.get("reference"),
+            validation=(
+                ValidationSpec.from_table(map_manifest["validation"])
+                if "validation" in map_manifest
+                else None
+            ),
+            trace=TraceOptions.from_table(map_manifest["trace"]) if "trace" in map_manifest else None,
+            planner=(
+                PlannerOptions.from_table(map_manifest["planner"])
+                if "planner" in map_manifest
+                else None
+            ),
+            limits=JobLimits.from_table(
+                map_manifest.get(
+                    "limits",
+                    {},
+                )
+            ),
+        )
+        manifest.validate()
+        return manifest
 
-    def list_files(self) -> list[str]:
-        """The files the bundle carries: the manifest and every file it names, sorted.
-
-        Returns:
-            the paths, relative to the job directory
-        """
-        set_file = {
-            JobManifest.FILE_NAME,
-            self.spec.kernel.binary,
-            *self.spec.kernel.list_source,
-        }
-        if self.spec.tensors is not None:
-            set_file.add(self.spec.tensors)
-        return sorted(os.path.normpath(relative_path) for relative_path in set_file)
-
-
-@dataclass
-class JobBundle:
-    """The gzip'd tar of the files a manifest names, as it is uploaded."""
-
-    # the largest bundle the platform accepts
-    BUNDLE_BYTES_MAX = 512 * 1024 * 1024
-
-    data: bytes
-    sha256: str
-    list_file: list[str]
-
-    @classmethod
-    def pack(cls, manifest: JobManifest) -> "JobBundle":
-        """Pack the files a manifest names, with stable order and timestamps.
-
-        Args:
-            manifest: the job directory's manifest
-
-        Returns:
-            the bundle
+    def validate(self) -> None:
+        """Check the manifest's parts against each other and against the files it names.
 
         Raises:
-            ManifestError: the bundle exceeds the platform's limit
+            ManifestError: a part is malformed or inconsistent
         """
-        list_file = manifest.list_files()
-        buffer = io.BytesIO()
-        with gzip.GzipFile(
-            fileobj=buffer,
-            mode="wb",
-            mtime=0,
-        ) as compressed, tarfile.open(
-            fileobj=compressed,
-            mode="w",
-            dereference=True,
-        ) as archive:
-            for relative_path in list_file:
-                path = os.path.join(
-                    manifest.directory,
-                    relative_path,
-                )
-                info = archive.gettarinfo(
-                    name=path,
-                    arcname=relative_path,
-                )
-                info.mtime = 0
-                info.uid = 0
-                info.gid = 0
-                info.uname = ""
-                info.gname = ""
-                with open(
-                    file=path,
-                    mode="rb",
-                ) as member_file:
-                    archive.addfile(
-                        tarinfo=info,
-                        fileobj=member_file,
-                    )
-        data = buffer.getvalue()
-        if len(data) > JobBundle.BUNDLE_BYTES_MAX:
+        if self.kernel.name not in self.binary.list_kernel:
             raise ManifestError(
-                f"the bundle is {len(data)} bytes; the platform accepts at most "
-                f"{JobBundle.BUNDLE_BYTES_MAX}. Start large buffers with init = 'random' "
-                "instead of a tensors file"
+                f"{self.kernel.binary} defines no kernel '{self.kernel.name}'; it defines: "
+                f"{', '.join(self.binary.list_kernel) or 'none'}"
             )
-        return cls(
-            data=data,
-            sha256=hashlib.sha256(data).hexdigest(),
-            list_file=list_file,
+        tensor_file = None
+        if self.tensors is not None:
+            tensor_file = TensorFile.load(
+                JobManifest._check_path(
+                    directory=self.directory,
+                    relative_path=self.tensors,
+                    where="tensors",
+                )
+            )
+            if not any(buffer.init == "tensor" for buffer in self.list_buffer):
+                raise ManifestError("'tensors' is named, but no buffer has init = 'tensor'")
+        if len(self.list_buffer) > JobManifest.BUFFER_COUNT_MAX:
+            raise ManifestError(f"a job has at most {JobManifest.BUFFER_COUNT_MAX} buffers")
+        map_buffer: dict[str, BufferSpec] = {}
+        for buffer in self.list_buffer:
+            buffer.validate(tensor_file)
+            if buffer.name in map_buffer:
+                raise ManifestError(f"buffer '{buffer.name}' is defined twice")
+            map_buffer[buffer.name] = buffer
+        self.launch.validate(map_buffer)
+        for buffer in self.list_buffer:
+            if (
+                buffer.is_output
+                and not any(argument.is_naming(buffer.name) for argument in self.launch.list_argument)
+            ):
+                raise ManifestError(f"output buffer '{buffer.name}' is named by no launch argument")
+        if self.validation is not None:
+            buffer = map_buffer.get(self.validation.output)
+            if (
+                buffer is None
+                or not buffer.is_output
+            ):
+                raise ManifestError(
+                    f"[validation] output '{self.validation.output}' must be a buffer with output = true"
+                )
+            buffer.check_tensor(
+                tensor_file=TensorFile.load(
+                    JobManifest._check_path(
+                        directory=self.directory,
+                        relative_path=self.reference,
+                        where="reference",
+                    )
+                ),
+                where="reference",
+            )
+        if self.trace is not None:
+            self.trace.validate()
+            self.launch.rows(self.trace.granularity())
+
+    def list_artifact(self) -> list[JobArtifact]:
+        """The files of the job directory the job uploads, besides its launch manifest.
+
+        Returns:
+            the cubin, and the tensors and reference files when the job has them
+        """
+        list_artifact = [
+            JobArtifact(
+                kind="cubin",
+                path=os.path.join(
+                    self.directory,
+                    self.kernel.binary,
+                ),
+            )
+        ]
+        if self.tensors is not None:
+            list_artifact.append(
+                JobArtifact(
+                    kind="safetensors",
+                    path=os.path.join(
+                        self.directory,
+                        self.tensors,
+                    ),
+                )
+            )
+        if self.reference is not None:
+            list_artifact.append(
+                JobArtifact(
+                    kind="reference",
+                    path=os.path.join(
+                        self.directory,
+                        self.reference,
+                    ),
+                )
+            )
+        return list_artifact
+
+    def needs_listing(self) -> bool:
+        """Whether translating the job needs an inspection of its kernel.
+
+        Returns:
+            whether a site names a source line
+        """
+        return (
+            self.trace is not None
+            and self.trace.needs_listing()
         )
+
+    def check_parameters(self, listing: KernelListing) -> None:
+        """Check the launch arguments against the parameter layout an inspection read.
+
+        Args:
+            listing: the inspected kernel
+
+        Raises:
+            ManifestError: the count or a size of the arguments differs from the kernel's
+        """
+        kernel = listing.inspected_kernel()
+        if len(kernel.list_parameter) != len(self.launch.list_argument):
+            raise ManifestError(
+                f"{self.kernel.name} takes {len(kernel.list_parameter)} parameters, but [launch] "
+                f"args lists {len(self.launch.list_argument)}"
+            )
+        for parameter, argument in zip(
+            sorted(
+                kernel.list_parameter,
+                key=lambda listed: listed.index,
+            ),
+            self.launch.list_argument,
+        ):
+            if parameter.size_bytes != argument.size_bytes():
+                raise ManifestError(
+                    f"launch argument {parameter.index} ({argument.kind}) is "
+                    f"{argument.size_bytes()} bytes, but parameter {parameter.index} of "
+                    f"{self.kernel.name} is {parameter.size_bytes}"
+                )
+
+    def select_compute(self, map_capabilities: dict[str, Any]) -> dict[str, Any]:
+        """The capabilities entry of the manifest's hardware, checked to run the job.
+
+        Args:
+            map_capabilities: the platform's capabilities
+
+        Returns:
+            the entry, holding ``compute``, ``architecture`` and the stages it runs
+
+        Raises:
+            ManifestError: the hardware is unknown or cannot run the cubin, the bundle or a stage
+        """
+        if not map_capabilities.get("enabled"):
+            raise ManifestError("Xtrace is not enabled for this account; see the console's Xtrace settings")
+        list_entry = map_capabilities.get("compute", [])
+        for map_entry in list_entry:
+            if map_entry.get("environment_id") != self.hardware:
+                continue
+            architecture = map_entry.get(
+                "architecture",
+                "",
+            )
+            if not self.binary.runs_on(architecture):
+                raise ManifestError(
+                    f"{self.kernel.binary} targets {self.binary.target()}, but {self.hardware} is "
+                    f"{architecture}; rebuild it for {architecture}"
+                )
+            if "cubin_launch" not in map_entry.get("bundle_kinds", []):
+                raise ManifestError(f"{self.hardware} does not run cubin launches")
+            list_stage = self.trace.list_stage if self.trace is not None else ["xtrace"]
+            map_architecture = map_entry.get("architectures") or {}
+            for stage in list_stage:
+                if stage not in map_entry.get("stages", []):
+                    raise ManifestError(f"{self.hardware} does not run the {stage} stage")
+                if (
+                    stage in map_architecture
+                    and architecture not in map_architecture[stage]
+                ):
+                    raise ManifestError(f"the {stage} stage does not support {architecture}")
+            return map_entry
+        raise ManifestError(
+            f"no hardware '{self.hardware}'; 'xtrace hardware' lists: "
+            f"{', '.join(map_entry.get('environment_id', '?') for map_entry in list_entry) or 'none'}"
+        )
+
+    def launch_manifest(self, architecture: str) -> dict[str, Any]:
+        """The launch manifest, ``marscompute.kernel-launch.v1``, uploaded as an artifact.
+
+        Args:
+            architecture: the hardware's architecture
+
+        Returns:
+            the manifest
+        """
+        map_buffer = {buffer.name: buffer for buffer in self.list_buffer}
+        map_launch: dict[str, Any] = {
+            "schema_version": JobManifest.LAUNCH_SCHEMA,
+            "target": self.launch.to_target(
+                architecture=architecture,
+                kernel_symbol=self.kernel.name,
+            ),
+            "arguments": [
+                argument.to_manifest(
+                    index=index,
+                    map_buffer=map_buffer,
+                )
+                for index, argument in enumerate(self.launch.list_argument)
+            ],
+            "buffers": [buffer.to_manifest() for buffer in self.list_buffer],
+            "reset": {"policy": JobManifest.RESET_POLICY},
+        }
+        if self.validation is not None:
+            map_launch["validation"] = self.validation.to_manifest()
+        return map_launch
+
+    def launch_manifest_bytes(self, architecture: str) -> bytes:
+        """The launch manifest as the bytes of its artifact.
+
+        Args:
+            architecture: the hardware's architecture
+
+        Returns:
+            canonical JSON: sorted keys, no whitespace
+        """
+        return json.dumps(
+            self.launch_manifest(architecture),
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+
+    def analysis(self, listing: KernelListing | None) -> dict[str, Any]:
+        """The job's analysis: an explicit trace plan, or the platform planner.
+
+        Args:
+            listing: the inspected kernel, needed when a site names a line
+
+        Returns:
+            the analysis
+
+        Raises:
+            ManifestError: a site cannot be resolved
+            HarnessError: the listing refuses a site
+        """
+        if self.planner is not None:
+            return self.planner.to_analysis()
+        if self.trace is None:
+            raise ManifestError("the job has neither [trace] nor [planner]")
+        return {
+            "mode": "explicit_plan",
+            "trace_plan": self.trace.to_plan(
+                listing=listing,
+                launch=self.launch,
+            ),
+        }
+
+    def estimate_input(
+        self,
+        map_capabilities: dict[str, Any],
+        map_artifact_id: dict[str, str],
+        listing: KernelListing | None,
+    ) -> dict[str, Any]:
+        """The request a quote and a submission take.
+
+        Args:
+            map_capabilities: the platform's capabilities
+            map_artifact_id: artifact kind to the id of the uploaded artifact, including
+                ``launch_manifest``
+            listing: the inspected kernel, needed when a site names a line
+
+        Returns:
+            the estimate input, ``marscompute.xtrace.submit.v1``
+        """
+        map_bundle = {
+            "kind": "cubin_launch",
+            "cubin_artifact_id": map_artifact_id["cubin"],
+            "manifest_artifact_id": map_artifact_id["launch_manifest"],
+        }
+        if "safetensors" in map_artifact_id:
+            map_bundle["tensors_artifact_id"] = map_artifact_id["safetensors"]
+        if "reference" in map_artifact_id:
+            map_bundle["reference_artifact_id"] = map_artifact_id["reference"]
+        return {
+            "schema_version": JobManifest.SUBMIT_SCHEMA,
+            "prompt": self.intent,
+            "bundle": map_bundle,
+            "compute": self.select_compute(map_capabilities)["compute"],
+            "analysis": self.analysis(listing),
+            "limits": self.limits.to_api(map_capabilities.get("limits", {})),
+        }

@@ -1,7 +1,9 @@
 import getpass
+import hashlib
 import json
 import os
 import re
+import shutil
 import struct
 import tempfile
 from dataclasses import dataclass, field
@@ -11,14 +13,13 @@ from xtrace_harness.error import HarnessError
 
 @dataclass
 class KernelBinary:
-    """A CUDA binary a trace job loads: a cubin, or PTX the driver compiles on the GPU.
+    """A CUDA cubin a job loads.
 
     Args:
         path: the file
-        format: ``cubin`` or ``ptx``
-        sm: the SM version the binary targets, e.g. 90 for ``sm_90a``
-        is_arch_specific: the target carries the ``a`` suffix and runs on that SM only
-        list_kernel: the kernel entry points the binary defines
+        sm: the SM version the cubin targets, e.g. 90
+        sha256: the digest of the file's bytes, which identifies the cubin to the platform
+        list_kernel: the kernel entry points the cubin defines
     """
 
     ELF_MAGIC = b"\x7fELF"
@@ -34,18 +35,18 @@ class KernelBinary:
     # st_other flag of a kernel entry point
     SYMBOL_CUDA_ENTRY = 0x10
     SYMBOL_ENTRY_BYTES = 24
-    PTX_TARGET_PATTERN = re.compile(r"^\s*\.target\s+sm_(\d+)(a?)", re.MULTILINE)
-    PTX_ENTRY_PATTERN = re.compile(r"\.entry\s+([A-Za-z_$][\w$]*)\s*\(")
+    PTX_TARGET_PATTERN = re.compile(rb"^\s*\.target\s+sm_", re.MULTILINE)
+    # the leading bytes searched for a PTX ``.target`` line
+    PTX_PROBE_BYTES = 4096
 
     path: str
-    format: str
-    sm: int | None
-    is_arch_specific: bool
+    sm: int
+    sha256: str
     list_kernel: list[str] = field(default_factory=list)
 
     @classmethod
     def load(cls, path: str) -> "KernelBinary":
-        """Read a cubin or a PTX file.
+        """Read a cubin.
 
         Args:
             path: the file
@@ -54,31 +55,23 @@ class KernelBinary:
             the binary
 
         Raises:
-            HarnessError: the file is neither a CUDA cubin nor PTX
+            HarnessError: the file is not a CUDA cubin
         """
         with open(
             file=path,
             mode="rb",
         ) as binary_file:
             data = binary_file.read()
-        if data.startswith(KernelBinary.ELF_MAGIC):
-            return cls._load_cubin(
-                path=path,
-                data=data,
+        if KernelBinary.PTX_TARGET_PATTERN.search(data[:KernelBinary.PTX_PROBE_BYTES]):
+            raise HarnessError(
+                f"{path} is PTX; the platform loads cubins only. Build one with "
+                "nvcc -cubin -arch=<target>, or ptxas -arch=<target>"
             )
-        try:
-            text = data.decode("utf-8")
-        except UnicodeDecodeError as err:
-            raise HarnessError(f"{path} is neither a cubin nor PTX") from err
-        match = KernelBinary.PTX_TARGET_PATTERN.search(text)
-        if match is None:
-            raise HarnessError(f"{path} is neither a cubin nor PTX: it has no .target line")
-        return cls(
+        if not data.startswith(KernelBinary.ELF_MAGIC):
+            raise HarnessError(f"{path} is not a cubin")
+        return cls._load_cubin(
             path=path,
-            format="ptx",
-            sm=int(match.group(1)),
-            is_arch_specific=bool(match.group(2)),
-            list_kernel=KernelBinary.PTX_ENTRY_PATTERN.findall(text),
+            data=data,
         )
 
     @classmethod
@@ -111,9 +104,8 @@ class KernelBinary:
             sm = flags & KernelBinary.BYTE_MASK
         return cls(
             path=path,
-            format="cubin",
             sm=sm,
-            is_arch_specific=False,
+            sha256=hashlib.sha256(data).hexdigest(),
             list_kernel=list_kernel,
         )
 
@@ -161,41 +153,30 @@ class KernelBinary:
         return sorted(list_kernel)
 
     def target(self) -> str:
-        """The binary's target as the hardware classes name it.
+        """The cubin's target as the hardware architectures name it.
 
         Returns:
-            e.g. ``sm_90`` or ``sm_90a``
+            e.g. ``sm_90``
         """
-        return f"sm_{self.sm}{'a' if self.is_arch_specific else ''}"
+        return f"sm_{self.sm}"
 
-    def runs_on(self, arch: str) -> bool:
-        """Whether the binary loads on a GPU of a hardware class's architecture.
-
-        A cubin runs on its own SM version only; PTX runs on its own version, and on later
-        ones unless its target is arch-specific.
+    def runs_on(self, architecture: str) -> bool:
+        """Whether the cubin loads on a GPU of an architecture: a cubin runs on its own SM only.
 
         Args:
-            arch: the class's architecture, e.g. ``sm_90a``
+            architecture: the hardware's architecture, e.g. ``sm_90a``
 
         Returns:
             whether it loads
         """
         match = re.match(
             r"^sm_(\d+)",  # pattern
-            arch,          # string
+            architecture,  # string
         )
-        if (
-            match is None
-            or self.sm is None
-        ):
-            return False
-        hardware_sm = int(match.group(1))
-        if (
-            self.format == "ptx"
-            and not self.is_arch_specific
-        ):
-            return self.sm <= hardware_sm
-        return self.sm == hardware_sm
+        return (
+            match is not None
+            and int(match.group(1)) == self.sm
+        )
 
 
 @dataclass
@@ -297,6 +278,75 @@ class DslCache:
             reverse=True,
         )
         return list_found
+
+    @staticmethod
+    def search(
+        pattern: str,
+        list_directory: list[str],
+        copy_to: str | None,
+        pick: int,
+    ) -> dict[str, Any]:
+        """Search the compiler caches and some directories for kernels, and copy one into a job.
+
+        Args:
+            pattern: a regex searched in the kernel names
+            list_directory: more directories of cubins to search
+            copy_to: a job directory to copy the picked cubin into, or None
+            pick: the position of the match to copy
+
+        Returns:
+            ``kernels`` found, newest first, and ``copied_to``, the copy's path or None
+
+        Raises:
+            HarnessError: nothing matches, or the pick is out of range
+        """
+        list_root = DslCache.default_roots() + [
+            (
+                "directory",
+                directory,
+            )
+            for directory in list_directory
+        ]
+        if not list_root:
+            raise HarnessError("no compiler cache found; name a directory of cubins with --dir")
+        list_found = DslCache.find(
+            pattern=pattern,
+            list_root=list_root,
+        )
+        if not list_found:
+            raise HarnessError(
+                f"no cached kernel matches '{pattern}' under "
+                f"{', '.join(directory for _, directory in list_root)}"
+            )
+        copied_to = None
+        if copy_to is not None:
+            if not 0 <= pick < len(list_found):
+                raise HarnessError(f"--pick {pick} is not one of the {len(list_found)} matches")
+            os.makedirs(
+                name=copy_to,
+                exist_ok=True,
+            )
+            copied_to = os.path.join(
+                copy_to,
+                os.path.basename(list_found[pick].binary.path),
+            )
+            shutil.copyfile(
+                src=list_found[pick].binary.path,
+                dst=copied_to,
+            )
+        return {
+            "kernels": [
+                {
+                    "name": cached.name,
+                    "origin": cached.origin,
+                    "target": cached.binary.target(),
+                    "path": cached.binary.path,
+                    "hints": cached.map_hint,
+                }
+                for cached in list_found
+            ],
+            "copied_to": copied_to,
+        }
 
     @staticmethod
     def _triton_hint(cubin_path: str) -> dict[str, Any]:

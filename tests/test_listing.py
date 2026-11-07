@@ -2,50 +2,65 @@ import json
 import os
 import tempfile
 import unittest
-from xtrace_harness.listing import KernelListing
+from fake_control_plane import FIXTURE_DIRECTORY
+from xtrace_harness.error import HarnessError
+from xtrace_harness.listing import InspectionCache, KernelListing
 
-INSPECT_RESULT = {
-    "schema": "xtrace.inspect/1",
-    "kernels": [
-        {"name": "other_kernel", "matched": False},
-        {
-            "name": "square_matrix_mul",
-            "matched": True,
-            "registers": 16,
-            "static_shared_bytes": 0,
-            "params": [
-                {"index": 0, "offset": 0, "size": 8},
-                {"index": 1, "offset": 8, "size": 8},
-                {"index": 2, "offset": 16, "size": 8},
-                {"index": 3, "offset": 24, "size": 4},
-            ],
-            "instructions": [
-                {"index": 0, "pc": 0, "text": "LDC R1, c[0x0][0x28]", "block": 0},
-                {"index": 7, "pc": 112, "text": "IMAD R4, R3, R2, RZ", "file": "matmul.cu", "line": 8, "block": 1},
-                {"index": 9, "pc": 144, "text": "LDG.E R6, desc[UR4][R4.64]", "file": "matmul.cu", "line": 9, "block": 2},
-            ],
-        },
-    ],
-}
+FIXTURE = os.path.join(FIXTURE_DIRECTORY, "matmul_inspection.json")
 
 
 class KernelListingTest(unittest.TestCase):
     def setUp(self) -> None:
-        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as result_file:
-            json.dump(INSPECT_RESULT, result_file)
-        self.addCleanup(os.unlink, result_file.name)
-        self.listing = KernelListing.load(result_file.name)
+        self.listing = KernelListing.load(FIXTURE)
 
     def test_kernels_show_the_parameter_layout(self) -> None:
         text = self.listing.render_kernels()
+        self.assertIn("architecture sm_90a", text)
         self.assertIn("* square_matrix_mul", text)
         self.assertIn("param 3   offset 24    size 4", text)
-        self.assertNotIn("registers", text.split("\n")[0])
 
-    def test_listing_narrows_by_line_and_opcode(self) -> None:
-        self.assertEqual(len(self.listing.render_listing(source="matmul.cu:8").splitlines()), 1)
+    def test_listing_marks_eligible_instructions(self) -> None:
+        list_line = self.listing.render_listing(source="matmul.cu:8").splitlines()
+        self.assertEqual(len(list_line), 3)
+        self.assertRegex(list_line[0], r"^\s+5\s{3}B1")
+        self.assertRegex(list_line[1], r"^\s+6 \+ B1")
         self.assertIn("LDG.E", self.listing.render_listing(opcode_pattern="LDG"))
-        self.assertEqual(self.listing.render_listing(first_index=8), self.listing.render_listing(opcode_pattern="LDG"))
+        self.assertEqual(len(self.listing.render_listing(first_index=10, last_index=11).splitlines()), 2)
+
+    def test_line_resolves_to_its_first_eligible_instruction(self) -> None:
+        self.assertEqual(self.listing.resolve_line("matmul.cu:8"), 6)
+        self.assertEqual(self.listing.resolve_line("cu:9"), 7)
+
+    def test_kernel_list_only(self) -> None:
+        with open(FIXTURE) as fixture_file:
+            map_inspection = json.load(fixture_file)
+        map_inspection["kernel"] = None
+        listing = KernelListing.from_json(map_inspection=map_inspection, where="test")
+        self.assertIn("  square_matrix_mul", listing.render_kernels())
+        with self.assertRaisesRegex(HarnessError, "--kernel"):
+            listing.render_listing()
+
+    def test_other_schemas_are_refused(self) -> None:
+        with self.assertRaisesRegex(HarnessError, "is not a marscompute.xtrace.inspection.v1 result"):
+            KernelListing.from_json(map_inspection={"schema": "xtrace.inspect/1"}, where="old.json")
+        with self.assertRaisesRegex(HarnessError, "malformed"):
+            KernelListing.from_json(
+                map_inspection={"schema_version": KernelListing.SCHEMA, "kernels": []},
+                where="partial.json",
+            )
+
+
+class InspectionCacheTest(unittest.TestCase):
+    def test_key_is_digest_and_kernel(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            binary = os.path.join(directory, "k.cubin")
+            with open(FIXTURE, "rb") as fixture_file:
+                data = fixture_file.read()
+            path = InspectionCache.store(binary_path=binary, sha256="a" * 64, kernel_symbol="k", data=data)
+            self.assertTrue(path.startswith(os.path.join(directory, ".xtrace-cache", "a" * 64)))
+            self.assertIsNotNone(InspectionCache.load(binary_path=binary, sha256="a" * 64, kernel_symbol="k"))
+            self.assertIsNone(InspectionCache.load(binary_path=binary, sha256="b" * 64, kernel_symbol="k"))
+            self.assertIsNone(InspectionCache.load(binary_path=binary, sha256="a" * 64, kernel_symbol=None))
 
 
 if __name__ == "__main__":

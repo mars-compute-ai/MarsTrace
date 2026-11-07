@@ -1,5 +1,4 @@
 hardware = "h100-sxm"
-timeout_seconds = 120
 intent = "how long each thread spends in the dot-product loop, and how evenly the blocks run"
 
 # built with: nvcc -cubin -arch=sm_90a -lineinfo -o matmul.cubin matmul.cu
@@ -13,12 +12,14 @@ name = "a"
 dtype = "i32"
 shape = [256, 256]
 init = "random"
+seed = 1
 
 [[buffers]]
 name = "b"
 dtype = "i32"
 shape = [256, 256]
 init = "random"
+seed = 2
 
 [[buffers]]
 name = "c"
@@ -37,11 +38,16 @@ args = [
     { kind = "scalar", dtype = "i32", value = 256 },
 ]
 
+[limits]
+max_cost_usd = 2.0
+max_gpu_seconds = 120
+
 [trace]
 clock = "gpu"
+per_thread_records = 512
 
 # the loop's entry and the store of the result, by line of matmul.cu; a site on a
-# source line is the first instruction emitted for it
+# source line is the first instruction of that line that takes a probe
 [[trace.sites]]
 line = "matmul.cu:8"
 
@@ -51,4 +57,4 @@ line = "matmul.cu:11"
 [[trace.regions]]
 enter = 0
 leave = 1
-label = "dot product"
+label = "dot_product"

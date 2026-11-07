@@ -1,0 +1,155 @@
+{
+  "schema_version": "marscompute.xtrace.inspection.v1",
+  "architecture": "sm_90a",
+  "kernels": [
+    {
+      "symbol": "square_matrix_mul",
+      "demangled": null
+    }
+  ],
+  "kernel": {
+    "symbol": "square_matrix_mul",
+    "demangled": null,
+    "registers": 16,
+    "static_shared_bytes": 0,
+    "parameters": [
+      {
+        "index": 0,
+        "offset_bytes": 0,
+        "size_bytes": 8
+      },
+      {
+        "index": 1,
+        "offset_bytes": 8,
+        "size_bytes": 8
+      },
+      {
+        "index": 2,
+        "offset_bytes": 16,
+        "size_bytes": 8
+      },
+      {
+        "index": 3,
+        "offset_bytes": 24,
+        "size_bytes": 4
+      }
+    ],
+    "instructions": [
+      {
+        "index": 0,
+        "pc": 0,
+        "sass": "LDC R1, c[0x0][0x28] ;",
+        "file": null,
+        "line": null,
+        "block": 0
+      },
+      {
+        "index": 1,
+        "pc": 16,
+        "sass": "S2R R0, SR_CTAID.Y ;",
+        "file": "matmul.cu",
+        "line": 2,
+        "block": 0
+      },
+      {
+        "index": 2,
+        "pc": 32,
+        "sass": "S2R R3, SR_TID.Y ;",
+        "file": "matmul.cu",
+        "line": 2,
+        "block": 0
+      },
+      {
+        "index": 3,
+        "pc": 48,
+        "sass": "S2R R5, SR_CTAID.X ;",
+        "file": "matmul.cu",
+        "line": 3,
+        "block": 0
+      },
+      {
+        "index": 4,
+        "pc": 64,
+        "sass": "ISETP.GE.AND P0, PT, R0, UR4, PT ;",
+        "file": "matmul.cu",
+        "line": 4,
+        "block": 0
+      },
+      {
+        "index": 5,
+        "pc": 80,
+        "sass": "MOV R7, RZ ;",
+        "file": "matmul.cu",
+        "line": 8,
+        "block": 1
+      },
+      {
+        "index": 6,
+        "pc": 96,
+        "sass": "ISETP.GE.AND P1, PT, RZ, UR4, PT ;",
+        "file": "matmul.cu",
+        "line": 8,
+        "block": 1
+      },
+      {
+        "index": 7,
+        "pc": 112,
+        "sass": "LDG.E R8, desc[UR6][R2.64] ;",
+        "file": "matmul.cu",
+        "line": 9,
+        "block": 2
+      },
+      {
+        "index": 8,
+        "pc": 128,
+        "sass": "LDG.E R9, desc[UR6][R4.64] ;",
+        "file": "matmul.cu",
+        "line": 9,
+        "block": 2
+      },
+      {
+        "index": 9,
+        "pc": 144,
+        "sass": "IMAD R7, R8, R9, R7 ;",
+        "file": "matmul.cu",
+        "line": 9,
+        "block": 2
+      },
+      {
+        "index": 10,
+        "pc": 160,
+        "sass": "BRA 0x70 ;",
+        "file": "matmul.cu",
+        "line": 8,
+        "block": 2
+      },
+      {
+        "index": 11,
+        "pc": 176,
+        "sass": "STG.E desc[UR6][R10.64], R7 ;",
+        "file": "matmul.cu",
+        "line": 11,
+        "block": 3
+      },
+      {
+        "index": 12,
+        "pc": 192,
+        "sass": "EXIT ;",
+        "file": "matmul.cu",
+        "line": 12,
+        "block": 3
+      }
+    ],
+    "eligible_sites": [
+      1,
+      2,
+      3,
+      4,
+      6,
+      7,
+      8,
+      9,
+      11
+    ]
+  }
+}

@@ -1,303 +1,121 @@
 import argparse
 import json
 import os
-import shutil
 import sys
-import time
 from typing import Any
 from xtrace_harness.binary import DslCache, KernelBinary
-from xtrace_harness.client import Credentials, MarsComputeClient
 from xtrace_harness.error import HarnessError
-from xtrace_harness.job import JobBundle, JobManifest
 from xtrace_harness.listing import KernelListing
 from xtrace_harness.viewer.cli.show import ShowCommand
+from xtrace_harness.workflow import QuotedJob, XtraceWorkflow
 
 
 class JobCommands:
-    """The ``xtrace`` commands that call the platform: hardware, upload, submit, wait and fetch."""
+    """The ``xtrace`` commands that call the Control Plane."""
 
-    # the states after which a job no longer changes
-    SET_FINAL_STATE = {
-        "succeeded",
-        "failed",
-        "cancelled",
-        "expired",
-    }
-    # seconds between two polls of a running job
-    POLL_SECONDS = 5
-    # the directory, under the job directory, that fetched results land in
-    RESULTS_DIRECTORY = "xtrace-results"
-    # micro-USD per USD
-    MICRO_PER_UNIT = 1_000_000
     JSON_INDENT = 2
     JOBS_LIMIT_DEFAULT = 20
+    SET_YES = {
+        "y",
+        "yes",
+    }
 
     @staticmethod
-    def _client() -> MarsComputeClient:
-        """A client with the credentials of the environment."""
-        return MarsComputeClient(Credentials.from_environment())
-
-    @staticmethod
-    def _usd(micro_usd: Any) -> str:
-        """An amount in micro-USD as dollars, or '-' when the platform gave none."""
-        if not isinstance(
-            micro_usd,  # obj
-            int,        # class_or_tuple
-        ):
-            return "-"
-        return f"${micro_usd / JobCommands.MICRO_PER_UNIT:.4f}"
-
-    @staticmethod
-    def _print_job(map_job: dict[str, Any]) -> None:
-        """One job's state, timing, cost and files."""
-        print(f"job       {map_job['id']}")
-        print(f"state     {map_job['state']}")
-        print(f"kind      {map_job.get('kind')}")
-        print(f"hardware  {map_job.get('hardware')}")
-        if map_job.get("gpu_seconds") is not None:
-            print(f"gpu time  {map_job['gpu_seconds']} s")
-        print(f"reserved  {JobCommands._usd(map_job.get('reserved_micro_usd'))}")
-        print(f"charged   {JobCommands._usd(map_job.get('charge_micro_usd'))}")
-        map_error = map_job.get("error")
-        if map_error:
-            print(f"error     {map_error.get('code')}: {map_error.get('message')}")
-        for map_file in map_job.get("files") or []:
-            print(f"file      {map_file['name']} ({map_file.get('size_bytes')} bytes)")
-
-    @staticmethod
-    def hardware(args: argparse.Namespace) -> None:
-        """List the hardware classes and their prices."""
-        list_hardware = JobCommands._client().list_hardware()
-        if args.json:
-            print(
-                json.dumps(
-                    list_hardware,
-                    indent=JobCommands.JSON_INDENT,
-                )
-            )
-            return
-        for map_hardware in list_hardware:
-            available = "available" if map_hardware.get("available") else "unavailable"
-            print(
-                f"{map_hardware['id']:<16} {map_hardware.get('gpu', ''):<24} "
-                f"{map_hardware.get('arch', ''):<8} "
-                f"{JobCommands._usd(map_hardware.get('gpu_second_micro_usd'))}/GPU-s "
-                f"+ {JobCommands._usd(map_hardware.get('job_micro_usd'))}/job  {available}"
-            )
-
-    @staticmethod
-    def balance(args: argparse.Namespace) -> None:
-        """Print the credit available to new jobs."""
-        map_balance = JobCommands._client().get_balance()
-        print(f"available {JobCommands._usd(map_balance.get('available_micro_usd'))}")
-
-    @staticmethod
-    def _manifest(args: argparse.Namespace) -> JobManifest:
-        """The job directory's manifest, with the command line's kind applied."""
-        return JobManifest.load(
-            directory=args.directory,
-            kind=args.kind,
+    def _workflow() -> XtraceWorkflow:
+        """A workflow with the environment's credentials, reporting progress on stderr."""
+        return XtraceWorkflow.from_environment(
+            progress=lambda line: print(
+                line,
+                file=sys.stderr,
+            ),
         )
 
     @staticmethod
-    def _pack(manifest: JobManifest) -> JobBundle:
-        """Pack the files a manifest sends and report the bundle's size."""
-        bundle = JobBundle.pack(manifest)
-        print(
-            f"bundle    {len(bundle.list_file)} file(s), {len(bundle.data)} bytes, "
-            f"sha256 {bundle.sha256[:12]}",
-            file=sys.stderr,
-        )
-        return bundle
-
-    @staticmethod
-    def _hardware(
-        client: MarsComputeClient,
-        manifest: JobManifest,
-        hardware: str | None,
-    ) -> str:
-        """The job's hardware class, checked to exist and to run the job's binary."""
-        if not hardware:
-            raise HarnessError("name the hardware with --hardware or 'hardware' in xtrace.toml")
-        for map_hardware in client.list_hardware():
-            if map_hardware["id"] != hardware:
-                continue
-            arch = map_hardware.get("arch", "")
-            if not manifest.binary.runs_on(arch):
-                raise HarnessError(
-                    f"{manifest.spec.kernel.binary} targets {manifest.binary.target()}, but "
-                    f"{hardware} is {arch}; rebuild it for {arch}"
-                )
-            return hardware
-        raise HarnessError(f"no hardware class '{hardware}'; run 'xtrace hardware' to list them")
-
-    @staticmethod
-    def upload(args: argparse.Namespace) -> None:
-        """Pack and upload a job directory; print the upload id and the specification to submit."""
-        manifest = JobCommands._manifest(args)
-        bundle = JobCommands._pack(manifest)
-        client = JobCommands._client()
-        hardware = JobCommands._hardware(
-            client=client,
-            manifest=manifest,
-            hardware=args.hardware or manifest.hardware,
-        )
-        upload_id = client.upload(bundle)
+    def _print_json(value: Any) -> None:
+        """Print a value as indented JSON."""
         print(
             json.dumps(
-                {
-                    "upload_id": upload_id,
-                    "hardware": hardware,
-                    "spec": manifest.spec.to_json(),
-                },
+                value,
                 indent=JobCommands.JSON_INDENT,
             )
         )
 
     @staticmethod
-    def submit(args: argparse.Namespace) -> None:
-        """Pack, upload and submit a job directory, then optionally wait and fetch its results."""
-        manifest = JobCommands._manifest(args)
-        bundle = JobCommands._pack(manifest)
-        client = JobCommands._client()
-        hardware = JobCommands._hardware(
-            client=client,
-            manifest=manifest,
-            hardware=args.hardware or manifest.hardware,
-        )
-        upload_id = client.upload(bundle)
-        map_job = client.submit(
-            upload_id=upload_id,
-            hardware=hardware,
-            spec=manifest.spec,
-        )
-        JobCommands._print_job(map_job)
-        if args.wait:
-            JobCommands._wait_and_fetch(
-                client=client,
-                job_id=map_job["id"],
-                output_directory=os.path.join(
-                    args.directory,
-                    JobCommands.RESULTS_DIRECTORY,
-                    map_job["id"],
-                ),
-            )
+    def print_job(map_job: dict[str, Any]) -> None:
+        """One job's state, hardware, cost and result quality.
+
+        Args:
+            map_job: the job
+        """
+        map_compute = map_job.get("compute") or {}
+        map_accounting = map_job.get("accounting") or {}
+        print(f"job       {map_job['job_id']}")
+        print(f"state     {map_job['state']}")
+        print(f"hardware  {map_compute.get('gpu_type')} x{map_compute.get('gpu_count')}")
+        print(f"created   {map_job.get('created_at')}")
+        print(f"reserved  {XtraceWorkflow.usd(map_accounting.get('reserved_micro_usd'))}")
+        print(f"settled   {XtraceWorkflow.usd(map_accounting.get('settled_micro_usd'))}")
+        map_error = map_job.get("error")
+        if map_error:
+            print(f"error     {map_error.get('code')}: {map_error.get('message')}")
+        map_manifest = map_job.get("result_manifest")
+        if map_manifest:
+            print(f"quality   {map_manifest.get('quality')} {', '.join(map_manifest.get('reason_codes', []))}")
+            print(f"correct   {map_manifest.get('correctness')}")
 
     @staticmethod
-    def _wait_and_fetch(
-        client: MarsComputeClient,
-        job_id: str,
-        output_directory: str,
-    ) -> None:
-        """Poll a job until it ends, then fetch its files."""
-        last_state = None
-        while True:
-            map_job = client.get_job(job_id)
-            if map_job["state"] != last_state:
-                last_state = map_job["state"]
-                print(
-                    f"{time.strftime('%H:%M:%S')} {job_id} {last_state}",
-                    file=sys.stderr,
-                )
-            if map_job["state"] in JobCommands.SET_FINAL_STATE:
-                break
-            time.sleep(JobCommands.POLL_SECONDS)
-        JobCommands._print_job(map_job)
-        JobCommands._fetch_files(
-            client=client,
-            map_job=map_job,
-            output_directory=output_directory,
-        )
-
-    @staticmethod
-    def _fetch_files(
-        client: MarsComputeClient,
-        map_job: dict[str, Any],
-        output_directory: str,
-    ) -> None:
-        """Download every result file of a job into a directory."""
-        list_file = map_job.get("files") or []
-        if not list_file:
-            return
-        os.makedirs(
-            name=output_directory,
-            exist_ok=True,
-        )
-        for map_file in list_file:
-            name = os.path.basename(map_file["name"])
-            path = os.path.join(
-                output_directory,
-                name,
-            )
-            with open(
-                file=path,
-                mode="wb",
-            ) as result_file:
-                result_file.write(
-                    client.download(map_file)
-                )
-            print(f"saved     {path}")
-
-    @staticmethod
-    def status(args: argparse.Namespace) -> None:
-        """Print one job, or wait for it to end and fetch its files."""
-        client = JobCommands._client()
-        if args.wait:
-            JobCommands._wait_and_fetch(
-                client=client,
-                job_id=args.job,
-                output_directory=os.path.join(
-                    args.output,
-                    args.job,
-                ),
-            )
-            return
-        map_job = client.get_job(args.job)
+    def hardware(args: argparse.Namespace) -> None:
+        """List the hardware a job can run on, with rates, architectures and stages."""
+        map_capabilities = JobCommands._workflow().hardware()
         if args.json:
-            print(
-                json.dumps(
-                    map_job,
-                    indent=JobCommands.JSON_INDENT,
-                )
-            )
+            JobCommands._print_json(map_capabilities)
             return
-        JobCommands._print_job(map_job)
-
-    @staticmethod
-    def jobs(args: argparse.Namespace) -> None:
-        """List the account's latest jobs."""
-        for map_job in JobCommands._client().list_jobs(args.limit):
+        if not map_capabilities.get("enabled"):
+            print("Xtrace is not enabled for this account")
+        for map_entry in map_capabilities.get("compute", []):
+            map_compute = map_entry.get("compute", {})
             print(
-                f"{map_job['id']:<28} {map_job['state']:<11} {map_job.get('kind', ''):<8} "
-                f"{map_job.get('hardware', ''):<14} {map_job.get('created_at', '')}"
+                f"{map_entry['environment_id']:<20} {map_compute.get('gpu_type', ''):<12} "
+                f"x{map_compute.get('gpu_count', '')} {map_entry.get('architecture', ''):<8} "
+                f"{XtraceWorkflow.usd(map_entry.get('gpu_micro_usd_per_hour'))}/GPU-hour  "
+                f"{map_compute.get('purchase_option', '')} {map_compute.get('region', '')}  "
+                f"stages: {', '.join(map_entry.get('stages', []))}"
             )
+        if map_capabilities.get("models"):
+            print(f"planner models: {', '.join(map_capabilities['models'])}")
 
     @staticmethod
-    def cancel(args: argparse.Namespace) -> None:
-        """Cancel a job."""
-        JobCommands._print_job(JobCommands._client().cancel(args.job))
+    def credit(args: argparse.Namespace) -> None:
+        """Print the tenant's credit."""
+        map_credit = JobCommands._workflow().credit()
+        if args.json:
+            JobCommands._print_json(map_credit)
+            return
+        print(f"available {XtraceWorkflow.usd(map_credit.get('available_micro_usd'))}")
+        print(f"reserved  {XtraceWorkflow.usd(map_credit.get('reserved_micro_usd'))}")
+        print(f"top up    {map_credit.get('top_up_url')}")
 
     @staticmethod
-    def fetch(args: argparse.Namespace) -> None:
-        """Download a finished job's files."""
-        client = JobCommands._client()
-        JobCommands._fetch_files(
-            client=client,
-            map_job=client.get_job(args.job),
-            output_directory=os.path.join(
-                args.output,
-                args.job,
-            ),
+    def inspect(args: argparse.Namespace) -> None:
+        """Inspect a cubin's kernel and print its kernels, resources and parameter layout."""
+        path = JobCommands._workflow().inspect(
+            binary_path=args.binary,
+            kernel_symbol=args.kernel,
+            do_refresh=args.refresh,
         )
-
-
-class ListingCommand:
-    """``xtrace sass``: browse the SASS listing an ``inspect`` job returned, to pick trace sites."""
+        print(KernelListing.load(path).render_kernels())
+        print(f"listing   {path}")
 
     @staticmethod
-    def run(args: argparse.Namespace) -> None:
-        """Print the binary's kernels, or the named kernel's narrowed listing."""
-        listing = KernelListing.load(args.listing)
+    def sass(args: argparse.Namespace) -> None:
+        """Print a cached or fresh SASS listing, narrowed by line, opcode or index."""
+        path = args.listing
+        if not path.endswith(".json"):
+            path = JobCommands._workflow().inspect(
+                binary_path=args.listing,
+                kernel_symbol=args.kernel,
+            )
+        listing = KernelListing.load(path)
         if args.kernels:
             print(listing.render_kernels())
             return
@@ -310,58 +128,135 @@ class ListingCommand:
             )
         )
 
+    @staticmethod
+    def _print_quote(quoted: QuotedJob) -> None:
+        """What a quote commits to."""
+        map_summary = quoted.summary()
+        print(f"quote     {map_summary['quote_id']} (expires {map_summary['expires_at']})")
+        print(f"hardware  {map_summary['hardware']} ({map_summary['architecture']})")
+        print(f"rate      {map_summary['gpu_usd_per_hour']} per GPU-hour")
+        print(f"cost cap  {map_summary['max_cost_usd']} at most")
+
+    @staticmethod
+    def estimate(args: argparse.Namespace) -> None:
+        """Upload and quote a job directory, then print the cost cap and the rate."""
+        quoted = JobCommands._workflow().quote(
+            directory=args.directory,
+            hardware=args.hardware,
+        )
+        if args.json:
+            JobCommands._print_json(quoted.summary())
+            return
+        JobCommands._print_quote(quoted)
+
+    @staticmethod
+    def submit(args: argparse.Namespace) -> None:
+        """Upload, resolve, quote, confirm the cost and submit a job directory."""
+        workflow = JobCommands._workflow()
+        quoted = workflow.quote(
+            directory=args.directory,
+            hardware=args.hardware,
+        )
+        JobCommands._print_quote(quoted)
+        if not args.yes:
+            if not sys.stdin.isatty():
+                raise HarnessError("confirm the cost cap above: run again with --yes")
+            if input("submit? [y/N] ").strip().lower() not in JobCommands.SET_YES:
+                raise HarnessError("not submitted")
+        map_job = workflow.submit(
+            quoted=quoted,
+            idempotency_key=args.idempotency_key,
+        )
+        JobCommands.print_job(map_job)
+        if not args.wait:
+            return
+        map_view = workflow.wait(map_job["job_id"])
+        JobCommands.print_job(map_view["job"])
+        if map_view["job"].get("result_manifest"):
+            for path in workflow.fetch(
+                job_id=map_job["job_id"],
+                output_directory=os.path.join(
+                    args.directory,
+                    XtraceWorkflow.RESULTS_DIRECTORY,
+                    map_job["job_id"],
+                ),
+            ):
+                print(f"saved     {path}")
+
+    @staticmethod
+    def jobs(args: argparse.Namespace) -> None:
+        """List a page of the account's jobs."""
+        map_page = JobCommands._workflow().jobs(
+            limit=args.limit,
+            cursor=args.cursor,
+        )
+        if args.json:
+            JobCommands._print_json(map_page)
+            return
+        for map_job in map_page.get("items", []):
+            print(
+                f"{map_job['job_id']:<38} {map_job['state']:<16} "
+                f"{(map_job.get('compute') or {}).get('gpu_type', ''):<10} {map_job.get('created_at', '')}"
+            )
+        if map_page.get("next_cursor"):
+            print(f"more: --cursor {map_page['next_cursor']}")
+
+    @staticmethod
+    def job(args: argparse.Namespace) -> None:
+        """Print one job, or wait for it to end."""
+        workflow = JobCommands._workflow()
+        map_view = workflow.wait(args.job) if args.wait else workflow.job(args.job)
+        if args.json:
+            JobCommands._print_json(map_view)
+            return
+        JobCommands.print_job(map_view["job"])
+
+    @staticmethod
+    def cancel(args: argparse.Namespace) -> None:
+        """Ask a job to stop."""
+        JobCommands.print_job(JobCommands._workflow().cancel(args.job))
+
+    @staticmethod
+    def fetch(args: argparse.Namespace) -> None:
+        """Download a finished job's files."""
+        for path in JobCommands._workflow().fetch(
+            job_id=args.job,
+            output_directory=args.output or os.path.join(
+                XtraceWorkflow.RESULTS_DIRECTORY,
+                args.job,
+            ),
+        ):
+            print(f"saved     {path}")
+
 
 class BinaryCommands:
-    """``xtrace cubin``: find a kernel's cubin in compiler caches, and read what a binary holds."""
+    """``xtrace cubin``: find a kernel's cubin in compiler caches, and read what a cubin holds."""
 
     @staticmethod
     def find(args: argparse.Namespace) -> None:
         """List the cached kernels whose name matches, newest first, and copy one into a job."""
-        list_root = DslCache.default_roots() + [
-            (
-                "directory",
-                directory,
-            )
-            for directory in args.dir
-        ]
-        if not list_root:
-            raise HarnessError("no compiler cache found; name a directory of cubins with --dir")
-        list_found = DslCache.find(
+        map_found = DslCache.search(
             pattern=args.pattern,
-            list_root=list_root,
+            list_directory=args.dir,
+            copy_to=args.copy_to,
+            pick=args.pick,
         )
-        if not list_found:
-            raise HarnessError(
-                f"no cached kernel matches '{args.pattern}' under "
-                f"{', '.join(directory for _, directory in list_root)}"
-            )
-        for found_id, cached in enumerate(list_found):
-            print(f"[{found_id}] {cached.name}")
-            print(f"    {cached.origin}, {cached.binary.target()}, {cached.binary.path}")
-            for key, value in cached.map_hint.items():
+        for found_id, map_kernel in enumerate(map_found["kernels"]):
+            print(f"[{found_id}] {map_kernel['name']}")
+            print(f"    {map_kernel['origin']}, {map_kernel['target']}, {map_kernel['path']}")
+            for key, value in map_kernel["hints"].items():
                 print(f"    {key}: {value}")
-        if args.copy_to is None:
-            return
-        cached = list_found[args.pick]
-        os.makedirs(
-            name=args.copy_to,
-            exist_ok=True,
-        )
-        target = os.path.join(
-            args.copy_to,
-            os.path.basename(cached.binary.path),
-        )
-        shutil.copyfile(
-            src=cached.binary.path,
-            dst=target,
-        )
-        print(f"copied [{args.pick}] to {target}; set [kernel] binary and name = \"{cached.name}\"")
+        if map_found["copied_to"] is not None:
+            print(
+                f"copied [{args.pick}] to {map_found['copied_to']}; set [kernel] binary and "
+                f"name = \"{map_found['kernels'][args.pick]['name']}\""
+            )
 
     @staticmethod
     def show(args: argparse.Namespace) -> None:
-        """Print a binary's format, target and kernels."""
+        """Print a cubin's target and kernels."""
         binary = KernelBinary.load(args.binary)
-        print(f"{binary.format}, {binary.target()}")
+        print(f"cubin, {binary.target()}, sha256 {binary.sha256}")
         for kernel_name in binary.list_kernel:
             print(f"  {kernel_name}")
 
@@ -372,6 +267,15 @@ class CommandLine:
     EXIT_FAILURE = 1
 
     @staticmethod
+    def _add_json(parser: argparse.ArgumentParser) -> None:
+        """The option that prints the platform's answer as JSON."""
+        parser.add_argument(
+            "--json",
+            action="store_true",
+            help="print the platform's answer as JSON",
+        )
+
+    @staticmethod
     def _add_job_directory(parser: argparse.ArgumentParser) -> None:
         """The options of a command that reads a job directory."""
         parser.add_argument(
@@ -379,46 +283,114 @@ class CommandLine:
             help="the job directory, holding xtrace.toml and the files it names",
         )
         parser.add_argument(
-            "--kind",
-            choices=[
-                "inspect",
-                "trace",
-            ],
-            default=None,
-            help="override the manifest's kind",
-        )
-        parser.add_argument(
             "--hardware",
             default=None,
-            help="override the manifest's hardware class",
+            help="override the manifest's hardware, an environment id from 'xtrace hardware'",
         )
 
     @staticmethod
-    def build_parser() -> argparse.ArgumentParser:
-        """The parser of every ``xtrace`` command.
-
-        Returns:
-            the parser
-        """
-        parser = argparse.ArgumentParser(
-            prog="xtrace",
-            description="Trace CUDA kernels on MarsCompute GPUs and read the traces.",
-        )
-        subparsers = parser.add_subparsers()
-
+    def _add_platform_commands(subparsers: argparse._SubParsersAction) -> None:
+        """The commands that read the account and run jobs."""
         hardware = subparsers.add_parser(
             name="hardware",
-            help="list the GPU classes a job can run on, with their prices",
+            help="list the hardware a job can run on, with rates, architectures and stages",
         )
-        hardware.add_argument(
-            "--json",
-            action="store_true",
-        )
+        CommandLine._add_json(hardware)
         hardware.set_defaults(func=JobCommands.hardware)
 
+        credit = subparsers.add_parser(
+            name="credit",
+            help="show the credit available to jobs, and where to add more",
+        )
+        CommandLine._add_json(credit)
+        credit.set_defaults(func=JobCommands.credit)
+
+        estimate = subparsers.add_parser(
+            name="estimate",
+            help="upload and quote a job directory; print the cost cap and the rate",
+        )
+        CommandLine._add_job_directory(estimate)
+        CommandLine._add_json(estimate)
+        estimate.set_defaults(func=JobCommands.estimate)
+
+        submit = subparsers.add_parser(
+            name="submit",
+            help="upload, resolve sites, quote, confirm the cost and submit a job directory",
+        )
+        CommandLine._add_job_directory(submit)
+        submit.add_argument(
+            "--yes",
+            action="store_true",
+            help="accept the quoted cost cap without asking",
+        )
+        submit.add_argument(
+            "--wait",
+            action="store_true",
+            help="wait for the job to end and fetch its files into <directory>/xtrace-results/<job>",
+        )
+        submit.add_argument(
+            "--idempotency-key",
+            default=None,
+            help="the key that makes a repeated submission start one job; a fresh one by default",
+        )
+        submit.set_defaults(func=JobCommands.submit)
+
+        jobs = subparsers.add_parser(
+            name="jobs",
+            help="list the account's jobs, newest first",
+        )
+        jobs.add_argument(
+            "--limit",
+            type=int,
+            default=JobCommands.JOBS_LIMIT_DEFAULT,
+        )
+        jobs.add_argument(
+            "--cursor",
+            default=None,
+            help="the cursor a previous page printed",
+        )
+        CommandLine._add_json(jobs)
+        jobs.set_defaults(func=JobCommands.jobs)
+
+        job = subparsers.add_parser(
+            name="job",
+            help="show a job's state, cost and result quality",
+        )
+        job.add_argument("job")
+        job.add_argument(
+            "--wait",
+            action="store_true",
+            help="wait for the job to end",
+        )
+        CommandLine._add_json(job)
+        job.set_defaults(func=JobCommands.job)
+
+        cancel = subparsers.add_parser(
+            name="cancel",
+            help="ask a job to stop",
+        )
+        cancel.add_argument("job")
+        cancel.set_defaults(func=JobCommands.cancel)
+
+        fetch = subparsers.add_parser(
+            name="fetch",
+            help="download a finished job's files",
+        )
+        fetch.add_argument("job")
+        fetch.add_argument(
+            "-o",
+            "--output",
+            default=None,
+            help="the directory the files land in; xtrace-results/<job> by default",
+        )
+        fetch.set_defaults(func=JobCommands.fetch)
+
+    @staticmethod
+    def _add_binary_commands(subparsers: argparse._SubParsersAction) -> None:
+        """The commands that find and read cubins and their listings."""
         cubin = subparsers.add_parser(
             name="cubin",
-            help="find a kernel's cubin in compiler caches, or show what a binary holds",
+            help="find a kernel's cubin in compiler caches, or show what a cubin holds",
         )
         cubin_commands = cubin.add_subparsers()
         cubin_find = cubin_commands.add_parser(
@@ -449,99 +421,48 @@ class CommandLine:
         cubin_find.set_defaults(func=BinaryCommands.find)
         cubin_show = cubin_commands.add_parser(
             name="show",
-            help="print a cubin's or PTX file's target and kernels",
+            help="print a cubin's target, digest and kernels",
         )
         cubin_show.add_argument("binary")
         cubin_show.set_defaults(func=BinaryCommands.show)
 
-        balance = subparsers.add_parser(
-            name="balance",
-            help="show the credit available to new jobs",
+        inspect = subparsers.add_parser(
+            name="inspect",
+            help="inspect a cubin on the platform and cache its listing beside it",
         )
-        balance.set_defaults(func=JobCommands.balance)
-
-        upload = subparsers.add_parser(
-            name="upload",
-            help="pack and upload a job directory; print what to pass to xtrace_submit_job",
+        inspect.add_argument(
+            "binary",
+            help="the cubin",
         )
-        CommandLine._add_job_directory(upload)
-        upload.set_defaults(func=JobCommands.upload)
-
-        submit = subparsers.add_parser(
-            name="submit",
-            help="pack, upload and submit a job directory",
+        inspect.add_argument(
+            "--kernel",
+            default=None,
+            help="the kernel to list, as the cubin names it; without it only the kernels are listed",
         )
-        CommandLine._add_job_directory(submit)
-        submit.add_argument(
-            "--wait",
+        inspect.add_argument(
+            "--refresh",
             action="store_true",
-            help="wait for the job to end and fetch its files into <directory>/xtrace-results",
+            help="inspect again even when a listing is cached",
         )
-        submit.set_defaults(func=JobCommands.submit)
-
-        status = subparsers.add_parser(
-            name="status",
-            help="show a job's state, cost and files",
-        )
-        status.add_argument("job")
-        status.add_argument(
-            "--wait",
-            action="store_true",
-            help="wait for the job to end and fetch its files",
-        )
-        status.add_argument(
-            "--output",
-            default=JobCommands.RESULTS_DIRECTORY,
-            help="the directory fetched files land in, under <output>/<job>",
-        )
-        status.add_argument(
-            "--json",
-            action="store_true",
-        )
-        status.set_defaults(func=JobCommands.status)
-
-        jobs = subparsers.add_parser(
-            name="jobs",
-            help="list the account's latest jobs",
-        )
-        jobs.add_argument(
-            "--limit",
-            type=int,
-            default=JobCommands.JOBS_LIMIT_DEFAULT,
-        )
-        jobs.set_defaults(func=JobCommands.jobs)
-
-        cancel = subparsers.add_parser(
-            name="cancel",
-            help="cancel a job that has not ended",
-        )
-        cancel.add_argument("job")
-        cancel.set_defaults(func=JobCommands.cancel)
-
-        fetch = subparsers.add_parser(
-            name="fetch",
-            help="download a finished job's files",
-        )
-        fetch.add_argument("job")
-        fetch.add_argument(
-            "--output",
-            default=JobCommands.RESULTS_DIRECTORY,
-            help="the directory files land in, under <output>/<job>",
-        )
-        fetch.set_defaults(func=JobCommands.fetch)
+        inspect.set_defaults(func=JobCommands.inspect)
 
         sass = subparsers.add_parser(
             name="sass",
-            help="browse the SASS listing an inspect job returned",
+            help="browse a kernel's SASS listing, cached or inspected on demand",
         )
         sass.add_argument(
             "listing",
-            help="the inspect.json of an inspect job",
+            help="a cubin, or an inspection.json",
+        )
+        sass.add_argument(
+            "--kernel",
+            default=None,
+            help="the kernel to list, when the first argument is a cubin",
         )
         sass.add_argument(
             "--kernels",
             action="store_true",
-            help="list the binary's kernels and the named one's parameters instead of the listing",
+            help="list the cubin's kernels and the inspected one's parameters instead",
         )
         sass.add_argument(
             "--line",
@@ -565,8 +486,22 @@ class CommandLine:
             default=None,
             help="keep instructions up to this index",
         )
-        sass.set_defaults(func=ListingCommand.run)
+        sass.set_defaults(func=JobCommands.sass)
 
+    @staticmethod
+    def build_parser() -> argparse.ArgumentParser:
+        """The parser of every ``xtrace`` command.
+
+        Returns:
+            the parser
+        """
+        parser = argparse.ArgumentParser(
+            prog="xtrace",
+            description="Trace CUDA kernels on MarsCompute GPUs and read the traces.",
+        )
+        subparsers = parser.add_subparsers()
+        CommandLine._add_platform_commands(subparsers)
+        CommandLine._add_binary_commands(subparsers)
         ShowCommand().register(subparsers)
         return parser
 
