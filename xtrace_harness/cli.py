@@ -6,6 +6,7 @@ from typing import Any
 from xtrace_harness.binary import DslCache, KernelBinary
 from xtrace_harness.error import HarnessError
 from xtrace_harness.listing import KernelListing
+from xtrace_harness.mcp import McpServer
 from xtrace_harness.viewer.cli.show import ShowCommand
 from xtrace_harness.workflow import QuotedJob, XtraceWorkflow
 
@@ -228,6 +229,14 @@ class JobCommands:
         ):
             print(f"saved     {path}")
 
+    @staticmethod
+    def mcp(args: argparse.Namespace) -> None:
+        """Serve the operations as MCP tools over stdio."""
+        McpServer(XtraceWorkflow.from_environment()).serve(
+            input_stream=sys.stdin,
+            output_stream=sys.stdout,
+        )
+
 
 class BinaryCommands:
     """``xtrace cubin``: find a kernel's cubin in compiler caches, and read what a cubin holds."""
@@ -384,6 +393,12 @@ class CommandLine:
             help="the directory the files land in; xtrace-results/<job> by default",
         )
         fetch.set_defaults(func=JobCommands.fetch)
+
+        mcp = subparsers.add_parser(
+            name="mcp",
+            help="serve these operations as MCP tools over stdio",
+        )
+        mcp.set_defaults(func=JobCommands.mcp)
 
     @staticmethod
     def _add_binary_commands(subparsers: argparse._SubParsersAction) -> None:

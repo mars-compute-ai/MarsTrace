@@ -45,3 +45,6 @@ class PlatformError(HarnessError):
             "top_up_url": self.top_up_url,
         }
 
+
+class ToolArgumentError(HarnessError):
+    """An MCP tool was called with arguments its input schema does not admit."""

@@ -1,10 +1,13 @@
 {
   "mcpServers": {
-    "marscompute": {
-      "type": "http",
-      "url": "https://api.marscompute.ai/mcp",
-      "headers": {
-        "Authorization": "Bearer ${MARSCOMPUTE_API_KEY}"
+    "xtrace": {
+      "type": "stdio",
+      "command": "xtrace",
+      "args": [
+        "mcp"
+      ],
+      "env": {
+        "MARSCOMPUTE_API_KEY": "${MARSCOMPUTE_API_KEY}"
       }
     }
   }
