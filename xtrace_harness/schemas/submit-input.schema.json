@@ -316,6 +316,62 @@
             "timing"
           ],
           "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": { "type": "string", "const": "agent_workspace" },
+            "cubin_artifact_ids": {
+              "minItems": 1,
+              "maxItems": 8,
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200,
+                "pattern": "^[A-Za-z0-9_.:-]+$"
+              }
+            },
+            "source_archive_artifact_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200,
+              "pattern": "^[A-Za-z0-9_.:-]+$"
+            },
+            "launch_manifest_artifact_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200,
+              "pattern": "^[A-Za-z0-9_.:-]+$"
+            },
+            "tensor_artifact_ids": {
+              "maxItems": 8,
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200,
+                "pattern": "^[A-Za-z0-9_.:-]+$"
+              }
+            },
+            "file_artifact_ids": {
+              "maxItems": 8,
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200,
+                "pattern": "^[A-Za-z0-9_.:-]+$"
+              }
+            }
+          },
+          "required": [
+            "kind",
+            "cubin_artifact_ids",
+            "tensor_artifact_ids",
+            "file_artifact_ids"
+          ],
+          "additionalProperties": false
         }
       ]
     },
@@ -529,6 +585,43 @@
             "max_calls",
             "max_input_tokens_total",
             "max_output_tokens_total"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "mode": { "type": "string", "const": "agent" },
+            "model": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200,
+              "pattern": "^[A-Za-z0-9_.:-]+$"
+            },
+            "max_turns": { "type": "integer", "minimum": 0, "maximum": 500 },
+            "max_input_tokens_total": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 50000000
+            },
+            "max_output_tokens_total": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 1000000
+            },
+            "max_wall_seconds": {
+              "type": "integer",
+              "minimum": 60,
+              "maximum": 2580
+            }
+          },
+          "required": [
+            "mode",
+            "model",
+            "max_turns",
+            "max_input_tokens_total",
+            "max_output_tokens_total",
+            "max_wall_seconds"
           ],
           "additionalProperties": false
         }

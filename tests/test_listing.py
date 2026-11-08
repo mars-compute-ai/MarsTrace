@@ -1,66 +1,94 @@
+import hashlib
 import json
 import os
 import tempfile
 import unittest
-from fake_control_plane import FIXTURE_DIRECTORY
+from fake_control_plane import matmul_documents
+from schema_check import SchemaCheck
+from xtrace_harness.client import MarsComputeClient
 from xtrace_harness.error import HarnessError
 from xtrace_harness.listing import InspectionCache, KernelListing
-
-FIXTURE = os.path.join(FIXTURE_DIRECTORY, "matmul_inspection.json")
 
 
 class KernelListingTest(unittest.TestCase):
     def setUp(self) -> None:
-        self.listing = KernelListing.load(FIXTURE)
+        self.result, self.instructions, _ = matmul_documents()
+        self.listing = KernelListing.from_documents(self.result, self.instructions, "test")
+
+    def test_the_fixture_follows_the_schema(self) -> None:
+        SchemaCheck.validate("inspection-result", self.result)
 
     def test_kernels_show_the_parameter_layout(self) -> None:
         text = self.listing.render_kernels()
-        self.assertIn("architecture sm_90a", text)
-        self.assertIn("* square_matrix_mul", text)
+        self.assertIn("inspection 0c9d2a4e-1b3f-4e5a-8c6d-7e8f9a0b1c2d", text)
+        self.assertIn("* square_matrix_mul  (sm_90a, 216 instructions)", text)
         self.assertIn("param 3   offset 24    size 4", text)
+        self.assertNotIn("registers", text)
 
-    def test_listing_marks_eligible_instructions(self) -> None:
-        list_line = self.listing.render_listing(source="matmul.cu:8").splitlines()
-        self.assertEqual(len(list_line), 3)
-        self.assertRegex(list_line[0], r"^\s+5\s{3}B1")
-        self.assertRegex(list_line[1], r"^\s+6 \+ B1")
-        self.assertIn("LDG.E", self.listing.render_listing(opcode_pattern="LDG"))
-        self.assertEqual(len(self.listing.render_listing(first_index=10, last_index=11).splitlines()), 2)
+    def test_listing_shows_index_address_and_predicate(self) -> None:
+        list_line = self.listing.render_listing(first_index=12, last_index=13).splitlines()
+        self.assertEqual(list_line, ["    12  0x0000c0  @P0 EXIT", "    13  0x0000d0  ISETP.GE.AND P0, PT, R0, 0x1, PT"])
+        self.assertIn("STG.E desc[UR6][R2.64], R17", self.listing.render_listing(opcode_pattern="STG"))
+        self.assertEqual(len(self.listing.render_listing(opcode_pattern="^@!P0 BRA").splitlines()), 5)
 
-    def test_line_resolves_to_its_first_eligible_instruction(self) -> None:
-        self.assertEqual(self.listing.resolve_line("matmul.cu:8"), 6)
-        self.assertEqual(self.listing.resolve_line("cu:9"), 7)
+    def test_index_must_be_listed(self) -> None:
+        self.listing.check_index(199)
+        with self.assertRaisesRegex(HarnessError, "site index 216 is not an instruction of square_matrix_mul"):
+            self.listing.check_index(216)
 
-    def test_kernel_list_only(self) -> None:
-        with open(FIXTURE) as fixture_file:
-            map_inspection = json.load(fixture_file)
-        map_inspection["kernel"] = None
-        listing = KernelListing.from_json(map_inspection=map_inspection, where="test")
+    def test_unknown_layout_is_kept_unknown(self) -> None:
+        self.result["kernel_catalog"]["kernels"][0]["parameter_layout"] = {"state": "unknown", "reason": "parameter_metadata_absent"}
+        listing = KernelListing.from_documents(self.result, None, "test")
+        self.assertIsNone(listing.map_kernel["square_matrix_mul"].list_parameter)
+        self.assertIn("parameter layout unknown: parameter_metadata_absent", listing.render_kernels())
+
+    def test_kernel_catalog_only(self) -> None:
+        listing = KernelListing.from_documents(self.result, None, "test")
         self.assertIn("  square_matrix_mul", listing.render_kernels())
         with self.assertRaisesRegex(HarnessError, "--kernel"):
             listing.render_listing()
 
-    def test_other_schemas_are_refused(self) -> None:
-        with self.assertRaisesRegex(HarnessError, "is not a marscompute.xtrace.inspection.v1 result"):
-            KernelListing.from_json(map_inspection={"schema": "xtrace.inspect/1"}, where="old.json")
+    def test_other_documents_are_refused(self) -> None:
+        with self.assertRaisesRegex(HarnessError, "is not a marscompute.xtrace.inspection-result.v1 document"):
+            KernelListing.from_documents({"schema_version": "marscompute.xtrace.inspection.v1"}, None, "old.json")
         with self.assertRaisesRegex(HarnessError, "malformed"):
-            KernelListing.from_json(
-                map_inspection={"schema_version": KernelListing.SCHEMA, "kernels": []},
-                where="partial.json",
-            )
+            KernelListing.from_documents({"schema_version": KernelListing.RESULT_SCHEMA}, None, "partial.json")
+        with self.assertRaisesRegex(HarnessError, "names other_kernel, which the result lacks"):
+            KernelListing.from_documents(self.result, dict(self.instructions, symbol="other_kernel"), "test")
 
 
 class InspectionCacheTest(unittest.TestCase):
     def test_key_is_digest_and_kernel(self) -> None:
+        result, _, listing = matmul_documents()
         with tempfile.TemporaryDirectory() as directory:
             binary = os.path.join(directory, "k.cubin")
-            with open(FIXTURE, "rb") as fixture_file:
-                data = fixture_file.read()
-            path = InspectionCache.store(binary_path=binary, sha256="a" * 64, kernel_symbol="k", data=data)
+            path = InspectionCache.store(
+                binary_path=binary,
+                sha256="a" * 64,
+                kernel_symbol="k",
+                result_data=json.dumps(result).encode(),
+                instructions_data=listing,
+            )
             self.assertTrue(path.startswith(os.path.join(directory, ".xtrace-cache", "a" * 64)))
-            self.assertIsNotNone(InspectionCache.load(binary_path=binary, sha256="a" * 64, kernel_symbol="k"))
+            self.assertTrue(path.endswith(".inspection-result.json"))
+            self.assertTrue(os.path.isfile(InspectionCache.instructions_path_of(path)))
+            self.assertEqual(InspectionCache.load(binary_path=binary, sha256="a" * 64, kernel_symbol="k").kernel.symbol, "square_matrix_mul")
             self.assertIsNone(InspectionCache.load(binary_path=binary, sha256="b" * 64, kernel_symbol="k"))
             self.assertIsNone(InspectionCache.load(binary_path=binary, sha256="a" * 64, kernel_symbol=None))
+
+
+class CanonicalDigestTest(unittest.TestCase):
+    def test_keys_sort_and_text_stays_unescaped(self) -> None:
+        value = {"b": [1, True, None], "a": {"é": "x\"y"}, "n": 2.0}
+        self.assertEqual(MarsComputeClient.canonical_json(value), '{"a":{"é":"x\\"y"},"b":[1,true,null],"n":2}')
+        self.assertEqual(
+            MarsComputeClient.canonical_digest(value),
+            hashlib.sha256('{"a":{"é":"x\\"y"},"b":[1,true,null],"n":2}'.encode()).hexdigest(),
+        )
+
+    def test_fractions_are_refused(self) -> None:
+        with self.assertRaisesRegex(HarnessError, "no canonical form"):
+            MarsComputeClient.canonical_json({"atol": 0.5})
 
 
 if __name__ == "__main__":

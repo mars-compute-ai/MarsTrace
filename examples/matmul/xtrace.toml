@@ -46,13 +46,13 @@ max_gpu_seconds = 120
 clock = "gpu"
 per_thread_records = 512
 
-# the loop's entry and the store of the result, by line of matmul.cu; a site on a
-# source line is the first instruction of that line that takes a probe
+# the loop's bound check (line 8 of matmul.cu, ISETP.GE.AND at 0x00d0) and the store of
+# the result (line 11, STG.E at 0x0c70), by their index in 'xtrace sass'
 [[trace.sites]]
-line = "matmul.cu:8"
+index = 13
 
 [[trace.sites]]
-line = "matmul.cu:11"
+index = 199
 
 [[trace.regions]]
 enter = 0

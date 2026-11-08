@@ -2,6 +2,7 @@ import decimal
 import json
 import math
 import os
+import random
 import re
 import tomllib
 from dataclasses import dataclass, field
@@ -9,20 +10,15 @@ from typing import Any
 from xtrace_harness.binary import KernelBinary
 from xtrace_harness.error import ManifestError
 from xtrace_harness.listing import KernelListing
-from xtrace_harness.tensors import TensorFile
+from xtrace_harness.tensors import TensorEntry, TensorFile
 
 
 @dataclass
 class TraceSite:
     """One instruction of the traced kernel that writes a timestamp, and optionally a value.
 
-    A site names its instruction either by its index in the kernel's SASS listing, or by a
-    source line, which an inspection of the cubin resolves to the first instruction of that
-    line that takes a probe.
-
     Args:
         index: the instruction index, as ``xtrace sass`` lists it
-        line: ``<file>:<line>`` of the kernel source, when the cubin carries line info
         value_register: the register recorded beside the timestamp, ``R<n>`` or ``UR<n>``
         value_width_bits: 32, or 64 to record the register pair starting at an even ``R<n>``
         value_is_smid: record the SM the block runs on instead of a register
@@ -41,10 +37,8 @@ class TraceSite:
         VALUE_WIDTH_DEFAULT,
         VALUE_WIDTH_WIDE,
     )
-    LINE_PATTERN = re.compile(r"^.+:\d+$")
     SET_KEY = {
         "index",
-        "line",
         "value_register",
         "value_width_bits",
         "value_is_smid",
@@ -52,7 +46,6 @@ class TraceSite:
     }
 
     index: int | None = None
-    line: str | None = None
     value_register: str | None = None
     value_width_bits: int | None = None
     value_is_smid: bool = False
@@ -78,7 +71,6 @@ class TraceSite:
         )
         return cls(
             index=map_site.get("index"),
-            line=map_site.get("line"),
             value_register=map_site.get("value_register"),
             value_width_bits=map_site.get("value_width_bits"),
             value_is_smid=map_site.get(
@@ -92,34 +84,20 @@ class TraceSite:
         )
 
     def validate(self, site_id: int) -> None:
-        """Check that the site names exactly one instruction and a value it can record.
+        """Check that the site names an instruction and a value it can record.
 
         Args:
             site_id: the site's position in the manifest, for the message
 
         Raises:
-            ManifestError: the site is ambiguous or names an unknown register or width
+            ManifestError: the site lacks its index or names an unknown register or width
         """
         where = f"site {site_id}"
-        if (self.index is None) == (self.line is None):
-            raise ManifestError(f"{where}: give exactly one of 'index' and 'line'")
-        if self.index is not None:
-            JobManifest.check_integer(
-                value=self.index,
-                where=f"{where} index",
-                low=0,
-            )
-        if (
-            self.line is not None
-            and (
-                not isinstance(
-                    self.line,  # obj
-                    str,        # class_or_tuple
-                )
-                or not TraceSite.LINE_PATTERN.match(self.line)
-            )
-        ):
-            raise ManifestError(f"{where}: 'line' must read '<file>:<line>'")
+        JobManifest.check_integer(
+            value=self.index,
+            where=f"{where} index",
+            low=0,
+        )
         if (
             not isinstance(
                 self.value_is_smid,  # obj
@@ -183,23 +161,18 @@ class TraceSite:
             return "value"
         return "timing"
 
-    def to_api(
-        self,
-        site_id: int,
-        instruction_index: int,
-    ) -> dict[str, Any]:
+    def to_api(self, site_id: int) -> dict[str, Any]:
         """The site as the trace plan carries it.
 
         Args:
             site_id: the site's position in the manifest
-            instruction_index: the instruction it probes, resolved from a line when needed
 
         Returns:
             the site
         """
         map_site: dict[str, Any] = {
             "site_id": f"s{site_id}",
-            "instruction_index": instruction_index,
+            "instruction_index": self.index,
             "probe": self.probe(),
         }
         if self.value_register is not None:
@@ -545,31 +518,23 @@ class TraceOptions:
             return "warp"
         return "thread"
 
-    def needs_listing(self) -> bool:
-        """Whether a site names a source line, which only an inspection resolves.
-
-        Returns:
-            whether one does
-        """
-        return any(site.line is not None for site in self.list_site)
-
     def to_plan(
         self,
         listing: KernelListing | None,
         launch: "LaunchSpec",
     ) -> dict[str, Any]:
-        """The trace plan the API takes, with every site resolved to an instruction index.
+        """The trace plan the API takes.
 
         Args:
-            listing: the inspected kernel, needed when a site names a line
+            listing: the inspected kernel, whose listing every site must name when it is cached
             launch: the launch, whose rows size the record budget
 
         Returns:
             the plan
 
         Raises:
-            ManifestError: a line site has no listing, or two sites probe one instruction
-            HarnessError: the listing refuses a site
+            ManifestError: two sites probe one instruction
+            HarnessError: the listing lacks a site's instruction
         """
         granularity = self.granularity()
         rows = launch.rows(granularity)
@@ -582,26 +547,16 @@ class TraceOptions:
         list_api_site = []
         map_site_of_index: dict[int, int] = {}
         for site_id, site in enumerate(self.list_site):
-            if site.line is not None:
-                if listing is None:
-                    raise ManifestError(f"site {site_id} names line '{site.line}', which needs an inspection")
-                instruction_index = listing.resolve_line(site.line)
-            else:
-                instruction_index = int(site.index or 0)
-                if listing is not None:
-                    listing.check_index(instruction_index)
+            instruction_index = int(site.index or 0)
+            if listing is not None:
+                listing.check_index(instruction_index)
             if instruction_index in map_site_of_index:
                 raise ManifestError(
                     f"sites {map_site_of_index[instruction_index]} and {site_id} both probe "
                     f"instruction {instruction_index}"
                 )
             map_site_of_index[instruction_index] = site_id
-            list_api_site.append(
-                site.to_api(
-                    site_id=site_id,
-                    instruction_index=instruction_index,
-                )
-            )
+            list_api_site.append(site.to_api(site_id))
         map_plan: dict[str, Any] = {
             "tier": "sass",
             "clock": self.clock,
@@ -862,6 +817,9 @@ class KernelSpec:
 class BufferSpec:
     """A device allocation the platform makes for the launch, and what it holds before it.
 
+    A ``ones`` or ``random`` buffer starts from a tensor the harness prepares and uploads
+    with the job's tensors, so the launch restores the same bytes before every invocation.
+
     Args:
         name: the buffer's name, which launch arguments refer to
         dtype: the element type, e.g. ``f16`` or ``i32``
@@ -869,7 +827,7 @@ class BufferSpec:
         init: ``zeros``, ``ones``, ``random``, or ``tensor`` for the tensor of the same name
             in the job's tensors file
         seed: the seed of a ``random`` buffer
-        is_output: launch arguments that name it may write it
+        is_output: the kernel writes it; the launch declares it an output and checks it
     """
 
     # element type -> (manifest name, bytes per element)
@@ -890,13 +848,55 @@ class BufferSpec:
         "i64": ("int64", 8),
         "f64": ("float64", 8),
     }
+    # element type -> the dtype its output is declared and compared as, where it differs
+    MAP_OUTPUT_DTYPE = {
+        "f8e4m3": "uint8",
+        "f8e5m2": "uint8",
+    }
+    # element type -> the bits of one element of value one
+    MAP_ONE_BITS = {
+        "bool": 0x01,
+        "u8": 0x01,
+        "i8": 0x01,
+        "f8e4m3": 0x38,
+        "f8e5m2": 0x3C,
+        "u16": 0x0001,
+        "i16": 0x0001,
+        "f16": 0x3C00,
+        "bf16": 0x3F80,
+        "u32": 0x00000001,
+        "i32": 0x00000001,
+        "f32": 0x3F800000,
+        "u64": 0x0000000000000001,
+        "i64": 0x0000000000000001,
+        "f64": 0x3FF0000000000000,
+    }
+    # element type -> (byte of the element, AND mask, OR mask) applied to random bytes, which
+    # keeps the sign and mantissa and sets the exponent of a magnitude in [0.5, 1); integer
+    # types keep every random bit
+    MAP_RANDOM_BYTE_MASK = {
+        "bool": ((0, 0x01, 0x00),),
+        "f8e4m3": ((0, 0x87, 0x30),),
+        "f8e5m2": ((0, 0x83, 0x38),),
+        "f16": ((1, 0x83, 0x38),),
+        "bf16": ((1, 0x80, 0x3F), (0, 0x7F, 0x00)),
+        "f32": ((3, 0x80, 0x3F), (2, 0x7F, 0x00)),
+        "f64": ((7, 0x80, 0x3F), (6, 0x0F, 0xE0)),
+    }
+    RANDOM_ALGORITHM = "mt19937-bytes-unit-magnitude-v1"
+    BYTE_VALUES = 256
     LIST_INIT = (
         "zeros",
         "ones",
         "random",
         "tensor",
     )
-    NAME_PATTERN = re.compile(r"^[A-Za-z_]\w{0,199}$")
+    SET_PREPARED_INIT = {
+        "ones",
+        "random",
+    }
+    NAME_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,127}$")
+    RESERVED_PREFIX = "_xtrace"
     RANK_MAX = 8
     SEED_MAX = 2**32 - 1
 
@@ -982,8 +982,14 @@ class BufferSpec:
             ManifestError: the buffer is malformed or does not match its tensor
         """
         where = f"buffer '{self.name}'"
-        if not BufferSpec.NAME_PATTERN.match(str(self.name)):
-            raise ManifestError(f"{where}: the name must be an identifier")
+        if (
+            not BufferSpec.NAME_PATTERN.match(str(self.name))
+            or str(self.name).startswith(BufferSpec.RESERVED_PREFIX)
+        ):
+            raise ManifestError(
+                f"{where}: the name must be an identifier of 1 to 128 letters, digits and '_', "
+                f"not starting with '{BufferSpec.RESERVED_PREFIX}'"
+            )
         if self.dtype not in BufferSpec.MAP_DTYPE:
             raise ManifestError(f"{where}: dtype must be one of {', '.join(BufferSpec.MAP_DTYPE)}")
         if (
@@ -1043,23 +1049,96 @@ class BufferSpec:
                 f"'{self.name}' of {tensor_file.path} is {tensor.dtype}{tensor.list_shape}"
             )
 
-    def to_manifest(self) -> dict[str, Any]:
-        """The buffer as the launch manifest carries it.
+    def is_prepared(self) -> bool:
+        """Whether the harness prepares the buffer's initial contents as a tensor.
 
         Returns:
-            the id, element type, shape and initial contents
+            whether it starts as ``ones`` or ``random``
         """
-        map_buffer: dict[str, Any] = {
+        return self.init in BufferSpec.SET_PREPARED_INIT
+
+    def tensor_entry(self) -> TensorEntry:
+        """The tensor the buffer starts from, named after the buffer.
+
+        Returns:
+            the entry
+        """
+        return TensorEntry(
+            name=self.name,
+            dtype=self.dtype,
+            list_shape=list(self.list_shape),
+            nbytes=self.nbytes(),
+        )
+
+    def prepared_bytes(self) -> bytes:
+        """The initial contents of a ``ones`` or ``random`` buffer.
+
+        A random buffer holds the bytes of a Mersenne Twister seeded with ``seed``; a
+        floating-point one has each element's exponent set to a magnitude in [0.5, 1).
+
+        Returns:
+            the bytes, little-endian
+        """
+        width = BufferSpec.MAP_DTYPE[self.dtype][1]
+        count = TensorFile.element_count(self.list_shape)
+        if self.init == "ones":
+            return BufferSpec.MAP_ONE_BITS[self.dtype].to_bytes(
+                length=width,
+                byteorder="little",
+            ) * count
+        data = bytearray(random.Random(self.seed).randbytes(width * count))
+        for position, and_mask, or_mask in BufferSpec.MAP_RANDOM_BYTE_MASK.get(self.dtype, ()):
+            table = bytes((value & and_mask) | or_mask for value in range(BufferSpec.BYTE_VALUES))
+            data[position::width] = data[position::width].translate(table)
+        return bytes(data)
+
+    def to_allocation(self) -> dict[str, Any]:
+        """The buffer's storage as the launch manifest carries it.
+
+        Returns:
+            the allocation: its id, size and initializer
+        """
+        map_init: dict[str, Any] = {"kind": "zeros"}
+        if self.init != "zeros":
+            map_init = {
+                "kind": "tensor",
+                "tensor_key": self.name,
+            }
+        return {
             "id": self.name,
-            "dtype": BufferSpec.MAP_DTYPE[self.dtype][0],
-            "shape": list(self.list_shape),
-            "init": self.init,
+            "size_bytes": self.nbytes(),
+            "init": map_init,
         }
-        if self.init == "random":
-            map_buffer["seed"] = self.seed
-        if self.init == "tensor":
-            map_buffer["tensor_key"] = self.name
-        return map_buffer
+
+    def to_view(self) -> dict[str, Any]:
+        """The buffer as the launch manifest's view of its whole allocation.
+
+        Returns:
+            the view: its name, allocation, extent and access
+        """
+        return {
+            "name": self.name,
+            "allocation_id": self.name,
+            "offset_bytes": 0,
+            "size_bytes": self.nbytes(),
+            "access": "read_write" if self.is_output else "read",
+        }
+
+    def to_output(self) -> dict[str, Any]:
+        """The buffer as an output of the launch manifest.
+
+        Returns:
+            the output: its name, view, element type and shape
+        """
+        return {
+            "name": self.name,
+            "buffer": self.name,
+            "dtype": BufferSpec.MAP_OUTPUT_DTYPE.get(
+                self.dtype,
+                BufferSpec.MAP_DTYPE[self.dtype][0],
+            ),
+            "shape": list(self.list_shape),
+        }
 
 
 @dataclass
@@ -1086,8 +1165,8 @@ class PointerRelocation:
         """
         return {
             "offset": self.offset,
-            "buffer_id": self.buffer,
-            "byte_offset": self.offset_bytes,
+            "buffer": self.buffer,
+            "offset_bytes": self.offset_bytes,
         }
 
 
@@ -1121,8 +1200,7 @@ class LaunchArgument:
         "f32": ("float32", None, None, 4),
         "f64": ("float64", None, None, 8),
     }
-    # integers beyond this magnitude travel as decimal strings, which JSON readers keep exact
-    EXACT_INTEGER_MAX = 2**53 - 1
+    FLOAT32_MAX = 3.4028234663852886e38
     SET_TENSOR_MAP_KEY = {
         "data_type",
         "global_dims",
@@ -1134,21 +1212,21 @@ class LaunchArgument:
         "l2_promotion",
         "oob_fill",
     }
-    # the manifest names of the tensor map element types
-    MAP_TENSOR_MAP_DATA_TYPE = {
-        "u8": "uint8",
-        "u16": "uint16",
-        "u32": "uint32",
-        "i32": "int32",
-        "u64": "uint64",
-        "i64": "int64",
-        "f16": "float16",
-        "f32": "float32",
-        "f64": "float64",
-        "bf16": "bfloat16",
-        "f32_ftz": "float32_ftz",
-        "tf32": "tfloat32",
-        "tf32_ftz": "tfloat32_ftz",
+    # tensor map element type -> bytes per element
+    MAP_TENSOR_MAP_WIDTH = {
+        "u8": 1,
+        "u16": 2,
+        "u32": 4,
+        "i32": 4,
+        "u64": 8,
+        "i64": 8,
+        "f16": 2,
+        "f32": 4,
+        "f64": 8,
+        "bf16": 2,
+        "f32_ftz": 4,
+        "tf32": 4,
+        "tf32_ftz": 4,
     }
     # the choices of each enumerated tensor map field
     MAP_TENSOR_MAP_CHOICE = {
@@ -1175,13 +1253,15 @@ class LaunchArgument:
         ),
     }
     TENSOR_MAP_RANK_MAX = 5
+    GLOBAL_EXTENT_MAX = 2**32
+    GLOBAL_STRIDE_MAX = 2**40 - 1
     BOX_EXTENT_MAX = 256
     ELEMENT_STRIDE_MAX = 8
     TENSOR_MAP_BYTES = 128
     # alignment of a buffer offset and of a tensor map's strides
     ADDRESS_ALIGNMENT_BYTES = 16
-    # the largest by-value argument a kernel takes
-    BYTES_MAX = 32 * 1024
+    # the largest by-value argument the launch manifest carries
+    BYTES_MAX = 4096
 
     kind: str
     buffer: str | None = None
@@ -1303,7 +1383,10 @@ class LaunchArgument:
         if self.kind == "scalar":
             self._validate_scalar(where)
         if self.kind == "tensor_map":
-            self._validate_tensor_map(where)
+            self._validate_tensor_map(
+                where=where,
+                buffer_bytes=map_buffer[str(self.buffer)].nbytes(),
+            )
         if self.kind == "bytes":
             self._validate_bytes(
                 where=where,
@@ -1331,6 +1414,11 @@ class LaunchArgument:
                 or not math.isfinite(self.value)
             ):
                 raise ManifestError(f"{where}: value must be a finite number")
+            if (
+                self.dtype == "f32"
+                and abs(self.value) > LaunchArgument.FLOAT32_MAX
+            ):
+                raise ManifestError(f"{where}: value {self.value} overflows f32")
             return
         if (
             isinstance(
@@ -1345,8 +1433,12 @@ class LaunchArgument:
         ):
             raise ManifestError(f"{where}: value must be an integer that fits {self.dtype}")
 
-    def _validate_tensor_map(self, where: str) -> None:
-        """Check a TMA descriptor's enumerations, extents and strides."""
+    def _validate_tensor_map(
+        self,
+        where: str,
+        buffer_bytes: int,
+    ) -> None:
+        """Check a TMA descriptor's enumerations, extents and strides, and that it fits its buffer."""
         for key in (
             "data_type",
             "global_dims",
@@ -1355,10 +1447,10 @@ class LaunchArgument:
         ):
             if key not in self.map_tensor_map:
                 raise ManifestError(f"{where}: a tensor_map needs '{key}'")
-        if self.map_tensor_map["data_type"] not in LaunchArgument.MAP_TENSOR_MAP_DATA_TYPE:
+        if self.map_tensor_map["data_type"] not in LaunchArgument.MAP_TENSOR_MAP_WIDTH:
             raise ManifestError(
                 f"{where}: data_type must be one of "
-                f"{', '.join(LaunchArgument.MAP_TENSOR_MAP_DATA_TYPE)}"
+                f"{', '.join(LaunchArgument.MAP_TENSOR_MAP_WIDTH)}"
             )
         for key, list_choice in LaunchArgument.MAP_TENSOR_MAP_CHOICE.items():
             if self.map_tensor_map.get(
@@ -1388,12 +1480,14 @@ class LaunchArgument:
                 value=extent,
                 where=f"{where} global_dims",
                 low=1,
+                high=LaunchArgument.GLOBAL_EXTENT_MAX,
             )
         for stride in list_stride:
             JobManifest.check_integer(
                 value=stride,
                 where=f"{where} global_strides_bytes",
                 low=LaunchArgument.ADDRESS_ALIGNMENT_BYTES,
+                high=LaunchArgument.GLOBAL_STRIDE_MAX,
             )
             if stride % LaunchArgument.ADDRESS_ALIGNMENT_BYTES != 0:
                 raise ManifestError(
@@ -1413,6 +1507,19 @@ class LaunchArgument:
                 where=f"{where} element_strides",
                 low=1,
                 high=LaunchArgument.ELEMENT_STRIDE_MAX,
+            )
+        width = LaunchArgument.MAP_TENSOR_MAP_WIDTH[self.map_tensor_map["data_type"]]
+        extent_bytes = width + sum(
+            (extent - 1) * stride
+            for extent, stride in zip(
+                self.map_tensor_map["global_dims"],
+                [width, *list_stride],
+            )
+        )
+        if extent_bytes > buffer_bytes - self.offset_bytes:
+            raise ManifestError(
+                f"{where}: the tensor map spans {extent_bytes} bytes, but buffer '{self.buffer}' "
+                f"holds {buffer_bytes - self.offset_bytes} from offset_bytes"
             )
 
     def _validate_bytes(
@@ -1444,6 +1551,11 @@ class LaunchArgument:
                 )
             if relocation.offset in set_offset:
                 raise ManifestError(f"{where}: two relocations write offset {relocation.offset}")
+            if any(data[relocation.offset:relocation.offset + PointerRelocation.POINTER_BYTES]):
+                raise ManifestError(
+                    f"{where}: the {PointerRelocation.POINTER_BYTES} bytes at relocation offset "
+                    f"{relocation.offset} must be zero; the platform writes the address there"
+                )
             set_offset.add(relocation.offset)
             if relocation.buffer not in map_buffer:
                 raise ManifestError(
@@ -1484,16 +1596,11 @@ class LaunchArgument:
             or any(relocation.buffer == buffer_name for relocation in self.list_relocation)
         )
 
-    def to_manifest(
-        self,
-        index: int,
-        map_buffer: dict[str, BufferSpec],
-    ) -> dict[str, Any]:
+    def to_manifest(self, index: int) -> dict[str, Any]:
         """The argument as the launch manifest carries it.
 
         Args:
             index: the argument's position in the kernel's signature
-            map_buffer: the job's buffers by name, whose output flag sets the access
 
         Returns:
             the argument
@@ -1503,29 +1610,18 @@ class LaunchArgument:
             "kind": self.kind,
         }
         if self.kind == "buffer":
-            map_argument["buffer_id"] = self.buffer
-            map_argument["byte_offset"] = self.offset_bytes
-            map_argument["access"] = "read_write" if map_buffer[str(self.buffer)].is_output else "read"
+            map_argument["buffer"] = self.buffer
+            map_argument["offset_bytes"] = self.offset_bytes
         if self.kind == "scalar":
-            abi_type = LaunchArgument.MAP_SCALAR[str(self.dtype)][0]
-            value: Any = self.value
-            if (
-                isinstance(
-                    value,  # obj
-                    int,    # class_or_tuple
-                )
-                and abs(value) > LaunchArgument.EXACT_INTEGER_MAX
-            ):
-                value = str(value)
-            map_argument["abi_type"] = abi_type
-            map_argument["value"] = value
+            map_argument["abi_type"] = LaunchArgument.MAP_SCALAR[str(self.dtype)][0]
+            map_argument["value"] = str(self.value)
         if self.kind == "tensor_map":
             rank = len(self.map_tensor_map["global_dims"])
             map_argument.update(
                 {
-                    "buffer_id": self.buffer,
-                    "byte_offset": self.offset_bytes,
-                    "data_type": LaunchArgument.MAP_TENSOR_MAP_DATA_TYPE[self.map_tensor_map["data_type"]],
+                    "buffer": self.buffer,
+                    "offset_bytes": self.offset_bytes,
+                    "data_type": self.map_tensor_map["data_type"],
                     "global_dims": list(self.map_tensor_map["global_dims"]),
                     "global_strides_bytes": list(self.map_tensor_map["global_strides_bytes"]),
                     "box_dims": list(self.map_tensor_map["box_dims"]),
@@ -1569,6 +1665,9 @@ class LaunchSpec:
     CLUSTER_BLOCKS_MAX = 16
     SHARED_BYTES_MAX = 233472
     ARGUMENT_COUNT_MAX = 128
+    # the most bytes the arguments occupy together, and the most relocations they carry
+    ARGUMENT_BYTES_MAX = 4096
+    RELOCATION_COUNT_MAX = 128
     THREADS_PER_WARP = 32
 
     list_grid: list[int]
@@ -1716,6 +1815,14 @@ class LaunchSpec:
                 argument_id=argument_id,
                 map_buffer=map_buffer,
             )
+        argument_bytes = sum(argument.size_bytes() for argument in self.list_argument)
+        if argument_bytes > LaunchSpec.ARGUMENT_BYTES_MAX:
+            raise ManifestError(
+                f"[launch] args occupy {argument_bytes} bytes; a launch passes at most "
+                f"{LaunchSpec.ARGUMENT_BYTES_MAX}"
+            )
+        if sum(len(argument.list_relocation) for argument in self.list_argument) > LaunchSpec.RELOCATION_COUNT_MAX:
+            raise ManifestError(f"[launch] args carry at most {LaunchSpec.RELOCATION_COUNT_MAX} relocations")
 
     def rows(self, granularity: str) -> int:
         """The rows a trace records into: every thread, or every warp, of the launch.
@@ -1753,18 +1860,14 @@ class LaunchSpec:
         Returns:
             the target
         """
-        map_target: dict[str, Any] = {
+        return {
             "architecture": architecture,
             "kernel_symbol": kernel_symbol,
             "grid": list(self.list_grid),
             "block": list(self.list_block),
+            "cluster": None if self.list_cluster is None else list(self.list_cluster),
             "dynamic_shared_memory_bytes": self.shared_bytes,
-            "launch_kind": "ordinary",
         }
-        if self.list_cluster is not None:
-            map_target["cluster"] = list(self.list_cluster)
-            map_target["launch_kind"] = "cluster"
-        return map_target
 
 
 @dataclass
@@ -1840,10 +1943,11 @@ class ValidationSpec:
         """The validation as the launch manifest carries it.
 
         Returns:
-            the output key and the tolerances
+            the output, the reference tensor of the same name, and the tolerances
         """
         return {
             "output_key": self.output,
+            "reference_key": self.output,
             "atol": self.atol,
             "rtol": self.rtol,
         }
@@ -1851,17 +1955,33 @@ class ValidationSpec:
 
 @dataclass
 class JobArtifact:
-    """A file of the job directory that is uploaded as an artifact.
+    """A file the job uploads as an artifact: one of the job directory, or one the harness prepares.
 
     Args:
         kind: the artifact kind, e.g. ``cubin``
-        path: the file
+        path: the file, or for prepared bytes the path whose name the artifact carries
         content_type: the media type it is uploaded with
+        data: the prepared bytes, or None to upload the file
     """
 
     kind: str
     path: str
     content_type: str = "application/octet-stream"
+    data: bytes | None = None
+
+    def read(self) -> bytes:
+        """The bytes the artifact uploads.
+
+        Returns:
+            the prepared bytes, or the file's
+        """
+        if self.data is not None:
+            return self.data
+        with open(
+            file=self.path,
+            mode="rb",
+        ) as artifact_file:
+            return artifact_file.read()
 
 
 @dataclass
@@ -1870,7 +1990,20 @@ class JobManifest:
 
     FILE_NAME = "xtrace.toml"
     SUBMIT_SCHEMA = "marscompute.xtrace.submit.v1"
-    LAUNCH_SCHEMA = "marscompute.kernel-launch.v1"
+    LAUNCH_SCHEMA = "marscompute.kernel-launch"
+    # the architectures a launch manifest targets
+    LIST_LAUNCH_ARCHITECTURE = (
+        "sm_80",
+        "sm_86",
+        "sm_89",
+        "sm_90",
+        "sm_90a",
+        "sm_100",
+        "sm_100a",
+        "sm_103",
+        "sm_103a",
+    )
+    PREPARED_TENSORS_NAME = "tensors.safetensors"
     RESET_POLICY = "restore_pristine_before_every_invocation"
     PROMPT_CHARACTERS_MAX = 32000
     BUFFER_COUNT_MAX = 64
@@ -2141,6 +2274,11 @@ class JobManifest:
                 raise ManifestError(
                     f"[validation] output '{self.validation.output}' must be a buffer with output = true"
                 )
+            if buffer.dtype in BufferSpec.MAP_OUTPUT_DTYPE:
+                raise ManifestError(
+                    f"[validation] output '{buffer.name}' is {buffer.dtype}, which the launch compares "
+                    "as raw bytes only; validate an output of another type"
+                )
             buffer.check_tensor(
                 tensor_file=TensorFile.load(
                     JobManifest._check_path(
@@ -2155,11 +2293,52 @@ class JobManifest:
             self.trace.validate()
             self.launch.rows(self.trace.granularity())
 
+    def _tensors_artifact(self) -> JobArtifact | None:
+        """The tensors the buffers start from: the job's tensors file as it is, or a file the
+        harness writes when a buffer starts as ``ones`` or ``random``."""
+        list_prepared = [buffer for buffer in self.list_buffer if buffer.is_prepared()]
+        tensors_path = None if self.tensors is None else os.path.join(
+            self.directory,
+            self.tensors,
+        )
+        if not list_prepared:
+            if tensors_path is None:
+                return None
+            return JobArtifact(
+                kind="safetensors",
+                path=tensors_path,
+            )
+        tensor_file = None if tensors_path is None else TensorFile.load(tensors_path)
+        list_tensor = []
+        map_metadata = {}
+        for buffer in self.list_buffer:
+            if buffer.init == "tensor" and tensor_file is not None:
+                list_tensor.append((buffer.tensor_entry(), tensor_file.read_tensor(buffer.name)))
+            if buffer.is_prepared():
+                list_tensor.append((buffer.tensor_entry(), buffer.prepared_bytes()))
+                map_metadata[buffer.name] = (
+                    f"random seed={buffer.seed} {BufferSpec.RANDOM_ALGORITHM}"
+                    if buffer.init == "random"
+                    else buffer.init
+                )
+        return JobArtifact(
+            kind="safetensors",
+            path=tensors_path or os.path.join(
+                self.directory,
+                JobManifest.PREPARED_TENSORS_NAME,
+            ),
+            data=TensorFile.encode(
+                list_tensor=list_tensor,
+                map_metadata=map_metadata,
+            ),
+        )
+
     def list_artifact(self) -> list[JobArtifact]:
-        """The files of the job directory the job uploads, besides its launch manifest.
+        """The files the job uploads, besides its launch manifest.
 
         Returns:
-            the cubin, and the tensors and reference files when the job has them
+            the cubin, the tensors when a buffer starts from one, and the reference file when
+            the job has one
         """
         list_artifact = [
             JobArtifact(
@@ -2170,16 +2349,9 @@ class JobManifest:
                 ),
             )
         ]
-        if self.tensors is not None:
-            list_artifact.append(
-                JobArtifact(
-                    kind="safetensors",
-                    path=os.path.join(
-                        self.directory,
-                        self.tensors,
-                    ),
-                )
-            )
+        tensors_artifact = self._tensors_artifact()
+        if tensors_artifact is not None:
+            list_artifact.append(tensors_artifact)
         if self.reference is not None:
             list_artifact.append(
                 JobArtifact(
@@ -2192,17 +2364,6 @@ class JobManifest:
             )
         return list_artifact
 
-    def needs_listing(self) -> bool:
-        """Whether translating the job needs an inspection of its kernel.
-
-        Returns:
-            whether a site names a source line
-        """
-        return (
-            self.trace is not None
-            and self.trace.needs_listing()
-        )
-
     def check_parameters(self, listing: KernelListing) -> None:
         """Check the launch arguments against the parameter layout an inspection read.
 
@@ -2213,6 +2374,8 @@ class JobManifest:
             ManifestError: the count or a size of the arguments differs from the kernel's
         """
         kernel = listing.inspected_kernel()
+        if kernel.list_parameter is None:
+            return
         if len(kernel.list_parameter) != len(self.launch.list_argument):
             raise ManifestError(
                 f"{self.kernel.name} takes {len(kernel.list_parameter)} parameters, but [launch] "
@@ -2277,47 +2440,78 @@ class JobManifest:
             f"{', '.join(map_entry.get('environment_id', '?') for map_entry in list_entry) or 'none'}"
         )
 
-    def launch_manifest(self, architecture: str) -> dict[str, Any]:
-        """The launch manifest, ``marscompute.kernel-launch.v1``, uploaded as an artifact.
+    def launch_manifest(
+        self,
+        architecture: str,
+        listing: KernelListing | None,
+    ) -> dict[str, Any]:
+        """The launch manifest, ``marscompute.kernel-launch``, uploaded as an artifact.
 
         Args:
             architecture: the hardware's architecture
+            listing: the inspected kernel when it is cached, whose parameter layout the
+                manifest carries
 
         Returns:
             the manifest
+
+        Raises:
+            ManifestError: the architecture is not one a launch manifest targets
         """
-        map_buffer = {buffer.name: buffer for buffer in self.list_buffer}
+        if architecture not in JobManifest.LIST_LAUNCH_ARCHITECTURE:
+            raise ManifestError(
+                f"a launch manifest targets {', '.join(JobManifest.LIST_LAUNCH_ARCHITECTURE)}; "
+                f"{self.hardware} is {architecture}"
+            )
+        list_parameter = None
+        if listing is not None:
+            list_parameter = listing.inspected_kernel().list_parameter
         map_launch: dict[str, Any] = {
             "schema_version": JobManifest.LAUNCH_SCHEMA,
             "target": self.launch.to_target(
                 architecture=architecture,
                 kernel_symbol=self.kernel.name,
             ),
-            "arguments": [
-                argument.to_manifest(
-                    index=index,
-                    map_buffer=map_buffer,
-                )
-                for index, argument in enumerate(self.launch.list_argument)
+            "parameter_layout": None if list_parameter is None else [
+                {
+                    "index": parameter.index,
+                    "offset": parameter.offset_bytes,
+                    "size_bytes": parameter.size_bytes,
+                }
+                for parameter in list_parameter
             ],
-            "buffers": [buffer.to_manifest() for buffer in self.list_buffer],
+            "allocations": [buffer.to_allocation() for buffer in self.list_buffer],
+            "buffers": [buffer.to_view() for buffer in self.list_buffer],
+            "arguments": [
+                argument.to_manifest(index) for index, argument in enumerate(self.launch.list_argument)
+            ],
+            "outputs": [buffer.to_output() for buffer in self.list_buffer if buffer.is_output],
+            "runtime_profile": None,
             "reset": {"policy": JobManifest.RESET_POLICY},
         }
         if self.validation is not None:
             map_launch["validation"] = self.validation.to_manifest()
         return map_launch
 
-    def launch_manifest_bytes(self, architecture: str) -> bytes:
+    def launch_manifest_bytes(
+        self,
+        architecture: str,
+        listing: KernelListing | None,
+    ) -> bytes:
         """The launch manifest as the bytes of its artifact.
 
         Args:
             architecture: the hardware's architecture
+            listing: the inspected kernel when it is cached
 
         Returns:
             canonical JSON: sorted keys, no whitespace
         """
         return json.dumps(
-            self.launch_manifest(architecture),
+            self.launch_manifest(
+                architecture=architecture,
+                listing=listing,
+            ),
             sort_keys=True,
             separators=(",", ":"),
         ).encode("utf-8")
@@ -2326,14 +2520,14 @@ class JobManifest:
         """The job's analysis: an explicit trace plan, or the platform planner.
 
         Args:
-            listing: the inspected kernel, needed when a site names a line
+            listing: the inspected kernel when it is cached, whose listing every site must name
 
         Returns:
             the analysis
 
         Raises:
-            ManifestError: a site cannot be resolved
-            HarnessError: the listing refuses a site
+            ManifestError: two sites probe one instruction
+            HarnessError: the listing lacks a site's instruction
         """
         if self.planner is not None:
             return self.planner.to_analysis()
@@ -2359,7 +2553,7 @@ class JobManifest:
             map_capabilities: the platform's capabilities
             map_artifact_id: artifact kind to the id of the uploaded artifact, including
                 ``launch_manifest``
-            listing: the inspected kernel, needed when a site names a line
+            listing: the inspected kernel when it is cached, whose listing every site must name
 
         Returns:
             the estimate input, ``marscompute.xtrace.submit.v1``

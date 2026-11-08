@@ -1,0 +1,1736 @@
+{
+  "schema_version": "marscompute.xtrace.static-instructions.v1",
+  "symbol": "square_matrix_mul",
+  "index_space_id": "cuda12.8-sm90-physical-slot16-v1",
+  "state": "available",
+  "instructions": [
+    {
+      "function": "square_matrix_mul",
+      "function_index": 0,
+      "address": 0,
+      "opcode": "LDC",
+      "operands": "R1, c[0x0][0x28]",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 1,
+      "address": 16,
+      "opcode": "S2R",
+      "operands": "R5, SR_CTAID.Y",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 2,
+      "address": 32,
+      "opcode": "LDC",
+      "operands": "R0, c[0x0][0x228]",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 3,
+      "address": 48,
+      "opcode": "ULDC",
+      "operands": "UR4, c[0x0][0x4]",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 4,
+      "address": 64,
+      "opcode": "S2R",
+      "operands": "R2, SR_TID.Y",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 5,
+      "address": 80,
+      "opcode": "S2R",
+      "operands": "R3, SR_CTAID.X",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 6,
+      "address": 96,
+      "opcode": "S2R",
+      "operands": "R4, SR_TID.X",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 7,
+      "address": 112,
+      "opcode": "IMAD",
+      "operands": "R5, R5, UR4, R2",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 8,
+      "address": 128,
+      "opcode": "ULDC",
+      "operands": "UR4, c[0x0][0x0]",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 9,
+      "address": 144,
+      "opcode": "ISETP.GE.AND",
+      "operands": "P0, PT, R5, R0, PT",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 10,
+      "address": 160,
+      "opcode": "IMAD",
+      "operands": "R3, R3, UR4, R4",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 11,
+      "address": 176,
+      "opcode": "ISETP.GE.OR",
+      "operands": "P0, PT, R3, R0, P0",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 12,
+      "address": 192,
+      "opcode": "EXIT",
+      "operands": "",
+      "predicate": "@P0"
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 13,
+      "address": 208,
+      "opcode": "ISETP.GE.AND",
+      "operands": "P0, PT, R0, 0x1, PT",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 14,
+      "address": 224,
+      "opcode": "ULDC.64",
+      "operands": "UR6, c[0x0][0x208]",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 15,
+      "address": 240,
+      "opcode": "HFMA2.MMA",
+      "operands": "R17, -RZ, RZ, 0, 0",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 16,
+      "address": 256,
+      "opcode": "IMAD",
+      "operands": "R2, R5, R0, RZ",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 17,
+      "address": 272,
+      "opcode": "BRA",
+      "operands": "`(.L_x_0)",
+      "predicate": "@!P0"
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 18,
+      "address": 288,
+      "opcode": "IADD3",
+      "operands": "R4, R0.reuse, -0x1, RZ",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 19,
+      "address": 304,
+      "opcode": "UMOV",
+      "operands": "UR4, URZ",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 20,
+      "address": 320,
+      "opcode": "LOP3.LUT",
+      "operands": "R5, R0, 0x3, RZ, 0xc0, !PT",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 21,
+      "address": 336,
+      "opcode": "ISETP.GE.U32.AND",
+      "operands": "P0, PT, R4, 0x3, PT",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 22,
+      "address": 352,
+      "opcode": "MOV",
+      "operands": "R17, RZ",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 23,
+      "address": 368,
+      "opcode": "BRA",
+      "operands": "`(.L_x_1)",
+      "predicate": "@!P0"
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 24,
+      "address": 384,
+      "opcode": "LDC.64",
+      "operands": "R26, c[0x0][0x218]",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 25,
+      "address": 400,
+      "opcode": "IADD3",
+      "operands": "R4, -R5, R0, RZ",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 26,
+      "address": 416,
+      "opcode": "UMOV",
+      "operands": "UR4, URZ",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 27,
+      "address": 432,
+      "opcode": "ULDC.64",
+      "operands": "UR8, c[0x0][0x210]",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 28,
+      "address": 448,
+      "opcode": "ISETP.GT.AND",
+      "operands": "P0, PT, R4, RZ, PT",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 29,
+      "address": 464,
+      "opcode": "IMAD.WIDE",
+      "operands": "R26, R3, 0x4, R26",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 30,
+      "address": 480,
+      "opcode": "BRA",
+      "operands": "`(.L_x_2)",
+      "predicate": "@!P0"
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 31,
+      "address": 496,
+      "opcode": "ISETP.GT.AND",
+      "operands": "P1, PT, R4, 0xc, PT",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 32,
+      "address": 512,
+      "opcode": "PLOP3.LUT",
+      "operands": "P0, PT, PT, PT, PT, 0x80, 0x0",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 33,
+      "address": 528,
+      "opcode": "BRA",
+      "operands": "`(.L_x_3)",
+      "predicate": "@!P1"
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 34,
+      "address": 544,
+      "opcode": "PLOP3.LUT",
+      "operands": "P0, PT, PT, PT, PT, 0x8, 0x0",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 35,
+      "address": 560,
+      "opcode": "MOV",
+      "operands": "R12, UR8",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 36,
+      "address": 576,
+      "opcode": "LDG.E",
+      "operands": "R28, desc[UR6][R26.64]",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 37,
+      "address": 592,
+      "opcode": "MOV",
+      "operands": "R13, UR9",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 38,
+      "address": 608,
+      "opcode": "IMAD.WIDE",
+      "operands": "R12, R2, 0x4, R12",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 39,
+      "address": 624,
+      "opcode": "IMAD.WIDE",
+      "operands": "R20, R0.reuse, 0x4, R26",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 40,
+      "address": 640,
+      "opcode": "LDG.E",
+      "operands": "R16, desc[UR6][R12.64]",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 41,
+      "address": 656,
+      "opcode": "LDG.E",
+      "operands": "R18, desc[UR6][R20.64]",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 42,
+      "address": 672,
+      "opcode": "IMAD.WIDE",
+      "operands": "R24, R0, 0x4, R20",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 43,
+      "address": 688,
+      "opcode": "LDG.E",
+      "operands": "R19, desc[UR6][R12.64+0x4]",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 44,
+      "address": 704,
+      "opcode": "IMAD.WIDE",
+      "operands": "R14, R0, 0x4, R24",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 45,
+      "address": 720,
+      "opcode": "LDG.E",
+      "operands": "R6, desc[UR6][R24.64]",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 46,
+      "address": 736,
+      "opcode": "LDG.E",
+      "operands": "R7, desc[UR6][R12.64+0x8]",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 47,
+      "address": 752,
+      "opcode": "IMAD.WIDE",
+      "operands": "R22, R0, 0x4, R14",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 48,
+      "address": 768,
+      "opcode": "LDG.E",
+      "operands": "R8, desc[UR6][R14.64]",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 49,
+      "address": 784,
+      "opcode": "LDG.E",
+      "operands": "R9, desc[UR6][R12.64+0xc]",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 50,
+      "address": 800,
+      "opcode": "LDG.E",
+      "operands": "R10, desc[UR6][R12.64+0x10]",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 51,
+      "address": 816,
+      "opcode": "LDG.E",
+      "operands": "R11, desc[UR6][R22.64]",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 52,
+      "address": 832,
+      "opcode": "LDG.E",
+      "operands": "R20, desc[UR6][R12.64+0x14]",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 53,
+      "address": 848,
+      "opcode": "LDG.E",
+      "operands": "R26, desc[UR6][R12.64+0x18]",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 54,
+      "address": 864,
+      "opcode": "IMAD.WIDE",
+      "operands": "R22, R0, 0x4, R22",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 55,
+      "address": 880,
+      "opcode": "LDG.E",
+      "operands": "R29, desc[UR6][R12.64+0x30]",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 56,
+      "address": 896,
+      "opcode": "LDG.E",
+      "operands": "R21, desc[UR6][R22.64]",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 57,
+      "address": 912,
+      "opcode": "IMAD.WIDE",
+      "operands": "R24, R0, 0x4, R22",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 58,
+      "address": 928,
+      "opcode": "LDG.E",
+      "operands": "R27, desc[UR6][R24.64]",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 59,
+      "address": 944,
+      "opcode": "IMAD.WIDE",
+      "operands": "R14, R0, 0x4, R24",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 60,
+      "address": 960,
+      "opcode": "LDG.E",
+      "operands": "R23, desc[UR6][R12.64+0x1c]",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 61,
+      "address": 976,
+      "opcode": "LDG.E",
+      "operands": "R22, desc[UR6][R12.64+0x24]",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 62,
+      "address": 992,
+      "opcode": "LDG.E",
+      "operands": "R25, desc[UR6][R12.64+0x20]",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 63,
+      "address": 1008,
+      "opcode": "IMAD",
+      "operands": "R28, R28, R16, R17",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 64,
+      "address": 1024,
+      "opcode": "IMAD.WIDE",
+      "operands": "R16, R0, 0x4, R14",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 65,
+      "address": 1040,
+      "opcode": "LDG.E",
+      "operands": "R14, desc[UR6][R14.64]",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 66,
+      "address": 1056,
+      "opcode": "IMAD",
+      "operands": "R28, R18, R19, R28",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 67,
+      "address": 1072,
+      "opcode": "IMAD.WIDE",
+      "operands": "R18, R0, 0x4, R16",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 68,
+      "address": 1088,
+      "opcode": "LDG.E",
+      "operands": "R16, desc[UR6][R16.64]",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 69,
+      "address": 1104,
+      "opcode": "IMAD",
+      "operands": "R28, R6, R7, R28",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 70,
+      "address": 1120,
+      "opcode": "LDG.E",
+      "operands": "R15, desc[UR6][R12.64+0x28]",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 71,
+      "address": 1136,
+      "opcode": "IMAD.WIDE",
+      "operands": "R6, R0, 0x4, R18",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 72,
+      "address": 1152,
+      "opcode": "LDG.E",
+      "operands": "R19, desc[UR6][R18.64]",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 73,
+      "address": 1168,
+      "opcode": "IMAD",
+      "operands": "R28, R8, R9, R28",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 74,
+      "address": 1184,
+      "opcode": "LDG.E",
+      "operands": "R24, desc[UR6][R6.64]",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 75,
+      "address": 1200,
+      "opcode": "IMAD.WIDE",
+      "operands": "R8, R0, 0x4, R6",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 76,
+      "address": 1216,
+      "opcode": "LDG.E",
+      "operands": "R17, desc[UR6][R12.64+0x2c]",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 77,
+      "address": 1232,
+      "opcode": "IMAD",
+      "operands": "R28, R11, R10, R28",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 78,
+      "address": 1248,
+      "opcode": "IMAD.WIDE",
+      "operands": "R10, R0.reuse, 0x4, R8",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 79,
+      "address": 1264,
+      "opcode": "LDG.E",
+      "operands": "R8, desc[UR6][R8.64]",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 80,
+      "address": 1280,
+      "opcode": "IMAD",
+      "operands": "R28, R21, R20, R28",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 81,
+      "address": 1296,
+      "opcode": "IMAD.WIDE",
+      "operands": "R20, R0, 0x4, R10",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 82,
+      "address": 1312,
+      "opcode": "LDG.E",
+      "operands": "R10, desc[UR6][R10.64]",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 83,
+      "address": 1328,
+      "opcode": "IMAD",
+      "operands": "R18, R27, R26, R28",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 84,
+      "address": 1344,
+      "opcode": "IMAD.WIDE",
+      "operands": "R26, R0.reuse, 0x4, R20",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 85,
+      "address": 1360,
+      "opcode": "LDG.E",
+      "operands": "R28, desc[UR6][R20.64]",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 86,
+      "address": 1376,
+      "opcode": "LDG.E",
+      "operands": "R9, desc[UR6][R26.64]",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 87,
+      "address": 1392,
+      "opcode": "IMAD.WIDE",
+      "operands": "R6, R0, 0x4, R26",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 88,
+      "address": 1408,
+      "opcode": "LDG.E",
+      "operands": "R11, desc[UR6][R12.64+0x34]",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 89,
+      "address": 1424,
+      "opcode": "LDG.E",
+      "operands": "R20, desc[UR6][R12.64+0x38]",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 90,
+      "address": 1440,
+      "opcode": "LDG.E",
+      "operands": "R26, desc[UR6][R12.64+0x3c]",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 91,
+      "address": 1456,
+      "opcode": "LDG.E",
+      "operands": "R21, desc[UR6][R6.64]",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 92,
+      "address": 1472,
+      "opcode": "IADD3",
+      "operands": "R4, R4, -0x10, RZ",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 93,
+      "address": 1488,
+      "opcode": "ISETP.GT.AND",
+      "operands": "P1, PT, R4, 0xc, PT",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 94,
+      "address": 1504,
+      "opcode": "UIADD3",
+      "operands": "UR8, UP0, UR8, 0x40, URZ",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 95,
+      "address": 1520,
+      "opcode": "UIADD3",
+      "operands": "UR4, UR4, 0x10, URZ",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 96,
+      "address": 1536,
+      "opcode": "UIADD3.X",
+      "operands": "UR9, URZ, UR9, URZ, UP0, !UPT",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 97,
+      "address": 1552,
+      "opcode": "IMAD",
+      "operands": "R14, R14, R23, R18",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 98,
+      "address": 1568,
+      "opcode": "IMAD",
+      "operands": "R14, R16, R25, R14",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 99,
+      "address": 1584,
+      "opcode": "IMAD",
+      "operands": "R14, R19, R22, R14",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 100,
+      "address": 1600,
+      "opcode": "IMAD",
+      "operands": "R14, R24, R15, R14",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 101,
+      "address": 1616,
+      "opcode": "IMAD",
+      "operands": "R8, R8, R17, R14",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 102,
+      "address": 1632,
+      "opcode": "IMAD",
+      "operands": "R8, R10, R29, R8",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 103,
+      "address": 1648,
+      "opcode": "IMAD",
+      "operands": "R8, R28, R11, R8",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 104,
+      "address": 1664,
+      "opcode": "IMAD",
+      "operands": "R8, R9, R20, R8",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 105,
+      "address": 1680,
+      "opcode": "IMAD",
+      "operands": "R17, R21, R26, R8",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 106,
+      "address": 1696,
+      "opcode": "IMAD.WIDE",
+      "operands": "R26, R0, 0x4, R6",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 107,
+      "address": 1712,
+      "opcode": "BRA",
+      "operands": "`(.L_x_4)",
+      "predicate": "@P1"
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 108,
+      "address": 1728,
+      "opcode": "ISETP.GT.AND",
+      "operands": "P1, PT, R4, 0x4, PT",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 109,
+      "address": 1744,
+      "opcode": "BRA",
+      "operands": "`(.L_x_5)",
+      "predicate": "@!P1"
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 110,
+      "address": 1760,
+      "opcode": "IMAD.WIDE",
+      "operands": "R14, R0.reuse, 0x4, R26",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 111,
+      "address": 1776,
+      "opcode": "MOV",
+      "operands": "R6, UR8",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 112,
+      "address": 1792,
+      "opcode": "LDG.E",
+      "operands": "R16, desc[UR6][R26.64]",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 113,
+      "address": 1808,
+      "opcode": "MOV",
+      "operands": "R7, UR9",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 114,
+      "address": 1824,
+      "opcode": "IMAD.WIDE",
+      "operands": "R18, R0, 0x4, R14",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 115,
+      "address": 1840,
+      "opcode": "LDG.E",
+      "operands": "R21, desc[UR6][R14.64]",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 116,
+      "address": 1856,
+      "opcode": "IMAD.WIDE",
+      "operands": "R6, R2, 0x4, R6",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 117,
+      "address": 1872,
+      "opcode": "LDG.E",
+      "operands": "R23, desc[UR6][R18.64]",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 118,
+      "address": 1888,
+      "opcode": "IMAD.WIDE",
+      "operands": "R10, R0, 0x4, R18",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 119,
+      "address": 1904,
+      "opcode": "LDG.E",
+      "operands": "R20, desc[UR6][R6.64]",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 120,
+      "address": 1920,
+      "opcode": "LDG.E",
+      "operands": "R22, desc[UR6][R6.64+0x4]",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 121,
+      "address": 1936,
+      "opcode": "IMAD.WIDE",
+      "operands": "R8, R0, 0x4, R10",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 122,
+      "address": 1952,
+      "opcode": "LDG.E",
+      "operands": "R24, desc[UR6][R6.64+0x8]",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 123,
+      "address": 1968,
+      "opcode": "IMAD.WIDE",
+      "operands": "R12, R0, 0x4, R8",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 124,
+      "address": 1984,
+      "opcode": "LDG.E",
+      "operands": "R10, desc[UR6][R10.64]",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 125,
+      "address": 2000,
+      "opcode": "LDG.E",
+      "operands": "R25, desc[UR6][R6.64+0xc]",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 126,
+      "address": 2016,
+      "opcode": "IMAD.WIDE",
+      "operands": "R14, R0, 0x4, R12",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 127,
+      "address": 2032,
+      "opcode": "LDG.E",
+      "operands": "R8, desc[UR6][R8.64]",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 128,
+      "address": 2048,
+      "opcode": "LDG.E",
+      "operands": "R27, desc[UR6][R6.64+0x10]",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 129,
+      "address": 2064,
+      "opcode": "IMAD.WIDE",
+      "operands": "R18, R0, 0x4, R14",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 130,
+      "address": 2080,
+      "opcode": "LDG.E",
+      "operands": "R26, desc[UR6][R12.64]",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 131,
+      "address": 2096,
+      "opcode": "LDG.E",
+      "operands": "R9, desc[UR6][R6.64+0x14]",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 132,
+      "address": 2112,
+      "opcode": "LDG.E",
+      "operands": "R29, desc[UR6][R6.64+0x18]",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 133,
+      "address": 2128,
+      "opcode": "LDG.E",
+      "operands": "R28, desc[UR6][R14.64]",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 134,
+      "address": 2144,
+      "opcode": "LDG.E",
+      "operands": "R12, desc[UR6][R6.64+0x1c]",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 135,
+      "address": 2160,
+      "opcode": "LDG.E",
+      "operands": "R11, desc[UR6][R18.64]",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 136,
+      "address": 2176,
+      "opcode": "UIADD3",
+      "operands": "UR8, UP0, UR8, 0x20, URZ",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 137,
+      "address": 2192,
+      "opcode": "PLOP3.LUT",
+      "operands": "P0, PT, PT, PT, PT, 0x8, 0x0",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 138,
+      "address": 2208,
+      "opcode": "IADD3",
+      "operands": "R4, R4, -0x8, RZ",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 139,
+      "address": 2224,
+      "opcode": "UIADD3",
+      "operands": "UR4, UR4, 0x8, URZ",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 140,
+      "address": 2240,
+      "opcode": "UIADD3.X",
+      "operands": "UR9, URZ, UR9, URZ, UP0, !UPT",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 141,
+      "address": 2256,
+      "opcode": "IMAD",
+      "operands": "R16, R16, R20, R17",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 142,
+      "address": 2272,
+      "opcode": "IMAD",
+      "operands": "R16, R21, R22, R16",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 143,
+      "address": 2288,
+      "opcode": "IMAD",
+      "operands": "R16, R23, R24, R16",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 144,
+      "address": 2304,
+      "opcode": "IMAD",
+      "operands": "R10, R10, R25, R16",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 145,
+      "address": 2320,
+      "opcode": "IMAD",
+      "operands": "R8, R8, R27, R10",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 146,
+      "address": 2336,
+      "opcode": "IMAD",
+      "operands": "R8, R26, R9, R8",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 147,
+      "address": 2352,
+      "opcode": "IMAD.WIDE",
+      "operands": "R26, R0, 0x4, R18",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 148,
+      "address": 2368,
+      "opcode": "IMAD",
+      "operands": "R8, R28, R29, R8",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 149,
+      "address": 2384,
+      "opcode": "IMAD",
+      "operands": "R17, R11, R12, R8",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 150,
+      "address": 2400,
+      "opcode": "ISETP.NE.OR",
+      "operands": "P0, PT, R4, RZ, P0",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 151,
+      "address": 2416,
+      "opcode": "BRA",
+      "operands": "`(.L_x_1)",
+      "predicate": "@!P0"
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 152,
+      "address": 2432,
+      "opcode": "MOV",
+      "operands": "R6, UR8",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 153,
+      "address": 2448,
+      "opcode": "IMAD.WIDE",
+      "operands": "R12, R0, 0x4, R26",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 154,
+      "address": 2464,
+      "opcode": "MOV",
+      "operands": "R7, UR9",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 155,
+      "address": 2480,
+      "opcode": "LDG.E",
+      "operands": "R26, desc[UR6][R26.64]",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 156,
+      "address": 2496,
+      "opcode": "IMAD.WIDE",
+      "operands": "R6, R2, 0x4, R6",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 157,
+      "address": 2512,
+      "opcode": "IMAD.WIDE",
+      "operands": "R10, R0.reuse, 0x4, R12",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 158,
+      "address": 2528,
+      "opcode": "LDG.E",
+      "operands": "R14, desc[UR6][R6.64]",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 159,
+      "address": 2544,
+      "opcode": "LDG.E",
+      "operands": "R13, desc[UR6][R12.64]",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 160,
+      "address": 2560,
+      "opcode": "IMAD.WIDE",
+      "operands": "R8, R0, 0x4, R10",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 161,
+      "address": 2576,
+      "opcode": "LDG.E",
+      "operands": "R15, desc[UR6][R6.64+0x4]",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 162,
+      "address": 2592,
+      "opcode": "LDG.E",
+      "operands": "R19, desc[UR6][R10.64]",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 163,
+      "address": 2608,
+      "opcode": "LDG.E",
+      "operands": "R16, desc[UR6][R6.64+0x8]",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 164,
+      "address": 2624,
+      "opcode": "LDG.E",
+      "operands": "R18, desc[UR6][R6.64+0xc]",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 165,
+      "address": 2640,
+      "opcode": "LDG.E",
+      "operands": "R21, desc[UR6][R8.64]",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 166,
+      "address": 2656,
+      "opcode": "IADD3",
+      "operands": "R4, R4, -0x4, RZ",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 167,
+      "address": 2672,
+      "opcode": "ISETP.NE.AND",
+      "operands": "P0, PT, R4, RZ, PT",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 168,
+      "address": 2688,
+      "opcode": "UIADD3",
+      "operands": "UR8, UP0, UR8, 0x10, URZ",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 169,
+      "address": 2704,
+      "opcode": "UIADD3",
+      "operands": "UR4, UR4, 0x4, URZ",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 170,
+      "address": 2720,
+      "opcode": "UIADD3.X",
+      "operands": "UR9, URZ, UR9, URZ, UP0, !UPT",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 171,
+      "address": 2736,
+      "opcode": "IMAD",
+      "operands": "R14, R26, R14, R17",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 172,
+      "address": 2752,
+      "opcode": "IMAD",
+      "operands": "R14, R13, R15, R14",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 173,
+      "address": 2768,
+      "opcode": "IMAD.WIDE",
+      "operands": "R26, R0, 0x4, R8",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 174,
+      "address": 2784,
+      "opcode": "IMAD",
+      "operands": "R14, R19, R16, R14",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 175,
+      "address": 2800,
+      "opcode": "IMAD",
+      "operands": "R17, R21, R18, R14",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 176,
+      "address": 2816,
+      "opcode": "BRA",
+      "operands": "`(.L_x_2)",
+      "predicate": "@P0"
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 177,
+      "address": 2832,
+      "opcode": "ISETP.NE.AND",
+      "operands": "P0, PT, R5, RZ, PT",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 178,
+      "address": 2848,
+      "opcode": "BRA",
+      "operands": "`(.L_x_0)",
+      "predicate": "@!P0"
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 179,
+      "address": 2864,
+      "opcode": "LDC.64",
+      "operands": "R6, c[0x0][0x210]",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 180,
+      "address": 2880,
+      "opcode": "IADD3",
+      "operands": "R13, R2, UR4, RZ",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 181,
+      "address": 2896,
+      "opcode": "IMAD",
+      "operands": "R11, R0, UR4, R3",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 182,
+      "address": 2912,
+      "opcode": "LDC.64",
+      "operands": "R8, c[0x0][0x218]",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 183,
+      "address": 2928,
+      "opcode": "IMAD.WIDE",
+      "operands": "R6, R13, 0x4, R6",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 184,
+      "address": 2944,
+      "opcode": "MOV",
+      "operands": "R10, R6",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 185,
+      "address": 2960,
+      "opcode": "IMAD.WIDE",
+      "operands": "R8, R11, 0x4, R8",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 186,
+      "address": 2976,
+      "opcode": "MOV",
+      "operands": "R6, R10",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 187,
+      "address": 2992,
+      "opcode": "LDG.E",
+      "operands": "R4, desc[UR6][R8.64]",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 188,
+      "address": 3008,
+      "opcode": "LDG.E",
+      "operands": "R6, desc[UR6][R6.64]",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 189,
+      "address": 3024,
+      "opcode": "IADD3",
+      "operands": "R5, R5, -0x1, RZ",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 190,
+      "address": 3040,
+      "opcode": "IADD3",
+      "operands": "R10, P1, R10, 0x4, RZ",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 191,
+      "address": 3056,
+      "opcode": "ISETP.NE.AND",
+      "operands": "P0, PT, R5, RZ, PT",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 192,
+      "address": 3072,
+      "opcode": "IMAD.WIDE",
+      "operands": "R8, R0, 0x4, R8",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 193,
+      "address": 3088,
+      "opcode": "IADD3.X",
+      "operands": "R7, RZ, R7, RZ, P1, !PT",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 194,
+      "address": 3104,
+      "opcode": "IMAD",
+      "operands": "R17, R4, R6, R17",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 195,
+      "address": 3120,
+      "opcode": "BRA",
+      "operands": "`(.L_x_6)",
+      "predicate": "@P0"
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 196,
+      "address": 3136,
+      "opcode": "LDC.64",
+      "operands": "R4, c[0x0][0x220]",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 197,
+      "address": 3152,
+      "opcode": "IADD3",
+      "operands": "R3, R3, R2, RZ",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 198,
+      "address": 3168,
+      "opcode": "IMAD.WIDE",
+      "operands": "R2, R3, 0x4, R4",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 199,
+      "address": 3184,
+      "opcode": "STG.E",
+      "operands": "desc[UR6][R2.64], R17",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 200,
+      "address": 3200,
+      "opcode": "EXIT",
+      "operands": "",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 201,
+      "address": 3216,
+      "opcode": "BRA",
+      "operands": "`(.L_x_7)",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 202,
+      "address": 3232,
+      "opcode": "NOP",
+      "operands": "",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 203,
+      "address": 3248,
+      "opcode": "NOP",
+      "operands": "",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 204,
+      "address": 3264,
+      "opcode": "NOP",
+      "operands": "",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 205,
+      "address": 3280,
+      "opcode": "NOP",
+      "operands": "",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 206,
+      "address": 3296,
+      "opcode": "NOP",
+      "operands": "",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 207,
+      "address": 3312,
+      "opcode": "NOP",
+      "operands": "",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 208,
+      "address": 3328,
+      "opcode": "NOP",
+      "operands": "",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 209,
+      "address": 3344,
+      "opcode": "NOP",
+      "operands": "",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 210,
+      "address": 3360,
+      "opcode": "NOP",
+      "operands": "",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 211,
+      "address": 3376,
+      "opcode": "NOP",
+      "operands": "",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 212,
+      "address": 3392,
+      "opcode": "NOP",
+      "operands": "",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 213,
+      "address": 3408,
+      "opcode": "NOP",
+      "operands": "",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 214,
+      "address": 3424,
+      "opcode": "NOP",
+      "operands": "",
+      "predicate": null
+    },
+    {
+      "function": "square_matrix_mul",
+      "function_index": 215,
+      "address": 3440,
+      "opcode": "NOP",
+      "operands": "",
+      "predicate": null
+    }
+  ]
+}

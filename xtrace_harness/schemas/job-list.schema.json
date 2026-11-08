@@ -390,7 +390,8 @@
                             "pc_sampling",
                             "interpretation",
                             "comparison",
-                            "kernel_metadata"
+                            "kernel_metadata",
+                            "workspace_file"
                           ]
                         },
                         "name": {
@@ -810,6 +811,49 @@
                           ],
                           "additionalProperties": false
                         }
+                      },
+                      "price_book": {
+                        "type": "object",
+                        "properties": {
+                          "rate_card_version_id": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 200,
+                            "pattern": "^[A-Za-z0-9_.:-]+$"
+                          },
+                          "tool_fee_micro_usd": {
+                            "type": "string",
+                            "pattern": "^(0|[1-9][0-9]{0,29})$"
+                          },
+                          "cache_write_rates": {
+                            "maxItems": 16,
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "dimension": {
+                                  "type": "string",
+                                  "pattern": "^cache_write_[1-9][0-9]{0,7}_(explicit|implicit)_tokens$"
+                                },
+                                "micro_usd_per_million": {
+                                  "type": "string",
+                                  "pattern": "^(0|[1-9][0-9]{0,29})$"
+                                }
+                              },
+                              "required": [
+                                "dimension",
+                                "micro_usd_per_million"
+                              ],
+                              "additionalProperties": false
+                            }
+                          }
+                        },
+                        "required": [
+                          "rate_card_version_id",
+                          "tool_fee_micro_usd",
+                          "cache_write_rates"
+                        ],
+                        "additionalProperties": false
                       }
                     },
                     "required": [

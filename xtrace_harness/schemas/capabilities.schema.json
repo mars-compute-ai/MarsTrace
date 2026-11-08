@@ -95,11 +95,16 @@
           "qualified": { "type": "boolean", "const": true },
           "bundle_kinds": {
             "minItems": 1,
-            "maxItems": 3,
+            "maxItems": 4,
             "type": "array",
             "items": {
               "type": "string",
-              "enum": ["cubin_launch", "source_recipe", "comparison"]
+              "enum": [
+                "cubin_launch",
+                "source_recipe",
+                "comparison",
+                "agent_workspace"
+              ]
             }
           },
           "build_templates": {
@@ -138,6 +143,16 @@
       }
     },
     "models": {
+      "maxItems": 100,
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 200,
+        "pattern": "^[A-Za-z0-9_.:-]+$"
+      }
+    },
+    "agent_models": {
       "maxItems": 100,
       "type": "array",
       "items": {
@@ -210,6 +225,7 @@
     "enabled",
     "compute",
     "models",
+    "agent_models",
     "max_upload_bytes",
     "max_query_records",
     "retention_seconds",

@@ -23,7 +23,20 @@ class SchemaCheck:
         ("POST", re.compile(r"^/v1/xtrace/artifacts/[^/]+/complete$"), "upload-complete"),
         ("POST", re.compile(r"^/v1/xtrace/quotes$"), "estimate-input"),
         ("POST", re.compile(r"^/v1/xtrace/jobs$"), "submit-input"),
-        ("POST", re.compile(r"^/v1/xtrace/inspections$"), "inspection-request"),
+        ("POST", re.compile(r"^/v1/xtrace/inspections/quotes$"), "inspection-request"),
+        ("POST", re.compile(r"^/v1/xtrace/inspections$"), "inspection-accept"),
+        ("POST", re.compile(r"^/v1/xtrace/inspections/[^/]+/artifacts/downloads$"), "inspection-downloads-request"),
+    ]
+    # (method, path pattern) of a response -> the schema its body follows
+    LIST_RESPONSE_SCHEMA = [
+        ("GET", re.compile(r"^/v1/xtrace/capabilities$"), "capabilities"),
+        ("GET", re.compile(r"^/v1/xtrace/inspections/capabilities$"), "inspection-capabilities"),
+        ("POST", re.compile(r"^/v1/xtrace/inspections/quotes$"), "inspection-quote"),
+        ("POST", re.compile(r"^/v1/xtrace/inspections$"), "inspection"),
+        ("GET", re.compile(r"^/v1/xtrace/inspections/[0-9a-f-]{36}$"), "inspection"),
+        ("POST", re.compile(r"^/v1/xtrace/inspections/[^/]+/cancel$"), "inspection"),
+        ("GET", re.compile(r"^/v1/xtrace/inspections/[^/]+/result$"), "inspection-result"),
+        ("POST", re.compile(r"^/v1/xtrace/inspections/[^/]+/artifacts/downloads$"), "inspection-downloads"),
     ]
     LAUNCH_MANIFEST = "launch-manifest"
 
@@ -52,6 +65,25 @@ class SchemaCheck:
         jsonschema.validators.validator_for(map_schema)(map_schema).validate(value)
 
     @classmethod
+    def validate_response(
+        cls,
+        method: str,
+        path: str,
+        value: Any,
+    ) -> None:
+        """Validate a successful response body against the schema of its route, when it has one."""
+        for route_method, pattern, name in SchemaCheck.LIST_RESPONSE_SCHEMA:
+            if (
+                route_method == method
+                and pattern.match(path)
+            ):
+                cls.validate(
+                    name,
+                    value,
+                )
+                return
+
+    @classmethod
     def validate_request(
         cls,
         method: str,
@@ -68,3 +100,4 @@ class SchemaCheck:
                     name,
                     json.loads(body),
                 )
+                return

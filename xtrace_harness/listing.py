@@ -9,57 +9,34 @@ from xtrace_harness.error import HarnessError
 
 @dataclass
 class ListedInstruction:
-    """One instruction of an inspected kernel: where it sits, what it is and the source it came from.
+    """One instruction of an inspected kernel's static listing.
 
     Args:
-        index: the instruction index that trace sites name
-        pc: the byte offset of the instruction in the kernel
-        sass: the instruction's SASS text
-        file: the source file it was emitted for, or None without line info
-        line: the source line it was emitted for, or None without line info
-        block: the index of the basic block that holds it, or None
-        is_eligible: a probe can be placed on it
+        index: the instruction's slot in the kernel, which trace sites name
+        address: the byte offset of the instruction in the kernel's section
+        opcode: the opcode with its modifiers, e.g. ``LDG.E``
+        operands: the operands as the disassembler prints them
+        predicate: the guarding predicate, e.g. ``@P0``, or None when unguarded
     """
 
     index: int
-    pc: int
-    sass: str
-    file: str | None = None
-    line: int | None = None
-    block: int | None = None
-    is_eligible: bool = False
+    address: int
+    opcode: str
+    operands: str
+    predicate: str | None = None
 
-    def source_of(self) -> str:
-        """The instruction's source position, or an empty string without line info.
+    def text(self) -> str:
+        """The instruction as one line of SASS.
 
         Returns:
-            ``<file>:<line>``, or ""
+            the predicate, opcode and operands
         """
-        if (
-            self.file is None
-            or self.line is None
-        ):
-            return ""
-        return f"{self.file}:{self.line}"
-
-    def is_at_source(self, source: str) -> bool:
-        """Whether the instruction was emitted for a source line, given with or without its file.
-
-        Args:
-            source: ``<file>:<line>`` or ``<line>``; the file matches by its trailing path
-
-        Returns:
-            whether it was
-        """
-        if self.line is None:
-            return False
-        if ":" not in source:
-            return str(self.line) == source
-        file_name, _, line = source.rpartition(":")
-        return (
-            str(self.line) == line
-            and (self.file or "").endswith(file_name)
-        )
+        list_part = [self.opcode]
+        if self.predicate:
+            list_part.insert(0, self.predicate)
+        if self.operands:
+            list_part.append(self.operands)
+        return " ".join(list_part)
 
 
 @dataclass
@@ -73,231 +50,240 @@ class ListedParameter:
 
 @dataclass
 class ListedKernel:
-    """The inspected kernel: its resources, parameter layout and SASS listing."""
+    """A kernel of an inspection result: its parameter layout and, once downloaded, its listing.
+
+    Args:
+        symbol: the kernel's entry point
+        architecture: the target the inspection read, e.g. ``sm_90a``
+        registers: registers per thread, or None when the inspection did not establish it
+        static_shared_bytes: static shared memory, or None when not established
+        list_parameter: the parameter layout, or None when the inspection could not extract it
+        layout_reason: why the layout is absent, or None when it is extracted
+        map_instructions_artifact: the result's descriptor of the instruction listing artifact
+        instruction_count: how many instructions the listing holds
+        is_listing_complete: the listing holds every instruction of the kernel
+        list_instruction: the instructions, empty until the listing is downloaded
+    """
 
     symbol: str
-    demangled: str | None
-    registers: int | None = None
-    static_shared_bytes: int | None = None
-    list_parameter: list[ListedParameter] = field(default_factory=list)
+    architecture: str
+    registers: int | None
+    static_shared_bytes: int | None
+    list_parameter: list[ListedParameter] | None
+    layout_reason: str | None
+    map_instructions_artifact: dict[str, Any]
+    instruction_count: int
+    is_listing_complete: bool
     list_instruction: list[ListedInstruction] = field(default_factory=list)
 
 
 @dataclass
 class KernelListing:
-    """An ``inspection.json``: a cubin's kernels, and the inspected kernel's layout and listing.
+    """An inspection result, ``marscompute.xtrace.inspection-result.v1``, with the static
+    instruction listing of its inspected kernel when that was downloaded.
 
     Args:
-        architecture: the cubin's target, e.g. ``sm_90a``
-        map_kernel_name: every kernel of the cubin, symbol to demangled name
-        kernel: the inspected kernel, or None when the inspection named none
+        inspection_id: the inspection that produced the result
+        binary_sha256: the digest of the cubin it describes
+        map_kernel: every kernel of the result by symbol
+        kernel: the kernel whose listing is loaded, or None for the kernel catalog only
     """
 
-    SCHEMA = "marscompute.xtrace.inspection.v1"
+    RESULT_SCHEMA = "marscompute.xtrace.inspection-result.v1"
+    INSTRUCTIONS_SCHEMA = "marscompute.xtrace.static-instructions.v1"
 
-    architecture: str
-    map_kernel_name: dict[str, str | None]
+    inspection_id: str
+    binary_sha256: str
+    map_kernel: dict[str, ListedKernel]
     kernel: ListedKernel | None
 
+    @staticmethod
+    def _kernel_of(map_kernel: dict[str, Any]) -> ListedKernel:
+        """One kernel of the result's catalog."""
+        map_layout = map_kernel["parameter_layout"]
+        list_parameter = None
+        layout_reason = map_layout.get("reason")
+        if map_layout["state"] == "extracted":
+            list_parameter = [
+                ListedParameter(
+                    index=map_parameter["index"],
+                    offset_bytes=map_parameter["offset"],
+                    size_bytes=map_parameter["size"],
+                )
+                for map_parameter in map_layout["parameters"]
+            ]
+        map_coverage = map_kernel["instructions"]["coverage"]
+        return ListedKernel(
+            symbol=map_kernel["symbol"],
+            architecture=map_kernel["architecture"],
+            registers=map_kernel["resources"]["registers"],
+            static_shared_bytes=map_kernel["resources"]["static_shared_memory_bytes"],
+            list_parameter=list_parameter,
+            layout_reason=layout_reason,
+            map_instructions_artifact=dict(map_kernel["instructions"]["artifact"]),
+            instruction_count=map_coverage["returned_count"],
+            is_listing_complete=map_coverage["complete"],
+        )
+
     @classmethod
-    def from_json(
+    def from_documents(
         cls,
-        map_inspection: Any,
+        map_result: Any,
+        map_instructions: Any,
         where: str,
     ) -> "KernelListing":
-        """Read an inspection result.
+        """Read an inspection result and, when given, the instruction listing of one of its kernels.
 
         Args:
-            map_inspection: the parsed ``inspection.json``
-            where: the file or job it came from, for the message
+            map_result: the parsed inspection result
+            map_instructions: the parsed static instruction listing, or None
+            where: the file or inspection it came from, for the message
 
         Returns:
             the listing
 
         Raises:
-            HarnessError: the value is not an inspection result
+            HarnessError: a document is not what it claims, or the listing names another kernel
         """
         if (
             not isinstance(
-                map_inspection,  # obj
-                dict,            # class_or_tuple
+                map_result,  # obj
+                dict,        # class_or_tuple
             )
-            or map_inspection.get("schema_version") != KernelListing.SCHEMA
+            or map_result.get("schema_version") != KernelListing.RESULT_SCHEMA
         ):
-            raise HarnessError(f"{where} is not a {KernelListing.SCHEMA} result")
+            raise HarnessError(f"{where} is not a {KernelListing.RESULT_SCHEMA} document")
         try:
-            map_kernel = map_inspection.get("kernel")
-            kernel = None
-            if map_kernel is not None:
-                set_eligible = set(map_kernel.get("eligible_sites", []))
-                kernel = ListedKernel(
-                    symbol=map_kernel["symbol"],
-                    demangled=map_kernel.get("demangled"),
-                    registers=map_kernel.get("registers"),
-                    static_shared_bytes=map_kernel.get("static_shared_bytes"),
-                    list_parameter=[
-                        ListedParameter(
-                            index=map_parameter["index"],
-                            offset_bytes=map_parameter["offset_bytes"],
-                            size_bytes=map_parameter["size_bytes"],
-                        )
-                        for map_parameter in map_kernel.get("parameters", [])
-                    ],
-                    list_instruction=[
-                        ListedInstruction(
-                            index=map_instruction["index"],
-                            pc=map_instruction["pc"],
-                            sass=map_instruction["sass"],
-                            file=map_instruction.get("file"),
-                            line=map_instruction.get("line"),
-                            block=map_instruction.get("block"),
-                            is_eligible=map_instruction["index"] in set_eligible,
-                        )
-                        for map_instruction in map_kernel.get("instructions", [])
-                    ],
-                )
-            return cls(
-                architecture=map_inspection["architecture"],
-                map_kernel_name={
-                    map_entry["symbol"]: map_entry.get("demangled")
-                    for map_entry in map_inspection.get("kernels", [])
-                },
-                kernel=kernel,
+            map_kernel = {
+                map_entry["symbol"]: KernelListing._kernel_of(map_entry)
+                for map_entry in map_result["kernel_catalog"]["kernels"]
+            }
+            listing = cls(
+                inspection_id=map_result["inspection_id"],
+                binary_sha256=map_result["binary"]["sha256"],
+                map_kernel=map_kernel,
+                kernel=None,
             )
+            if map_instructions is None:
+                return listing
+            if (
+                not isinstance(
+                    map_instructions,  # obj
+                    dict,              # class_or_tuple
+                )
+                or map_instructions.get("schema_version") != KernelListing.INSTRUCTIONS_SCHEMA
+            ):
+                raise HarnessError(f"{where}: the listing is not a {KernelListing.INSTRUCTIONS_SCHEMA} document")
+            kernel = map_kernel.get(map_instructions["symbol"])
+            if kernel is None:
+                raise HarnessError(f"{where}: the listing names {map_instructions['symbol']}, which the result lacks")
+            kernel.list_instruction = [
+                ListedInstruction(
+                    index=map_instruction["function_index"],
+                    address=map_instruction["address"],
+                    opcode=map_instruction["opcode"],
+                    operands=map_instruction["operands"],
+                    predicate=map_instruction["predicate"],
+                )
+                for map_instruction in map_instructions["instructions"]
+            ]
+            listing.kernel = kernel
+            return listing
         except (
             KeyError,
             TypeError,
         ) as err:
-            raise HarnessError(f"{where} is a malformed inspection result: {err}") from err
+            raise HarnessError(f"{where} is a malformed inspection document: {err}") from err
+
+    @staticmethod
+    def _read_json(path: str) -> Any:
+        """A JSON file's value."""
+        with open(
+            file=path,
+            mode="r",
+            encoding="utf-8",
+        ) as json_file:
+            try:
+                return json.load(json_file)
+            except ValueError as err:
+                raise HarnessError(f"{path} is not JSON") from err
 
     @classmethod
     def load(cls, path: str) -> "KernelListing":
-        """Read an ``inspection.json`` file.
+        """Read a cached inspection result and the instruction listing cached beside it.
 
         Args:
-            path: the file
+            path: the result file, ``<name>.inspection-result.json``; its listing, when one was
+                downloaded, is ``<name>.instructions.json``
 
         Returns:
             the listing
 
         Raises:
-            HarnessError: the file is not an inspection result
+            HarnessError: a file is not an inspection document
         """
-        with open(
-            file=path,
-            mode="r",
-            encoding="utf-8",
-        ) as listing_file:
-            try:
-                map_inspection = json.load(listing_file)
-            except ValueError as err:
-                raise HarnessError(f"{path} is not JSON") from err
-        return cls.from_json(
-            map_inspection=map_inspection,
+        instructions_path = InspectionCache.instructions_path_of(path)
+        return cls.from_documents(
+            map_result=KernelListing._read_json(path),
+            map_instructions=(
+                KernelListing._read_json(instructions_path)
+                if os.path.isfile(instructions_path)
+                else None
+            ),
             where=path,
         )
 
     def inspected_kernel(self) -> ListedKernel:
-        """The kernel the inspection named, whose layout and listing it carries.
+        """The kernel whose listing is loaded.
 
         Returns:
             the kernel
 
         Raises:
-            HarnessError: the inspection named no kernel
+            HarnessError: no listing is loaded
         """
         if self.kernel is None:
             raise HarnessError(
-                "the inspection lists the cubin's kernels only; inspect again with --kernel "
-                f"naming one of: {', '.join(self.map_kernel_name) or 'none'}"
+                "the inspection holds the cubin's kernel catalog only; inspect again with --kernel "
+                f"naming one of: {', '.join(self.map_kernel) or 'none'}"
             )
         return self.kernel
 
-    def resolve_line(self, source: str) -> int:
-        """The first instruction of a source line that a probe can be placed on.
-
-        Args:
-            source: ``<file>:<line>``
-
-        Returns:
-            the instruction index
-
-        Raises:
-            HarnessError: the line emitted no instruction, or none of them takes a probe
-        """
-        kernel = self.inspected_kernel()
-        list_at_line = [
-            instruction
-            for instruction in kernel.list_instruction
-            if instruction.is_at_source(source)
-        ]
-        if not list_at_line:
-            if all(instruction.line is None for instruction in kernel.list_instruction):
-                raise HarnessError(
-                    f"site '{source}': the cubin carries no line info; rebuild it with "
-                    "-lineinfo or name the site by index"
-                )
-            raise HarnessError(
-                f"site '{source}': no instruction of {kernel.symbol} was emitted for that line; "
-                "run 'xtrace sass' to list the lines that have instructions"
-            )
-        for instruction in list_at_line:
-            if instruction.is_eligible:
-                return instruction.index
-        list_index = ", ".join(str(instruction.index) for instruction in list_at_line)
-        raise HarnessError(
-            f"site '{source}': none of its instructions ({list_index}) takes a probe; name a "
-            "nearby eligible instruction by index (marked '+' in 'xtrace sass')"
-        )
-
     def check_index(self, index: int) -> None:
-        """Check that an instruction index exists in the kernel and takes a probe.
+        """Check that an instruction index exists in the inspected kernel's listing.
 
         Args:
             index: the instruction index
 
         Raises:
-            HarnessError: the index is out of range or not eligible
+            HarnessError: the index is not in the listing
         """
         kernel = self.inspected_kernel()
-        for instruction in kernel.list_instruction:
-            if instruction.index != index:
-                continue
-            if not instruction.is_eligible:
-                raise HarnessError(
-                    f"site index {index} ({instruction.sass.strip()}) does not take a probe; "
-                    "pick an instruction marked '+' in 'xtrace sass'"
-                )
+        if any(instruction.index == index for instruction in kernel.list_instruction):
             return
         raise HarnessError(
-            f"site index {index} lies outside {kernel.symbol}, which has "
+            f"site index {index} is not an instruction of {kernel.symbol}, whose listing holds "
             f"{len(kernel.list_instruction)} instructions"
         )
 
     def render_kernels(self) -> str:
-        """The cubin's kernels, one per line, the inspected one marked and followed by its layout.
+        """The result's kernels, one per line, the inspected one marked and followed by its layout.
 
         Returns:
             the text
         """
-        list_line = [f"architecture {self.architecture}"]
-        for symbol, demangled in self.map_kernel_name.items():
-            is_inspected = (
-                self.kernel is not None
-                and self.kernel.symbol == symbol
-            )
-            marker = "*" if is_inspected else " "
-            list_line.append(f"{marker} {symbol}" + (f"  ({demangled})" if demangled else ""))
-            if (
-                not is_inspected
-                or self.kernel is None
-            ):
+        list_line = [f"inspection {self.inspection_id}"]
+        for symbol, kernel in self.map_kernel.items():
+            marker = "*" if self.kernel is kernel else " "
+            list_line.append(f"{marker} {symbol}  ({kernel.architecture}, {kernel.instruction_count} instructions)")
+            if kernel.registers is not None:
+                list_line.append(f"    registers {kernel.registers}")
+            if kernel.static_shared_bytes is not None:
+                list_line.append(f"    static shared {kernel.static_shared_bytes} bytes")
+            if kernel.list_parameter is None:
+                list_line.append(f"    parameter layout unknown: {kernel.layout_reason}")
                 continue
-            list_line.append(
-                f"    registers {self.kernel.registers}, static shared "
-                f"{self.kernel.static_shared_bytes} bytes"
-            )
-            for parameter in self.kernel.list_parameter:
+            for parameter in kernel.list_parameter:
                 list_line.append(
                     f"    param {parameter.index:<3} offset {parameter.offset_bytes:<5} "
                     f"size {parameter.size_bytes}"
@@ -306,22 +292,19 @@ class KernelListing:
 
     def render_listing(
         self,
-        source: str | None = None,
         opcode_pattern: str | None = None,
         first_index: int | None = None,
         last_index: int | None = None,
     ) -> str:
-        """The inspected kernel's instructions, narrowed by source line, opcode or index range.
+        """The inspected kernel's instructions, narrowed by opcode or index range.
 
         Args:
-            source: keep instructions of this source line, ``<file>:<line>`` or ``<line>``
             opcode_pattern: keep instructions whose text matches this regex
             first_index: keep instructions from this index on
             last_index: keep instructions up to this index
 
         Returns:
-            the listing, one instruction per line: index, '+' when it takes a probe, block,
-            source position and SASS text
+            the listing, one instruction per line: index, address and SASS text
         """
         kernel = self.inspected_kernel()
         opcode_regex = re.compile(opcode_pattern) if opcode_pattern else None
@@ -338,35 +321,27 @@ class KernelListing:
             ):
                 continue
             if (
-                source is not None
-                and not instruction.is_at_source(source)
-            ):
-                continue
-            if (
                 opcode_regex is not None
-                and not opcode_regex.search(instruction.sass)
+                and not opcode_regex.search(instruction.text())
             ):
                 continue
-            block = f"B{instruction.block}" if instruction.block is not None else ""
-            eligible = "+" if instruction.is_eligible else " "
-            list_line.append(
-                f"{instruction.index:>6} {eligible} {block:<5} {instruction.source_of():<28} "
-                f"{instruction.sass}"
-            )
+            list_line.append(f"{instruction.index:>6}  {instruction.address:#08x}  {instruction.text()}")
         return "\n".join(list_line)
 
 
 class InspectionCache:
     """Inspection results kept beside the cubin they describe, keyed by its digest and kernel.
 
-    A listing describes the exact bytes it was made from, so a cubin rebuilt with the same
+    A result describes the exact bytes it was made from, so a cubin rebuilt with the same
     name gets a different key and is inspected again.
     """
 
     DIRECTORY_NAME = ".xtrace-cache"
-    # the kernel key of an inspection that names no kernel
+    # the kernel key of an inspection of the whole kernel catalog
     KERNELS_ONLY_KEY = "kernels"
     KERNEL_KEY_CHARACTERS = 16
+    RESULT_SUFFIX = ".inspection-result.json"
+    INSTRUCTIONS_SUFFIX = ".instructions.json"
 
     @staticmethod
     def path_of(
@@ -374,15 +349,15 @@ class InspectionCache:
         sha256: str,
         kernel_symbol: str | None,
     ) -> str:
-        """Where the inspection of a cubin and kernel is cached.
+        """Where the inspection result of a cubin and kernel is cached.
 
         Args:
             binary_path: the cubin
             sha256: the cubin's digest
-            kernel_symbol: the inspected kernel, or None for the kernel list only
+            kernel_symbol: the inspected kernel, or None for the kernel catalog only
 
         Returns:
-            the cache file's path
+            the result file's path
         """
         kernel_key = InspectionCache.KERNELS_ONLY_KEY
         if kernel_symbol is not None:
@@ -392,8 +367,23 @@ class InspectionCache:
         return os.path.join(
             os.path.dirname(os.path.abspath(binary_path)),
             InspectionCache.DIRECTORY_NAME,
-            f"{sha256}.{kernel_key}.inspection.json",
+            f"{sha256}.{kernel_key}{InspectionCache.RESULT_SUFFIX}",
         )
+
+    @staticmethod
+    def instructions_path_of(result_path: str) -> str:
+        """Where the instruction listing that belongs to a cached result lies.
+
+        Args:
+            result_path: the result file
+
+        Returns:
+            the listing file's path beside it
+        """
+        stem = result_path
+        if stem.endswith(InspectionCache.RESULT_SUFFIX):
+            stem = stem[:-len(InspectionCache.RESULT_SUFFIX)]
+        return stem + InspectionCache.INSTRUCTIONS_SUFFIX
 
     @staticmethod
     def load(
@@ -406,7 +396,7 @@ class InspectionCache:
         Args:
             binary_path: the cubin
             sha256: the cubin's digest
-            kernel_symbol: the inspected kernel, or None for the kernel list only
+            kernel_symbol: the inspected kernel, or None for the kernel catalog only
 
         Returns:
             the listing, or None when none is cached
@@ -425,18 +415,20 @@ class InspectionCache:
         binary_path: str,
         sha256: str,
         kernel_symbol: str | None,
-        data: bytes,
+        result_data: bytes,
+        instructions_data: bytes | None,
     ) -> str:
-        """Cache an inspection result.
+        """Cache an inspection result and the instruction listing of its kernel.
 
         Args:
             binary_path: the cubin
             sha256: the cubin's digest
-            kernel_symbol: the inspected kernel, or None for the kernel list only
-            data: the ``inspection.json`` bytes
+            kernel_symbol: the inspected kernel, or None for the kernel catalog only
+            result_data: the result's bytes
+            instructions_data: the listing's bytes, or None for the kernel catalog only
 
         Returns:
-            the cache file's path
+            the result file's path
         """
         path = InspectionCache.path_of(
             binary_path=binary_path,
@@ -447,9 +439,15 @@ class InspectionCache:
             name=os.path.dirname(path),
             exist_ok=True,
         )
+        if instructions_data is not None:
+            with open(
+                file=InspectionCache.instructions_path_of(path),
+                mode="wb",
+            ) as instructions_file:
+                instructions_file.write(instructions_data)
         with open(
             file=path,
             mode="wb",
-        ) as cache_file:
-            cache_file.write(data)
+        ) as result_file:
+            result_file.write(result_data)
         return path

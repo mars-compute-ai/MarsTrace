@@ -127,7 +127,8 @@
               "pc_sampling",
               "interpretation",
               "comparison",
-              "kernel_metadata"
+              "kernel_metadata",
+              "workspace_file"
             ]
           },
           "name": {

@@ -61,10 +61,10 @@ class MarsComputeClient:
     # seconds a request may take before it is abandoned, and the one that moves a file
     TIMEOUT_SECONDS = 60
     TRANSFER_TIMEOUT_SECONDS = 600
-    # attempts of a submission whose answer never arrived, under the same idempotency key
+    # attempts of a submission or acceptance whose answer never arrived, under the same idempotency key
     SUBMIT_ATTEMPTS = 3
     RETRY_SECONDS = 2
-    INSPECTION_SCHEMA = "marscompute.xtrace.inspection-request.v1"
+    INSPECTION_ACCEPT_SCHEMA = "marscompute.xtrace.inspection-accept.v1"
     ARTIFACT_NAME_PATTERN = re.compile(r"[^A-Za-z0-9._-]")
     ARTIFACT_NAME_CHARACTERS_MAX = 256
     # headers a grant may not set on an upload
@@ -347,6 +347,31 @@ class MarsComputeClient:
             map_body=map_request,
         )
 
+    def _post_once(
+        self,
+        path: str,
+        map_body: dict[str, Any],
+        idempotency_key: str,
+    ) -> Any:
+        """POST a body that the platform admits once per key, again under the same key when no answer arrived."""
+        attempt = 0
+        while True:
+            attempt += 1
+            try:
+                return self._json(
+                    method="POST",
+                    path=path,
+                    map_body=map_body,
+                    map_header={"Idempotency-Key": idempotency_key},
+                )
+            except PlatformError as err:
+                if (
+                    err.status is not None
+                    or attempt >= MarsComputeClient.SUBMIT_ATTEMPTS
+                ):
+                    raise
+                time.sleep(MarsComputeClient.RETRY_SECONDS)
+
     def submit(
         self,
         map_request: dict[str, Any],
@@ -368,28 +393,15 @@ class MarsComputeClient:
         Raises:
             PlatformError: the platform refused the job, e.g. ``insufficient_credit``
         """
-        map_body = {
-            **map_request,
-            "quote_id": quote_id,
-            "idempotency_key": idempotency_key,
-        }
-        attempt = 0
-        while True:
-            attempt += 1
-            try:
-                return self._json(
-                    method="POST",
-                    path="/v1/xtrace/jobs",
-                    map_body=map_body,
-                    map_header={"Idempotency-Key": idempotency_key},
-                )
-            except PlatformError as err:
-                if (
-                    err.status is not None
-                    or attempt >= MarsComputeClient.SUBMIT_ATTEMPTS
-                ):
-                    raise
-                time.sleep(MarsComputeClient.RETRY_SECONDS)
+        return self._post_once(
+            path="/v1/xtrace/jobs",
+            map_body={
+                **map_request,
+                "quote_id": quote_id,
+                "idempotency_key": idempotency_key,
+            },
+            idempotency_key=idempotency_key,
+        )
 
     def get_job(self, job_id: str) -> dict[str, Any]:
         """One job's state, attempts, accounting and result manifest.
@@ -484,42 +496,194 @@ class MarsComputeClient:
             return gzip.decompress(data)
         return data
 
-    def create_inspection(
-        self,
-        cubin_artifact_id: str,
-        kernel_symbol: str | None,
-    ) -> dict[str, Any]:
-        """Ask for a cubin's SASS listing; inspections are free and rate-limited.
+    @staticmethod
+    def canonical_json(value: Any) -> str:
+        """A JSON value in the platform's canonical form: sorted keys, no whitespace.
 
         Args:
-            cubin_artifact_id: the verified cubin artifact
-            kernel_symbol: the kernel to list, or None for the cubin's kernels only
+            value: a JSON value whose numbers are integers
 
         Returns:
-            the inspection, queued
+            the canonical text
+
+        Raises:
+            PlatformError: the value holds a fractional number, which has no canonical form here
         """
-        map_body = {
-            "schema_version": MarsComputeClient.INSPECTION_SCHEMA,
-            "cubin_artifact_id": cubin_artifact_id,
-        }
-        if kernel_symbol is not None:
-            map_body["kernel_symbol"] = kernel_symbol
+        if isinstance(
+            value,  # obj
+            dict,   # class_or_tuple
+        ):
+            return "{" + ",".join(
+                f"{json.dumps(key, ensure_ascii=False)}:{MarsComputeClient.canonical_json(value[key])}"
+                for key in sorted(value)
+            ) + "}"
+        if isinstance(
+            value,         # obj
+            (list, tuple),  # class_or_tuple
+        ):
+            return "[" + ",".join(MarsComputeClient.canonical_json(item) for item in value) + "]"
+        if isinstance(
+            value,  # obj
+            float,  # class_or_tuple
+        ):
+            if not value.is_integer():
+                raise PlatformError(f"{value} has no canonical form; platform documents carry integers")
+            return str(int(value))
+        return json.dumps(
+            value,
+            ensure_ascii=False,
+        )
+
+    @staticmethod
+    def canonical_digest(value: Any) -> str:
+        """The SHA-256 of a JSON value's canonical form, as the platform binds quotes and results.
+
+        Args:
+            value: the JSON value
+
+        Returns:
+            the hex digest
+        """
+        return hashlib.sha256(MarsComputeClient.canonical_json(value).encode("utf-8")).hexdigest()
+
+    def inspection_capabilities(self) -> dict[str, Any]:
+        """The inspection profiles open to the account, with their limits and fixed fees.
+
+        Returns:
+            the capabilities, ``marscompute.xtrace.inspection-capabilities.v1``
+        """
+        return self._json(
+            method="GET",
+            path="/v1/xtrace/inspections/capabilities",
+        )
+
+    def inspection_estimate(self, map_request: dict[str, Any]) -> dict[str, Any]:
+        """Quote an inspection: its profile, limits and fixed fee.
+
+        Args:
+            map_request: the inspection request
+
+        Returns:
+            the quote, ``marscompute.xtrace.inspection-quote.v1``
+        """
         return self._json(
             method="POST",
+            path="/v1/xtrace/inspections/quotes",
+            map_body=map_request,
+        )
+
+    def inspection_submit(
+        self,
+        map_request: dict[str, Any],
+        map_quote: dict[str, Any],
+        idempotency_key: str,
+    ) -> dict[str, Any]:
+        """Accept an inspection quote; a retry with the same key never starts a second inspection.
+
+        Args:
+            map_request: the inspection request the quote was made for
+            map_quote: the quote, bound by its canonical digest
+            idempotency_key: the key that makes the acceptance happen once
+
+        Returns:
+            the inspection's status, ``marscompute.xtrace.inspection-status.v1``
+
+        Raises:
+            PlatformError: the platform refused, e.g. ``insufficient_credit``
+        """
+        return self._post_once(
             path="/v1/xtrace/inspections",
-            map_body=map_body,
+            map_body={
+                "schema_version": MarsComputeClient.INSPECTION_ACCEPT_SCHEMA,
+                "quote_id": map_quote["quote_id"],
+                "quote_sha256": MarsComputeClient.canonical_digest(map_quote),
+                "idempotency_key": idempotency_key,
+                "request": map_request,
+            },
+            idempotency_key=idempotency_key,
         )
 
     def get_inspection(self, inspection_id: str) -> dict[str, Any]:
-        """One inspection's state and, once it succeeded, its result's download grant.
+        """One inspection's execution, cleanup and accounting.
 
         Args:
             inspection_id: the inspection
 
         Returns:
-            the inspection
+            the status
         """
         return self._json(
             method="GET",
             path=f"/v1/xtrace/inspections/{urllib.parse.quote(inspection_id)}",
         )
+
+    def list_inspections(
+        self,
+        limit: int,
+        cursor: str | None = None,
+    ) -> dict[str, Any]:
+        """A page of the account's inspections, in inspection id order.
+
+        Args:
+            limit: how many to list, at most 100
+            cursor: the ``next_cursor`` of the previous page, or None for the first
+
+        Returns:
+            ``items`` and ``next_cursor``
+        """
+        map_query: dict[str, Any] = {"limit": limit}
+        if cursor is not None:
+            map_query["cursor"] = cursor
+        return self._json(
+            method="GET",
+            path=f"/v1/xtrace/inspections?{urllib.parse.urlencode(map_query)}",
+        )
+
+    def cancel_inspection(self, inspection_id: str) -> dict[str, Any]:
+        """Ask an inspection to stop.
+
+        Args:
+            inspection_id: the inspection
+
+        Returns:
+            the status after the request was recorded
+        """
+        return self._json(
+            method="POST",
+            path=f"/v1/xtrace/inspections/{urllib.parse.quote(inspection_id)}/cancel",
+            map_body={},
+        )
+
+    def inspection_result(self, inspection_id: str) -> dict[str, Any]:
+        """A completed inspection's result: the kernel catalog and the artifacts it names.
+
+        Args:
+            inspection_id: the inspection
+
+        Returns:
+            the result, ``marscompute.xtrace.inspection-result.v1``
+        """
+        return self._json(
+            method="GET",
+            path=f"/v1/xtrace/inspections/{urllib.parse.quote(inspection_id)}/result",
+        )
+
+    def inspection_downloads(
+        self,
+        inspection_id: str,
+        list_artifact_id: list[str],
+    ) -> list[dict[str, Any]]:
+        """Download grants for artifacts an inspection result names.
+
+        Args:
+            inspection_id: the inspection
+            list_artifact_id: the artifacts, 1 to 32 distinct ids
+
+        Returns:
+            one download grant per artifact
+        """
+        return self._json(
+            method="POST",
+            path=f"/v1/xtrace/inspections/{urllib.parse.quote(inspection_id)}/artifacts/downloads",
+            map_body={"artifact_ids": list(list_artifact_id)},
+        )["artifacts"]
