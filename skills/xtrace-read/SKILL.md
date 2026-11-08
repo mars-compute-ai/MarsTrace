@@ -1,14 +1,15 @@
 ---
 name: xtrace-read
-description: Read an Xtrace trace report of a CUDA kernel in the terminal with `xtrace show` — per-region statistics, per-thread timelines, pipeline bubbles, concurrency over time, outlier threads, the longest instances, and the region a user selected in the HTML panel. Use whenever there is an xtrace.json from a MarsCompute Xtrace job to analyse, or its summary.json and correctness.json to judge, or when the user pastes a selection token starting with gwtrace/1.
+description: Read an Xtrace trace report of a CUDA kernel in the terminal with `xtrace show` — per-region statistics, per-thread timelines, pipeline bubbles, concurrency over time, outlier threads, the longest instances, and the region a user selected in the HTML panel. Use whenever there is an xtrace.json from a MarsCompute Xtrace job to analyse, launch job or agent mode alike, or its summary.json, correctness.json or result-manifest.json to judge, or when the user pastes a selection token starting with gwtrace/1.
 ---
 
 # Reading an Xtrace report
 
 A job's results land in `xtrace-results/<job>/` (`xtrace fetch`): `xtrace.json` (the
 trace report), `summary.json` (quality, reason codes and headline figures),
-`correctness.json` (the output checks) and `result-manifest.json`. Read the report with
-`xtrace show`; it needs no GPU and no network.
+`correctness.json` (the output checks) and `result-manifest.json`. An agent-mode job
+returns `xtrace.json` and `result-manifest.json` only. Read the report with `xtrace show`;
+it needs no GPU and no network.
 
 ## 1. Use `xtrace show`, not a JSON parser
 
@@ -54,7 +55,10 @@ paired-region tables; read those from `--stats`.
 
 ## 2. Gate the trace first
 
-Read `summary.json` and `correctness.json` before any number of the report.
+Read `summary.json` and `correctness.json` before any number of the report; for an
+agent-mode job, read the same fields (`quality`, `reason_codes`, `correctness`) in
+`result-manifest.json`. An agent-mode job that ended without a trace is `unusable`: tell
+the user, and look at the intent, the workspace and the budget before submitting again.
 
 `quality` is `usable`, `partial` or `unusable`. `reason_codes` says why it is not
 `usable`; each code limits what the trace can support:
