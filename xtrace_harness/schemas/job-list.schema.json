@@ -1,0 +1,1099 @@
+{
+  "$id": "https://marscompute.ai/schemas/xtrace/job-list.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "items": {
+      "maxItems": 100,
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "job_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "pattern": "^[A-Za-z0-9_.:-]+$"
+          },
+          "optimization_session_id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "tenant_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "pattern": "^[A-Za-z0-9_.:-]+$"
+          },
+          "account_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "pattern": "^[A-Za-z0-9_.:-]+$"
+          },
+          "credential_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "pattern": "^[A-Za-z0-9_.:-]+$"
+          },
+          "quote_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "pattern": "^[A-Za-z0-9_.:-]+$"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "queued",
+              "preparing",
+              "waiting_capacity",
+              "provisioning",
+              "ready",
+              "running",
+              "publishing",
+              "retry_wait",
+              "cancel_requested",
+              "cancelled",
+              "succeeded",
+              "failed"
+            ]
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+          },
+          "deadline_at": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+          },
+          "cancel_requested_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+              },
+              { "type": "null" }
+            ]
+          },
+          "compute": {
+            "type": "object",
+            "properties": {
+              "provider": { "type": "string", "enum": ["nebius", "lambda"] },
+              "region": { "type": "string", "minLength": 1, "maxLength": 1000 },
+              "gpu_type": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1000
+              },
+              "gpu_count": { "type": "integer", "minimum": 0, "maximum": 64 },
+              "purchase_option": {
+                "type": "string",
+                "enum": ["spot", "on_demand"]
+              },
+              "fallback": { "type": "string", "enum": ["none", "quoted_only"] }
+            },
+            "required": [
+              "provider",
+              "region",
+              "gpu_type",
+              "gpu_count",
+              "purchase_option",
+              "fallback"
+            ],
+            "additionalProperties": false
+          },
+          "limits": {
+            "type": "object",
+            "properties": {
+              "max_total_cost_micro_usd": {
+                "type": "string",
+                "pattern": "^(0|[1-9][0-9]{0,29})$"
+              },
+              "max_active_gpu_seconds": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 86400
+              },
+              "max_wall_seconds": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 172800
+              },
+              "max_attempts": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 10
+              },
+              "max_trace_bytes": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 1099511627776
+              }
+            },
+            "required": [
+              "max_total_cost_micro_usd",
+              "max_active_gpu_seconds",
+              "max_wall_seconds",
+              "max_attempts",
+              "max_trace_bytes"
+            ],
+            "additionalProperties": false
+          },
+          "cleanup": {
+            "type": "object",
+            "properties": {
+              "state": {
+                "type": "string",
+                "enum": [
+                  "not_required",
+                  "pending",
+                  "reconciling",
+                  "confirmed",
+                  "manual_review"
+                ]
+              },
+              "provider_confirmed_at": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+                  },
+                  { "type": "null" }
+                ]
+              },
+              "resources": {
+                "maxItems": 100,
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "resource_id": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 200,
+                      "pattern": "^[A-Za-z0-9_.:-]+$"
+                    },
+                    "kind": { "type": "string", "enum": ["vm", "disk", "ip"] },
+                    "state": {
+                      "type": "string",
+                      "enum": ["present", "unknown", "deleted"]
+                    },
+                    "ownership_tag": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 200,
+                      "pattern": "^[A-Za-z0-9_.:-]+$"
+                    }
+                  },
+                  "required": ["resource_id", "kind", "state", "ownership_tag"],
+                  "additionalProperties": false
+                }
+              }
+            },
+            "required": ["state", "provider_confirmed_at", "resources"],
+            "additionalProperties": false
+          },
+          "accounting": {
+            "type": "object",
+            "properties": {
+              "state": {
+                "type": "string",
+                "enum": [
+                  "held",
+                  "metering",
+                  "reconciling",
+                  "settled",
+                  "manual_review"
+                ]
+              },
+              "hold_id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200,
+                "pattern": "^[A-Za-z0-9_.:-]+$"
+              },
+              "reserved_micro_usd": {
+                "type": "string",
+                "pattern": "^(0|[1-9][0-9]{0,29})$"
+              },
+              "settled_micro_usd": {
+                "type": "string",
+                "pattern": "^(0|[1-9][0-9]{0,29})$"
+              },
+              "producer_closed": { "type": "boolean" }
+            },
+            "required": [
+              "state",
+              "hold_id",
+              "reserved_micro_usd",
+              "settled_micro_usd",
+              "producer_closed"
+            ],
+            "additionalProperties": false
+          },
+          "result_manifest": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "schema_version": {
+                    "type": "string",
+                    "const": "marscompute.xtrace.result.v1"
+                  },
+                  "kind": {
+                    "default": "trace",
+                    "type": "string",
+                    "enum": ["trace", "comparison"]
+                  },
+                  "diagnostic_stages": {
+                    "anyOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "kernel": {
+                            "minItems": 1,
+                            "maxItems": 3,
+                            "type": "array",
+                            "items": {
+                              "type": "string",
+                              "enum": ["xtrace", "range_profile", "pc_sampling"]
+                            }
+                          }
+                        },
+                        "required": ["kernel"],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "baseline": {
+                            "maxItems": 3,
+                            "type": "array",
+                            "items": {
+                              "type": "string",
+                              "enum": ["xtrace", "range_profile", "pc_sampling"]
+                            }
+                          },
+                          "candidate": {
+                            "maxItems": 3,
+                            "type": "array",
+                            "items": {
+                              "type": "string",
+                              "enum": ["xtrace", "range_profile", "pc_sampling"]
+                            }
+                          }
+                        },
+                        "required": ["baseline", "candidate"],
+                        "additionalProperties": false
+                      }
+                    ]
+                  },
+                  "job_id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200,
+                    "pattern": "^[A-Za-z0-9_.:-]+$"
+                  },
+                  "attempt_id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200,
+                    "pattern": "^[A-Za-z0-9_.:-]+$"
+                  },
+                  "epoch": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "publication_version": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "published_at": {
+                    "type": "string",
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+                  },
+                  "status": {
+                    "type": "string",
+                    "enum": ["complete", "partial"]
+                  },
+                  "evidence": {
+                    "type": "string",
+                    "enum": ["gpu", "synthetic"]
+                  },
+                  "quality": {
+                    "type": "string",
+                    "enum": ["usable", "partial", "unusable"]
+                  },
+                  "reason_codes": {
+                    "maxItems": 100,
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 200,
+                      "pattern": "^[A-Za-z0-9_.:-]+$"
+                    }
+                  },
+                  "correctness": {
+                    "type": "string",
+                    "enum": ["passed", "failed", "not_verified"]
+                  },
+                  "files": {
+                    "minItems": 1,
+                    "maxItems": 32,
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "artifact_id": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 200,
+                          "pattern": "^[A-Za-z0-9_.:-]+$"
+                        },
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "cubin",
+                            "safetensors",
+                            "launch_manifest",
+                            "source",
+                            "reference",
+                            "xtrace",
+                            "summary",
+                            "provenance",
+                            "trace_plan",
+                            "baseline",
+                            "correctness",
+                            "runner_log",
+                            "range_profile",
+                            "pc_sampling",
+                            "interpretation",
+                            "comparison",
+                            "kernel_metadata"
+                          ]
+                        },
+                        "name": {
+                          "type": "string",
+                          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,255}$"
+                        },
+                        "kernel_role": {
+                          "type": "string",
+                          "enum": ["baseline", "candidate"]
+                        },
+                        "sha256": {
+                          "type": "string",
+                          "pattern": "^[a-f0-9]{64}$"
+                        },
+                        "size_bytes": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "content_type": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 1000
+                        },
+                        "encoding": {
+                          "type": "string",
+                          "enum": ["identity", "gzip"]
+                        },
+                        "uncompressed_sha256": {
+                          "type": "string",
+                          "pattern": "^[a-f0-9]{64}$"
+                        },
+                        "uncompressed_size_bytes": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        }
+                      },
+                      "required": [
+                        "artifact_id",
+                        "kind",
+                        "sha256",
+                        "size_bytes",
+                        "content_type",
+                        "encoding"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "environment": {
+                    "type": "object",
+                    "properties": {
+                      "gpu_type": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 1000
+                      },
+                      "architecture": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 1000
+                      },
+                      "image_digest": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 1000
+                      },
+                      "driver_version": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 1000
+                      },
+                      "cuda_version": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 1000
+                      },
+                      "executor_version": {
+                        "type": "string",
+                        "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(\\+[0-9a-f]{7,40})?$"
+                      },
+                      "runner_version": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 1000
+                      },
+                      "clock_type": {
+                        "type": "string",
+                        "enum": ["sm_cycles", "globaltimer_ns", "unknown"]
+                      },
+                      "record_granularity": {
+                        "type": "string",
+                        "enum": ["thread", "warp"]
+                      },
+                      "observer_effect": {
+                        "type": "string",
+                        "enum": ["measured", "unknown"]
+                      }
+                    },
+                    "required": [
+                      "gpu_type",
+                      "architecture",
+                      "image_digest",
+                      "driver_version",
+                      "cuda_version",
+                      "executor_version",
+                      "runner_version",
+                      "clock_type",
+                      "record_granularity",
+                      "observer_effect"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "required": [
+                  "schema_version",
+                  "kind",
+                  "job_id",
+                  "attempt_id",
+                  "epoch",
+                  "publication_version",
+                  "published_at",
+                  "status",
+                  "evidence",
+                  "quality",
+                  "reason_codes",
+                  "correctness",
+                  "files",
+                  "environment"
+                ],
+                "additionalProperties": false
+              },
+              { "type": "null" }
+            ]
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "code": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200,
+                    "pattern": "^[A-Za-z0-9_.:-]+$"
+                  },
+                  "message": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 2000
+                  },
+                  "classification": {
+                    "type": "string",
+                    "enum": [
+                      "invalid_input",
+                      "no_capacity",
+                      "spot_interruption",
+                      "platform_failure",
+                      "customer_fault",
+                      "deadline",
+                      "cancelled"
+                    ]
+                  },
+                  "retryable": { "type": "boolean" }
+                },
+                "required": ["code", "message", "classification", "retryable"],
+                "additionalProperties": false
+              },
+              { "type": "null" }
+            ]
+          },
+          "summary": {
+            "type": "object",
+            "properties": {
+              "attempt_count": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 10
+              },
+              "elapsed_gpu_milliseconds": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "accepted_quote": {
+                "type": "object",
+                "properties": {
+                  "quote_id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200,
+                    "pattern": "^[A-Za-z0-9_.:-]+$"
+                  },
+                  "optimization_session_id": {
+                    "type": "string",
+                    "format": "uuid",
+                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                  },
+                  "request_hash": {
+                    "type": "string",
+                    "pattern": "^[a-f0-9]{64}$"
+                  },
+                  "input_digests": {
+                    "maxItems": 32,
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "artifact_id": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 200,
+                          "pattern": "^[A-Za-z0-9_.:-]+$"
+                        },
+                        "sha256": {
+                          "type": "string",
+                          "pattern": "^[a-f0-9]{64}$"
+                        }
+                      },
+                      "required": ["artifact_id", "sha256"],
+                      "additionalProperties": false
+                    }
+                  },
+                  "compute": {
+                    "type": "object",
+                    "properties": {
+                      "provider": {
+                        "type": "string",
+                        "enum": ["nebius", "lambda"]
+                      },
+                      "region": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 1000
+                      },
+                      "gpu_type": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 1000
+                      },
+                      "gpu_count": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 64
+                      },
+                      "purchase_option": {
+                        "type": "string",
+                        "enum": ["spot", "on_demand"]
+                      },
+                      "fallback": {
+                        "type": "string",
+                        "enum": ["none", "quoted_only"]
+                      }
+                    },
+                    "required": [
+                      "provider",
+                      "region",
+                      "gpu_type",
+                      "gpu_count",
+                      "purchase_option",
+                      "fallback"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "permitted_fallbacks": {
+                    "maxItems": 10,
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "provider": {
+                          "type": "string",
+                          "enum": ["nebius", "lambda"]
+                        },
+                        "region": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 1000
+                        },
+                        "gpu_type": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 1000
+                        },
+                        "gpu_count": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 64
+                        },
+                        "purchase_option": {
+                          "type": "string",
+                          "enum": ["spot", "on_demand"]
+                        },
+                        "fallback": {
+                          "type": "string",
+                          "enum": ["none", "quoted_only"]
+                        }
+                      },
+                      "required": [
+                        "provider",
+                        "region",
+                        "gpu_type",
+                        "gpu_count",
+                        "purchase_option",
+                        "fallback"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "limits": {
+                    "type": "object",
+                    "properties": {
+                      "max_total_cost_micro_usd": {
+                        "type": "string",
+                        "pattern": "^(0|[1-9][0-9]{0,29})$"
+                      },
+                      "max_active_gpu_seconds": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 86400
+                      },
+                      "max_wall_seconds": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 172800
+                      },
+                      "max_attempts": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 10
+                      },
+                      "max_trace_bytes": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 1099511627776
+                      }
+                    },
+                    "required": [
+                      "max_total_cost_micro_usd",
+                      "max_active_gpu_seconds",
+                      "max_wall_seconds",
+                      "max_attempts",
+                      "max_trace_bytes"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "rate_snapshot": {
+                    "type": "object",
+                    "properties": {
+                      "rate_version": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 200,
+                        "pattern": "^[A-Za-z0-9_.:-]+$"
+                      },
+                      "sku_id": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 200,
+                        "pattern": "^[A-Za-z0-9_.:-]+$"
+                      },
+                      "image_digest": {
+                        "type": "string",
+                        "pattern": "^sha256:[a-f0-9]{64}$"
+                      },
+                      "gpu_micro_usd_per_hour": {
+                        "type": "string",
+                        "pattern": "^(0|[1-9][0-9]{0,29})$"
+                      },
+                      "failure_policy_version": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 200,
+                        "pattern": "^[A-Za-z0-9_.:-]+$"
+                      },
+                      "gpu_time_policy": {
+                        "type": "string",
+                        "const": "authorized_execution_only"
+                      },
+                      "model_rates": {
+                        "maxItems": 20,
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "model": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 200,
+                              "pattern": "^[A-Za-z0-9_.:-]+$"
+                            },
+                            "price_snapshot_id": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 200,
+                              "pattern": "^[A-Za-z0-9_.:-]+$"
+                            },
+                            "input_micro_usd_per_million": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,29})$"
+                            },
+                            "cached_input_micro_usd_per_million": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,29})$"
+                            },
+                            "output_micro_usd_per_million": {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]{0,29})$"
+                            }
+                          },
+                          "required": [
+                            "model",
+                            "price_snapshot_id",
+                            "input_micro_usd_per_million",
+                            "cached_input_micro_usd_per_million",
+                            "output_micro_usd_per_million"
+                          ],
+                          "additionalProperties": false
+                        }
+                      }
+                    },
+                    "required": [
+                      "rate_version",
+                      "sku_id",
+                      "image_digest",
+                      "gpu_micro_usd_per_hour",
+                      "failure_policy_version",
+                      "gpu_time_policy",
+                      "model_rates"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "planner_data_path": {
+                    "type": "object",
+                    "properties": {
+                      "schema_version": {
+                        "type": "string",
+                        "const": "marscompute.xtrace.planner-data-path.v1"
+                      },
+                      "policy_id": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 200,
+                        "pattern": "^[A-Za-z0-9_.:-]+$"
+                      },
+                      "policy_revision": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 200,
+                        "pattern": "^[A-Za-z0-9_.:-]+$"
+                      },
+                      "policy_sha256": {
+                        "type": "string",
+                        "pattern": "^[a-f0-9]{64}$"
+                      },
+                      "model": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 200,
+                        "pattern": "^[A-Za-z0-9_.:-]+$"
+                      },
+                      "disclosure_classes": {
+                        "maxItems": 7,
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "enum": [
+                            "user_prompt",
+                            "kernel_identity",
+                            "launch_geometry",
+                            "instruction_and_register_metadata",
+                            "planning_limits",
+                            "artifact_identifiers_and_digests",
+                            "comparison_layout_correctness_and_timing"
+                          ]
+                        }
+                      },
+                      "primary_path": {
+                        "type": "object",
+                        "properties": {
+                          "path_id": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 200,
+                            "pattern": "^[A-Za-z0-9_.:-]+$"
+                          },
+                          "provider_id": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 200,
+                            "pattern": "^[A-Za-z0-9_.:-]+$"
+                          },
+                          "provider_model_id": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 200,
+                            "pattern": "^[A-Za-z0-9_.:-]+$"
+                          },
+                          "processing_regions": {
+                            "minItems": 1,
+                            "maxItems": 20,
+                            "type": "array",
+                            "items": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 200,
+                              "pattern": "^[A-Za-z0-9_.:-]+$"
+                            }
+                          },
+                          "retention": {
+                            "type": "object",
+                            "properties": {
+                              "policy_id": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 200,
+                                "pattern": "^[A-Za-z0-9_.:-]+$"
+                              },
+                              "revision": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 200,
+                                "pattern": "^[A-Za-z0-9_.:-]+$"
+                              },
+                              "disclosure": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 4000
+                              }
+                            },
+                            "required": ["policy_id", "revision", "disclosure"],
+                            "additionalProperties": false
+                          },
+                          "transport_binding_sha256": {
+                            "type": "string",
+                            "pattern": "^[a-f0-9]{64}$"
+                          }
+                        },
+                        "required": [
+                          "path_id",
+                          "provider_id",
+                          "provider_model_id",
+                          "processing_regions",
+                          "retention",
+                          "transport_binding_sha256"
+                        ],
+                        "additionalProperties": false
+                      },
+                      "fallback_paths": {
+                        "maxItems": 10,
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "path_id": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 200,
+                              "pattern": "^[A-Za-z0-9_.:-]+$"
+                            },
+                            "provider_id": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 200,
+                              "pattern": "^[A-Za-z0-9_.:-]+$"
+                            },
+                            "provider_model_id": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 200,
+                              "pattern": "^[A-Za-z0-9_.:-]+$"
+                            },
+                            "processing_regions": {
+                              "minItems": 1,
+                              "maxItems": 20,
+                              "type": "array",
+                              "items": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 200,
+                                "pattern": "^[A-Za-z0-9_.:-]+$"
+                              }
+                            },
+                            "retention": {
+                              "type": "object",
+                              "properties": {
+                                "policy_id": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 200,
+                                  "pattern": "^[A-Za-z0-9_.:-]+$"
+                                },
+                                "revision": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 200,
+                                  "pattern": "^[A-Za-z0-9_.:-]+$"
+                                },
+                                "disclosure": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 4000
+                                }
+                              },
+                              "required": [
+                                "policy_id",
+                                "revision",
+                                "disclosure"
+                              ],
+                              "additionalProperties": false
+                            },
+                            "transport_binding_sha256": {
+                              "type": "string",
+                              "pattern": "^[a-f0-9]{64}$"
+                            }
+                          },
+                          "required": [
+                            "path_id",
+                            "provider_id",
+                            "provider_model_id",
+                            "processing_regions",
+                            "retention",
+                            "transport_binding_sha256"
+                          ],
+                          "additionalProperties": false
+                        }
+                      }
+                    },
+                    "required": [
+                      "schema_version",
+                      "policy_id",
+                      "policy_revision",
+                      "policy_sha256",
+                      "model",
+                      "disclosure_classes",
+                      "primary_path",
+                      "fallback_paths"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "created_at": {
+                    "type": "string",
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+                  },
+                  "expires_at": {
+                    "type": "string",
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+                  }
+                },
+                "required": [
+                  "quote_id",
+                  "request_hash",
+                  "input_digests",
+                  "compute",
+                  "permitted_fallbacks",
+                  "limits",
+                  "rate_snapshot",
+                  "created_at",
+                  "expires_at"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "attempt_count",
+              "elapsed_gpu_milliseconds",
+              "accepted_quote"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "job_id",
+          "tenant_id",
+          "account_id",
+          "credential_id",
+          "quote_id",
+          "state",
+          "version",
+          "created_at",
+          "updated_at",
+          "deadline_at",
+          "cancel_requested_at",
+          "compute",
+          "limits",
+          "cleanup",
+          "accounting",
+          "result_manifest",
+          "error",
+          "summary"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "next_cursor": {
+      "anyOf": [
+        { "type": "string", "minLength": 1, "maxLength": 512 },
+        { "type": "null" }
+      ]
+    }
+  },
+  "required": ["items", "next_cursor"],
+  "additionalProperties": false
+}

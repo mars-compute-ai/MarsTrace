@@ -1,0 +1,219 @@
+{
+  "$id": "https://marscompute.ai/schemas/xtrace/capabilities.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "marscompute.xtrace.capabilities.v1"
+    },
+    "enabled": { "type": "boolean" },
+    "compute": {
+      "maxItems": 1000,
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "compute": {
+            "type": "object",
+            "properties": {
+              "provider": { "type": "string", "enum": ["nebius", "lambda"] },
+              "region": { "type": "string", "minLength": 1, "maxLength": 1000 },
+              "gpu_type": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1000
+              },
+              "gpu_count": { "type": "integer", "minimum": 0, "maximum": 64 },
+              "purchase_option": {
+                "type": "string",
+                "enum": ["spot", "on_demand"]
+              },
+              "fallback": { "type": "string", "enum": ["none", "quoted_only"] }
+            },
+            "required": [
+              "provider",
+              "region",
+              "gpu_type",
+              "gpu_count",
+              "purchase_option",
+              "fallback"
+            ],
+            "additionalProperties": false
+          },
+          "environment_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "pattern": "^[A-Za-z0-9_.:-]+$"
+          },
+          "image_digest": {
+            "type": "string",
+            "pattern": "^sha256:[a-f0-9]{64}$"
+          },
+          "architecture": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1000
+          },
+          "architectures": {
+            "type": "object",
+            "properties": {
+              "xtrace": {
+                "maxItems": 64,
+                "type": "array",
+                "items": { "type": "string", "pattern": "^sm_[0-9]+[af]?$" }
+              },
+              "range_profile": {
+                "maxItems": 64,
+                "type": "array",
+                "items": { "type": "string", "pattern": "^sm_[0-9]+[af]?$" }
+              },
+              "pc_sampling": {
+                "maxItems": 64,
+                "type": "array",
+                "items": { "type": "string", "pattern": "^sm_[0-9]+[af]?$" }
+              },
+              "comparison": {
+                "maxItems": 64,
+                "type": "array",
+                "items": { "type": "string", "pattern": "^sm_[0-9]+[af]?$" }
+              }
+            },
+            "required": [
+              "xtrace",
+              "range_profile",
+              "pc_sampling",
+              "comparison"
+            ],
+            "additionalProperties": false
+          },
+          "gpu_micro_usd_per_hour": {
+            "type": "string",
+            "pattern": "^(0|[1-9][0-9]{0,29})$"
+          },
+          "qualified": { "type": "boolean", "const": true },
+          "bundle_kinds": {
+            "minItems": 1,
+            "maxItems": 3,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": ["cubin_launch", "source_recipe", "comparison"]
+            }
+          },
+          "build_templates": {
+            "maxItems": 100,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200,
+              "pattern": "^[A-Za-z0-9_.:-]+$"
+            }
+          },
+          "stages": {
+            "minItems": 1,
+            "maxItems": 3,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": ["xtrace", "range_profile", "pc_sampling"]
+            }
+          }
+        },
+        "required": [
+          "compute",
+          "environment_id",
+          "image_digest",
+          "architecture",
+          "architectures",
+          "gpu_micro_usd_per_hour",
+          "qualified",
+          "bundle_kinds",
+          "build_templates",
+          "stages"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "models": {
+      "maxItems": 100,
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 200,
+        "pattern": "^[A-Za-z0-9_.:-]+$"
+      }
+    },
+    "max_upload_bytes": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "max_query_records": { "type": "integer", "minimum": 0, "maximum": 1000 },
+    "retention_seconds": {
+      "type": "object",
+      "properties": {
+        "inputs": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "results": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "staging": { "type": "integer", "minimum": 0, "maximum": 86400 }
+      },
+      "required": ["inputs", "results", "staging"],
+      "additionalProperties": false
+    },
+    "limits": {
+      "type": "object",
+      "properties": {
+        "max_total_cost_micro_usd": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,29})$"
+        },
+        "max_active_gpu_seconds": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 86400
+        },
+        "max_wall_seconds": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 172800
+        },
+        "max_attempts": { "type": "integer", "minimum": 0, "maximum": 10 },
+        "max_trace_bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1099511627776
+        }
+      },
+      "required": [
+        "max_total_cost_micro_usd",
+        "max_active_gpu_seconds",
+        "max_wall_seconds",
+        "max_attempts",
+        "max_trace_bytes"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "schema_version",
+    "enabled",
+    "compute",
+    "models",
+    "max_upload_bytes",
+    "max_query_records",
+    "retention_seconds",
+    "limits"
+  ],
+  "additionalProperties": false
+}

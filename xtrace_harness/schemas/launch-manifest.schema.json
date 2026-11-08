@@ -1,0 +1,566 @@
+{
+  "$id": "https://marscompute.ai/schemas/xtrace/launch-manifest.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "marscompute.kernel-launch.v1"
+    },
+    "target": {
+      "type": "object",
+      "properties": {
+        "architecture": { "type": "string", "pattern": "^sm_[0-9]+[af]?$" },
+        "kernel_symbol": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        },
+        "grid": {
+          "type": "array",
+          "prefixItems": [
+            { "type": "integer", "exclusiveMinimum": 0, "maximum": 2147483647 },
+            { "type": "integer", "exclusiveMinimum": 0, "maximum": 65535 },
+            { "type": "integer", "exclusiveMinimum": 0, "maximum": 65535 }
+          ]
+        },
+        "block": {
+          "type": "array",
+          "prefixItems": [
+            { "type": "integer", "exclusiveMinimum": 0, "maximum": 1024 },
+            { "type": "integer", "exclusiveMinimum": 0, "maximum": 1024 },
+            { "type": "integer", "exclusiveMinimum": 0, "maximum": 64 }
+          ]
+        },
+        "cluster": {
+          "type": "array",
+          "prefixItems": [
+            {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            }
+          ]
+        },
+        "dynamic_shared_memory_bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 233472
+        },
+        "launch_kind": { "type": "string", "enum": ["ordinary", "cluster"] }
+      },
+      "required": [
+        "architecture",
+        "kernel_symbol",
+        "grid",
+        "block",
+        "dynamic_shared_memory_bytes"
+      ],
+      "additionalProperties": false
+    },
+    "arguments": {
+      "minItems": 1,
+      "maxItems": 128,
+      "type": "array",
+      "items": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "kind": { "type": "string", "const": "tensor" },
+              "tensor_key": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "index": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "access": {
+                "type": "string",
+                "enum": ["read", "write", "read_write"]
+              },
+              "byte_offset": {
+                "default": 0,
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991,
+                "multipleOf": 16
+              },
+              "dtype": {
+                "type": "string",
+                "enum": [
+                  "bool",
+                  "uint8",
+                  "int8",
+                  "uint16",
+                  "int16",
+                  "float16",
+                  "bfloat16",
+                  "uint32",
+                  "int32",
+                  "float32",
+                  "uint64",
+                  "int64",
+                  "float64",
+                  "float8_e4m3fn",
+                  "float8_e5m2"
+                ]
+              },
+              "shape": {
+                "maxItems": 8,
+                "type": "array",
+                "items": {
+                  "type": "integer",
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991
+                }
+              },
+              "layout": { "type": "string", "const": "contiguous" }
+            },
+            "required": ["kind", "tensor_key", "index", "access"],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": { "type": "string", "const": "buffer" },
+              "buffer_id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "index": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "access": {
+                "type": "string",
+                "enum": ["read", "write", "read_write"]
+              },
+              "byte_offset": {
+                "default": 0,
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991,
+                "multipleOf": 16
+              },
+              "dtype": {
+                "type": "string",
+                "enum": [
+                  "bool",
+                  "uint8",
+                  "int8",
+                  "uint16",
+                  "int16",
+                  "float16",
+                  "bfloat16",
+                  "uint32",
+                  "int32",
+                  "float32",
+                  "uint64",
+                  "int64",
+                  "float64",
+                  "float8_e4m3fn",
+                  "float8_e5m2"
+                ]
+              },
+              "shape": {
+                "maxItems": 8,
+                "type": "array",
+                "items": {
+                  "type": "integer",
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991
+                }
+              },
+              "layout": { "type": "string", "const": "contiguous" }
+            },
+            "required": ["kind", "buffer_id", "index", "access"],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": { "type": "string", "const": "scalar" },
+              "index": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "abi_type": {
+                "type": "string",
+                "enum": [
+                  "int8",
+                  "uint8",
+                  "int16",
+                  "uint16",
+                  "int32",
+                  "uint32",
+                  "int64",
+                  "uint64",
+                  "float32",
+                  "float64"
+                ]
+              },
+              "value": {
+                "anyOf": [
+                  { "type": "string", "maxLength": 64 },
+                  { "type": "number" }
+                ]
+              }
+            },
+            "required": ["kind", "index", "abi_type", "value"],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": { "type": "string", "const": "tensor_map" },
+              "index": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "buffer_id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "tensor_key": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "byte_offset": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991,
+                "multipleOf": 16
+              },
+              "data_type": {
+                "type": "string",
+                "enum": [
+                  "uint8",
+                  "uint16",
+                  "uint32",
+                  "int32",
+                  "uint64",
+                  "int64",
+                  "float16",
+                  "float32",
+                  "float64",
+                  "bfloat16",
+                  "float32_ftz",
+                  "tfloat32",
+                  "tfloat32_ftz"
+                ]
+              },
+              "global_dims": {
+                "minItems": 1,
+                "maxItems": 5,
+                "type": "array",
+                "items": {
+                  "type": "integer",
+                  "exclusiveMinimum": 0,
+                  "maximum": 4294967296
+                }
+              },
+              "global_strides_bytes": {
+                "maxItems": 4,
+                "type": "array",
+                "items": {
+                  "type": "integer",
+                  "exclusiveMinimum": 0,
+                  "maximum": 1099511627776,
+                  "multipleOf": 16
+                }
+              },
+              "box_dims": {
+                "minItems": 1,
+                "maxItems": 5,
+                "type": "array",
+                "items": {
+                  "type": "integer",
+                  "exclusiveMinimum": 0,
+                  "maximum": 256
+                }
+              },
+              "element_strides": {
+                "minItems": 1,
+                "maxItems": 5,
+                "type": "array",
+                "items": {
+                  "type": "integer",
+                  "exclusiveMinimum": 0,
+                  "maximum": 8
+                }
+              },
+              "interleave": {
+                "type": "string",
+                "enum": ["none", "16b", "32b"]
+              },
+              "swizzle": {
+                "type": "string",
+                "enum": ["none", "32b", "64b", "128b"]
+              },
+              "l2_promotion": {
+                "type": "string",
+                "enum": ["none", "64b", "128b", "256b"]
+              },
+              "oob_fill": { "type": "string", "enum": ["none", "nan"] }
+            },
+            "required": [
+              "kind",
+              "index",
+              "byte_offset",
+              "data_type",
+              "global_dims",
+              "global_strides_bytes",
+              "box_dims",
+              "interleave",
+              "swizzle",
+              "l2_promotion",
+              "oob_fill"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": { "type": "string", "const": "bytes" },
+              "index": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "hex": {
+                "type": "string",
+                "minLength": 2,
+                "maxLength": 65536,
+                "pattern": "^(?:[0-9a-fA-F]{2})+$"
+              },
+              "relocations": {
+                "maxItems": 4096,
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "offset": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991,
+                      "multipleOf": 8
+                    },
+                    "buffer_id": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 256
+                    },
+                    "tensor_key": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 256
+                    },
+                    "byte_offset": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": ["offset", "byte_offset"],
+                  "additionalProperties": false
+                }
+              }
+            },
+            "required": ["kind", "index", "hex", "relocations"],
+            "additionalProperties": false
+          }
+        ]
+      }
+    },
+    "buffers": {
+      "maxItems": 64,
+      "type": "array",
+      "items": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "id": { "type": "string", "minLength": 1, "maxLength": 256 },
+              "dtype": {
+                "type": "string",
+                "enum": [
+                  "bool",
+                  "uint8",
+                  "int8",
+                  "uint16",
+                  "int16",
+                  "float16",
+                  "bfloat16",
+                  "uint32",
+                  "int32",
+                  "float32",
+                  "uint64",
+                  "int64",
+                  "float64",
+                  "float8_e4m3fn",
+                  "float8_e5m2"
+                ]
+              },
+              "shape": {
+                "maxItems": 8,
+                "type": "array",
+                "items": {
+                  "type": "integer",
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991
+                }
+              },
+              "init": { "type": "string", "enum": ["zeros", "ones"] }
+            },
+            "required": ["id", "dtype", "shape", "init"],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "id": { "type": "string", "minLength": 1, "maxLength": 256 },
+              "dtype": {
+                "type": "string",
+                "enum": [
+                  "bool",
+                  "uint8",
+                  "int8",
+                  "uint16",
+                  "int16",
+                  "float16",
+                  "bfloat16",
+                  "uint32",
+                  "int32",
+                  "float32",
+                  "uint64",
+                  "int64",
+                  "float64",
+                  "float8_e4m3fn",
+                  "float8_e5m2"
+                ]
+              },
+              "shape": {
+                "maxItems": 8,
+                "type": "array",
+                "items": {
+                  "type": "integer",
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991
+                }
+              },
+              "init": { "type": "string", "const": "random" },
+              "seed": { "type": "integer", "minimum": 0, "maximum": 4294967295 }
+            },
+            "required": ["id", "dtype", "shape", "init", "seed"],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "id": { "type": "string", "minLength": 1, "maxLength": 256 },
+              "dtype": {
+                "type": "string",
+                "enum": [
+                  "bool",
+                  "uint8",
+                  "int8",
+                  "uint16",
+                  "int16",
+                  "float16",
+                  "bfloat16",
+                  "uint32",
+                  "int32",
+                  "float32",
+                  "uint64",
+                  "int64",
+                  "float64",
+                  "float8_e4m3fn",
+                  "float8_e5m2"
+                ]
+              },
+              "shape": {
+                "maxItems": 8,
+                "type": "array",
+                "items": {
+                  "type": "integer",
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991
+                }
+              },
+              "init": { "type": "string", "const": "tensor" },
+              "tensor_key": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              }
+            },
+            "required": ["id", "dtype", "shape", "init", "tensor_key"],
+            "additionalProperties": false
+          }
+        ]
+      }
+    },
+    "reset": {
+      "type": "object",
+      "properties": {
+        "policy": {
+          "type": "string",
+          "const": "restore_pristine_before_every_invocation"
+        }
+      },
+      "required": ["policy"],
+      "additionalProperties": false
+    },
+    "validation": {
+      "type": "object",
+      "properties": {
+        "output_key": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "reference_key": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "reference_artifact_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "atol": { "type": "number", "minimum": 0, "maximum": 1 },
+        "rtol": { "type": "number", "minimum": 0, "maximum": 1 }
+      },
+      "required": ["output_key", "atol", "rtol"],
+      "additionalProperties": false
+    },
+    "reproduction": {
+      "type": "object",
+      "properties": {
+        "warmup": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "repeats": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 1000
+        },
+        "seed": { "type": "integer", "minimum": 0, "maximum": 4294967295 }
+      },
+      "additionalProperties": false
+    }
+  },
+  "required": ["schema_version", "target", "arguments", "buffers", "reset"],
+  "additionalProperties": false
+}
