@@ -6,7 +6,7 @@ import sys
 import tempfile
 import unittest
 from typing import Any
-from fake_control_plane import EXAMPLE_DIRECTORY, TOP_UP_URL, FakeServer
+from fake_control_plane import EXAMPLE_DIRECTORY, TOP_UP_URL, FakeServer, agent_job
 
 REPOSITORY = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -146,6 +146,18 @@ class McpStdioTest(unittest.TestCase):
         self.assertFalse(shown["isError"])
         self.assertIn("mainloop", shown["content"][0]["text"])
         self.assertEqual(self.call("xtrace_jobs")["structuredContent"]["items"][0]["job_id"], job_id)
+
+    def test_agent_mode_through_mcp(self) -> None:
+        self.initialize()
+        directory = os.path.join(self.directory, "agent")
+        os.makedirs(directory)
+        agent_job(directory)
+        self.assertEqual(self.call("xtrace_hardware")["structuredContent"]["agent_models"], ["claude-opus-5-5"])
+        quote = self.call("xtrace_estimate", directory=directory)["structuredContent"]
+        self.assertEqual((quote["hardware"], quote["job_fee_usd"]), ("h200-cuda12.9", "$0.500000"))
+        submitted = self.call("xtrace_submit", directory=directory, accept_max_cost_usd=30)
+        self.assertFalse(submitted["isError"])
+        self.assertEqual(self.fake.state.map_inspection, {})
 
     def test_platform_refusal_is_a_tool_error(self) -> None:
         self.initialize()

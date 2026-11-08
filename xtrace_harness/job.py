@@ -1,15 +1,19 @@
+import abc
 import decimal
+import gzip
+import io
 import json
 import math
 import os
 import random
 import re
+import tarfile
 import tomllib
 from dataclasses import dataclass, field
 from typing import Any
 from xtrace_harness.binary import KernelBinary
 from xtrace_harness.error import ManifestError
-from xtrace_harness.listing import KernelListing
+from xtrace_harness.listing import InspectionCache, KernelListing
 from xtrace_harness.tensors import TensorEntry, TensorFile
 
 
@@ -1984,61 +1988,42 @@ class JobArtifact:
             return artifact_file.read()
 
 
-@dataclass
-class JobManifest:
-    """A job directory's ``xtrace.toml``, checked, and its translation into the platform API."""
+@dataclass(kw_only=True)
+class JobManifest(abc.ABC):
+    """A job directory's ``xtrace.toml``, checked, and its translation into the platform API.
+
+    A job either launches one kernel of a cubin under a trace plan (``LaunchJobManifest``),
+    or hands a workspace to an agent on the GPU host (``AgentJobManifest``).
+
+    Args:
+        directory: the job directory
+        hardware: the environment id the job runs on
+        intent: what the trace should answer, the job's prompt
+        limits: the most the job may cost and use
+    """
 
     FILE_NAME = "xtrace.toml"
     SUBMIT_SCHEMA = "marscompute.xtrace.submit.v1"
-    LAUNCH_SCHEMA = "marscompute.kernel-launch"
-    # the architectures a launch manifest targets
-    LIST_LAUNCH_ARCHITECTURE = (
-        "sm_80",
-        "sm_86",
-        "sm_89",
-        "sm_90",
-        "sm_90a",
-        "sm_100",
-        "sm_100a",
-        "sm_103",
-        "sm_103a",
-    )
-    PREPARED_TENSORS_NAME = "tensors.safetensors"
-    RESET_POLICY = "restore_pristine_before_every_invocation"
     PROMPT_CHARACTERS_MAX = 32000
-    BUFFER_COUNT_MAX = 64
-    MANIFEST_NAME = "manifest.json"
     # the manifest's required text keys and what each holds
     MAP_REQUIRED_TEXT = {
         "hardware": "the environment id from 'xtrace hardware'",
         "intent": "what the trace should answer, in your words",
     }
-    SET_KEY = {
+    SET_COMMON_KEY = {
         "hardware",
         "intent",
-        "tensors",
-        "reference",
-        "kernel",
-        "buffers",
-        "launch",
-        "validation",
-        "trace",
-        "planner",
         "limits",
+    }
+    # the tables that make a job an agent-mode job
+    SET_AGENT_KEY = {
+        "workspace",
+        "agent",
     }
 
     directory: str
     hardware: str
     intent: str
-    kernel: KernelSpec
-    binary: KernelBinary
-    launch: LaunchSpec
-    list_buffer: list[BufferSpec] = field(default_factory=list)
-    tensors: str | None = None
-    reference: str | None = None
-    validation: ValidationSpec | None = None
-    trace: TraceOptions | None = None
-    planner: PlannerOptions | None = None
     limits: JobLimits = field(default_factory=JobLimits)
 
     @staticmethod
@@ -2107,8 +2092,9 @@ class JobManifest:
         directory: str,
         relative_path: Any,
         where: str,
+        is_directory: bool = False,
     ) -> str:
-        """Check that a file the manifest names lies inside the job directory and exists."""
+        """Check that a file, or a directory, the manifest names lies inside the job directory and exists."""
         if not isinstance(
             relative_path,  # obj
             str,            # class_or_tuple
@@ -2123,7 +2109,10 @@ class JobManifest:
             directory,
             relative_path,
         )
-        if not os.path.isfile(path):
+        if is_directory:
+            if not os.path.isdir(path):
+                raise ManifestError(f"{where}: {relative_path} is not a directory of the job directory")
+        elif not os.path.isfile(path):
             raise ManifestError(f"{where}: {relative_path} does not exist in the job directory")
         return path
 
@@ -2135,12 +2124,13 @@ class JobManifest:
             directory: the job directory, holding ``xtrace.toml``
 
         Returns:
-            the manifest
+            an agent-mode manifest when it has ``[workspace]`` or ``[agent]``, else a launch
+            manifest
 
         Raises:
-            ManifestError: the manifest is missing, malformed or incomplete, names an absent
-                file, or names a kernel its cubin lacks
-            HarnessError: the binary is not a cubin
+            ManifestError: the manifest is missing, malformed or incomplete, or names an absent
+                file
+            HarnessError: a binary is not a cubin
         """
         path = os.path.join(
             directory,
@@ -2156,11 +2146,6 @@ class JobManifest:
                 map_manifest = tomllib.load(manifest_file)
             except tomllib.TOMLDecodeError as err:
                 raise ManifestError(f"{path}: {err}") from err
-        JobManifest.check_table(
-            value=map_manifest,
-            set_key=JobManifest.SET_KEY,
-            where=JobManifest.FILE_NAME,
-        )
         for key, meaning in JobManifest.MAP_REQUIRED_TEXT.items():
             if (
                 not isinstance(
@@ -2172,6 +2157,206 @@ class JobManifest:
                 raise ManifestError(f"{path}: '{key}' is required: {meaning}")
         if len(map_manifest["intent"]) > JobManifest.PROMPT_CHARACTERS_MAX:
             raise ManifestError(f"{path}: 'intent' holds at most {JobManifest.PROMPT_CHARACTERS_MAX} characters")
+        if JobManifest.SET_AGENT_KEY & set(map_manifest):
+            return AgentJobManifest.from_table(
+                directory=directory,
+                path=path,
+                map_manifest=map_manifest,
+            )
+        return LaunchJobManifest.from_table(
+            directory=directory,
+            path=path,
+            map_manifest=map_manifest,
+        )
+
+    def select_compute(self, map_capabilities: dict[str, Any]) -> dict[str, Any]:
+        """The capabilities entry of the manifest's hardware, checked to run the job.
+
+        Args:
+            map_capabilities: the platform's capabilities
+
+        Returns:
+            the entry, holding ``compute``, ``architecture`` and what it runs
+
+        Raises:
+            ManifestError: the hardware is unknown or cannot run the job
+        """
+        if not map_capabilities.get("enabled"):
+            raise ManifestError("Xtrace is not enabled for this account; see the console's Xtrace settings")
+        list_entry = map_capabilities.get("compute", [])
+        for map_entry in list_entry:
+            if map_entry.get("environment_id") == self.hardware:
+                self.check_entry(map_entry)
+                return map_entry
+        raise ManifestError(
+            f"no hardware '{self.hardware}'; 'xtrace hardware' lists: "
+            f"{', '.join(map_entry.get('environment_id', '?') for map_entry in list_entry) or 'none'}"
+        )
+
+    @abc.abstractmethod
+    def check_entry(self, map_entry: dict[str, Any]) -> None:
+        """Check that a capabilities entry runs the job.
+
+        Args:
+            map_entry: the entry of the manifest's hardware
+
+        Raises:
+            ManifestError: the entry cannot run the job
+        """
+
+    def cached_listing(self) -> KernelListing | None:
+        """The inspection the job is checked against, when one is cached.
+
+        Returns:
+            the listing, or None
+        """
+        return None
+
+    def check_listing(self, listing: KernelListing | None) -> None:
+        """Check the job against a cached inspection before anything is uploaded.
+
+        Args:
+            listing: the cached inspection, or None
+
+        Raises:
+            ManifestError: the job does not fit the inspected kernel
+        """
+
+    @abc.abstractmethod
+    def list_artifact(
+        self,
+        architecture: str,
+        listing: KernelListing | None,
+    ) -> list[JobArtifact]:
+        """The files the job uploads.
+
+        Args:
+            architecture: the hardware's architecture
+            listing: the cached inspection, or None
+
+        Returns:
+            the artifacts, in upload order
+        """
+
+    @abc.abstractmethod
+    def bundle(self, map_artifact_ids: dict[str, list[str]]) -> dict[str, Any]:
+        """The bundle of the uploaded files.
+
+        Args:
+            map_artifact_ids: artifact kind to the ids of the uploaded artifacts of that kind
+
+        Returns:
+            the bundle
+        """
+
+    @abc.abstractmethod
+    def analysis(self, listing: KernelListing | None) -> dict[str, Any]:
+        """What the platform does with the bundle.
+
+        Args:
+            listing: the cached inspection, or None
+
+        Returns:
+            the analysis
+        """
+
+    def estimate_input(
+        self,
+        map_capabilities: dict[str, Any],
+        map_artifact_ids: dict[str, list[str]],
+        listing: KernelListing | None,
+    ) -> dict[str, Any]:
+        """The request a quote and a submission take.
+
+        Args:
+            map_capabilities: the platform's capabilities
+            map_artifact_ids: artifact kind to the ids of the uploaded artifacts of that kind
+            listing: the cached inspection, or None
+
+        Returns:
+            the estimate input, ``marscompute.xtrace.submit.v1``
+        """
+        return {
+            "schema_version": JobManifest.SUBMIT_SCHEMA,
+            "prompt": self.intent,
+            "bundle": self.bundle(map_artifact_ids),
+            "compute": self.select_compute(map_capabilities)["compute"],
+            "analysis": self.analysis(listing),
+            "limits": self.limits.to_api(map_capabilities.get("limits", {})),
+        }
+
+
+@dataclass(kw_only=True)
+class LaunchJobManifest(JobManifest):
+    """The manifest of a job that launches one kernel of a cubin and traces it: a
+    ``cubin_launch`` bundle with an explicit trace plan or the platform planner."""
+
+    BUNDLE_KIND = "cubin_launch"
+    LAUNCH_SCHEMA = "marscompute.kernel-launch"
+    # the architectures a launch manifest targets
+    LIST_LAUNCH_ARCHITECTURE = (
+        "sm_80",
+        "sm_86",
+        "sm_89",
+        "sm_90",
+        "sm_90a",
+        "sm_100",
+        "sm_100a",
+        "sm_103",
+        "sm_103a",
+    )
+    PREPARED_TENSORS_NAME = "tensors.safetensors"
+    RESET_POLICY = "restore_pristine_before_every_invocation"
+    BUFFER_COUNT_MAX = 64
+    MANIFEST_NAME = "manifest.json"
+    SET_KEY = {
+        "tensors",
+        "reference",
+        "kernel",
+        "buffers",
+        "launch",
+        "validation",
+        "trace",
+        "planner",
+    }
+
+    kernel: KernelSpec
+    binary: KernelBinary
+    launch: LaunchSpec
+    list_buffer: list[BufferSpec] = field(default_factory=list)
+    tensors: str | None = None
+    reference: str | None = None
+    validation: ValidationSpec | None = None
+    trace: TraceOptions | None = None
+    planner: PlannerOptions | None = None
+
+    @classmethod
+    def from_table(
+        cls,
+        directory: str,
+        path: str,
+        map_manifest: dict[str, Any],
+    ) -> "LaunchJobManifest":
+        """Read and check the manifest of a job that launches one kernel of a cubin.
+
+        Args:
+            directory: the job directory
+            path: the manifest file, for the message
+            map_manifest: the manifest's table, whose common keys are checked
+
+        Returns:
+            the manifest
+
+        Raises:
+            ManifestError: a table is missing, malformed or incomplete, names an absent file,
+                or names a kernel its cubin lacks
+            HarnessError: the binary is not a cubin
+        """
+        JobManifest.check_table(
+            value=map_manifest,
+            set_key=JobManifest.SET_COMMON_KEY | LaunchJobManifest.SET_KEY,
+            where=JobManifest.FILE_NAME,
+        )
         for key in (
             "kernel",
             "launch",
@@ -2201,6 +2386,12 @@ class JobManifest:
             directory=directory,
             hardware=map_manifest["hardware"],
             intent=map_manifest["intent"],
+            limits=JobLimits.from_table(
+                map_manifest.get(
+                    "limits",
+                    {},
+                )
+            ),
             kernel=kernel,
             binary=KernelBinary.load(binary_path),
             launch=LaunchSpec.from_table(map_manifest["launch"]),
@@ -2217,12 +2408,6 @@ class JobManifest:
                 PlannerOptions.from_table(map_manifest["planner"])
                 if "planner" in map_manifest
                 else None
-            ),
-            limits=JobLimits.from_table(
-                map_manifest.get(
-                    "limits",
-                    {},
-                )
             ),
         )
         manifest.validate()
@@ -2250,8 +2435,8 @@ class JobManifest:
             )
             if not any(buffer.init == "tensor" for buffer in self.list_buffer):
                 raise ManifestError("'tensors' is named, but no buffer has init = 'tensor'")
-        if len(self.list_buffer) > JobManifest.BUFFER_COUNT_MAX:
-            raise ManifestError(f"a job has at most {JobManifest.BUFFER_COUNT_MAX} buffers")
+        if len(self.list_buffer) > LaunchJobManifest.BUFFER_COUNT_MAX:
+            raise ManifestError(f"a job has at most {LaunchJobManifest.BUFFER_COUNT_MAX} buffers")
         map_buffer: dict[str, BufferSpec] = {}
         for buffer in self.list_buffer:
             buffer.validate(tensor_file)
@@ -2325,7 +2510,7 @@ class JobManifest:
             kind="safetensors",
             path=tensors_path or os.path.join(
                 self.directory,
-                JobManifest.PREPARED_TENSORS_NAME,
+                LaunchJobManifest.PREPARED_TENSORS_NAME,
             ),
             data=TensorFile.encode(
                 list_tensor=list_tensor,
@@ -2333,12 +2518,49 @@ class JobManifest:
             ),
         )
 
-    def list_artifact(self) -> list[JobArtifact]:
-        """The files the job uploads, besides its launch manifest.
+    def cached_listing(self) -> KernelListing | None:
+        """The inspection of the job's kernel cached beside its cubin.
 
         Returns:
-            the cubin, the tensors when a buffer starts from one, and the reference file when
-            the job has one
+            the listing, or None when none is cached
+        """
+        return InspectionCache.load(
+            binary_path=os.path.join(
+                self.directory,
+                self.kernel.binary,
+            ),
+            sha256=self.binary.sha256,
+            kernel_symbol=self.kernel.name,
+        )
+
+    def check_listing(self, listing: KernelListing | None) -> None:
+        """Check the launch and the trace sites against the kernel's cached inspection.
+
+        Args:
+            listing: the cached inspection, or None
+
+        Raises:
+            ManifestError: an argument or a site does not fit the kernel
+            HarnessError: the listing lacks a site's instruction
+        """
+        if listing is not None:
+            self.check_parameters(listing)
+        self.analysis(listing)
+
+    def list_artifact(
+        self,
+        architecture: str,
+        listing: KernelListing | None,
+    ) -> list[JobArtifact]:
+        """The files the job uploads.
+
+        Args:
+            architecture: the hardware's architecture
+            listing: the cached inspection, whose parameter layout the launch manifest carries
+
+        Returns:
+            the cubin, the launch manifest, the tensors when a buffer starts from one, and the
+            reference file when the job has one
         """
         list_artifact = [
             JobArtifact(
@@ -2349,6 +2571,20 @@ class JobManifest:
                 ),
             )
         ]
+        list_artifact.append(
+            JobArtifact(
+                kind="launch_manifest",
+                path=os.path.join(
+                    self.directory,
+                    LaunchJobManifest.MANIFEST_NAME,
+                ),
+                content_type="application/json",
+                data=self.launch_manifest_bytes(
+                    architecture=architecture,
+                    listing=listing,
+                ),
+            )
+        )
         tensors_artifact = self._tensors_artifact()
         if tensors_artifact is not None:
             list_artifact.append(tensors_artifact)
@@ -2395,50 +2631,33 @@ class JobManifest:
                     f"{self.kernel.name} is {parameter.size_bytes}"
                 )
 
-    def select_compute(self, map_capabilities: dict[str, Any]) -> dict[str, Any]:
-        """The capabilities entry of the manifest's hardware, checked to run the job.
+    def check_entry(self, map_entry: dict[str, Any]) -> None:
+        """Check that a capabilities entry runs the cubin, cubin launches and every selected stage.
 
         Args:
-            map_capabilities: the platform's capabilities
-
-        Returns:
-            the entry, holding ``compute``, ``architecture`` and the stages it runs
+            map_entry: the entry of the manifest's hardware
 
         Raises:
-            ManifestError: the hardware is unknown or cannot run the cubin, the bundle or a stage
+            ManifestError: the entry cannot run the job
         """
-        if not map_capabilities.get("enabled"):
-            raise ManifestError("Xtrace is not enabled for this account; see the console's Xtrace settings")
-        list_entry = map_capabilities.get("compute", [])
-        for map_entry in list_entry:
-            if map_entry.get("environment_id") != self.hardware:
-                continue
-            architecture = map_entry.get(
-                "architecture",
-                "",
+        architecture = map_entry["architecture"]
+        if not self.binary.runs_on(architecture):
+            raise ManifestError(
+                f"{self.kernel.binary} targets {self.binary.target()}, but {self.hardware} is "
+                f"{architecture}; rebuild it for {architecture}"
             )
-            if not self.binary.runs_on(architecture):
-                raise ManifestError(
-                    f"{self.kernel.binary} targets {self.binary.target()}, but {self.hardware} is "
-                    f"{architecture}; rebuild it for {architecture}"
-                )
-            if "cubin_launch" not in map_entry.get("bundle_kinds", []):
-                raise ManifestError(f"{self.hardware} does not run cubin launches")
-            list_stage = self.trace.list_stage if self.trace is not None else ["xtrace"]
-            map_architecture = map_entry.get("architectures") or {}
-            for stage in list_stage:
-                if stage not in map_entry.get("stages", []):
-                    raise ManifestError(f"{self.hardware} does not run the {stage} stage")
-                if (
-                    stage in map_architecture
-                    and architecture not in map_architecture[stage]
-                ):
-                    raise ManifestError(f"the {stage} stage does not support {architecture}")
-            return map_entry
-        raise ManifestError(
-            f"no hardware '{self.hardware}'; 'xtrace hardware' lists: "
-            f"{', '.join(map_entry.get('environment_id', '?') for map_entry in list_entry) or 'none'}"
-        )
+        if LaunchJobManifest.BUNDLE_KIND not in map_entry["bundle_kinds"]:
+            raise ManifestError(f"{self.hardware} does not run cubin launches")
+        list_stage = self.trace.list_stage if self.trace is not None else ["xtrace"]
+        map_architecture = map_entry.get("architectures") or {}
+        for stage in list_stage:
+            if stage not in map_entry["stages"]:
+                raise ManifestError(f"{self.hardware} does not run the {stage} stage")
+            if (
+                stage in map_architecture
+                and architecture not in map_architecture[stage]
+            ):
+                raise ManifestError(f"the {stage} stage does not support {architecture}")
 
     def launch_manifest(
         self,
@@ -2458,16 +2677,16 @@ class JobManifest:
         Raises:
             ManifestError: the architecture is not one a launch manifest targets
         """
-        if architecture not in JobManifest.LIST_LAUNCH_ARCHITECTURE:
+        if architecture not in LaunchJobManifest.LIST_LAUNCH_ARCHITECTURE:
             raise ManifestError(
-                f"a launch manifest targets {', '.join(JobManifest.LIST_LAUNCH_ARCHITECTURE)}; "
+                f"a launch manifest targets {', '.join(LaunchJobManifest.LIST_LAUNCH_ARCHITECTURE)}; "
                 f"{self.hardware} is {architecture}"
             )
         list_parameter = None
         if listing is not None:
             list_parameter = listing.inspected_kernel().list_parameter
         map_launch: dict[str, Any] = {
-            "schema_version": JobManifest.LAUNCH_SCHEMA,
+            "schema_version": LaunchJobManifest.LAUNCH_SCHEMA,
             "target": self.launch.to_target(
                 architecture=architecture,
                 kernel_symbol=self.kernel.name,
@@ -2487,7 +2706,7 @@ class JobManifest:
             ],
             "outputs": [buffer.to_output() for buffer in self.list_buffer if buffer.is_output],
             "runtime_profile": None,
-            "reset": {"policy": JobManifest.RESET_POLICY},
+            "reset": {"policy": LaunchJobManifest.RESET_POLICY},
         }
         if self.validation is not None:
             map_launch["validation"] = self.validation.to_manifest()
@@ -2541,37 +2760,572 @@ class JobManifest:
             ),
         }
 
-    def estimate_input(
-        self,
-        map_capabilities: dict[str, Any],
-        map_artifact_id: dict[str, str],
-        listing: KernelListing | None,
-    ) -> dict[str, Any]:
-        """The request a quote and a submission take.
+    def bundle(self, map_artifact_ids: dict[str, list[str]]) -> dict[str, Any]:
+        """The ``cubin_launch`` bundle of the uploaded files.
+
+        Args:
+            map_artifact_ids: artifact kind to the ids of the uploaded artifacts of that kind
+
+        Returns:
+            the bundle
+        """
+        map_bundle = {
+            "kind": LaunchJobManifest.BUNDLE_KIND,
+            "cubin_artifact_id": map_artifact_ids["cubin"][0],
+            "manifest_artifact_id": map_artifact_ids["launch_manifest"][0],
+        }
+        if "safetensors" in map_artifact_ids:
+            map_bundle["tensors_artifact_id"] = map_artifact_ids["safetensors"][0]
+        if "reference" in map_artifact_ids:
+            map_bundle["reference_artifact_id"] = map_artifact_ids["reference"][0]
+        return map_bundle
+
+
+@dataclass
+class AgentOptions:
+    """The ``[agent]`` table: the model that traces the kernel on the GPU host, and the
+    budget of its session.
+
+    Args:
+        model: one of the agent models of the capabilities
+        max_turns: the most turns the session takes
+        max_input_tokens: the most input tokens it reads, cache reads and writes included
+        max_output_tokens: the most tokens it writes
+        max_wall_seconds: the most seconds the session runs
+    """
+
+    MODEL_PATTERN = re.compile(r"^[A-Za-z0-9_.:-]{1,200}$")
+    # key -> (lowest value, highest value)
+    MAP_BOUND = {
+        "max_turns": (1, 500),
+        "max_input_tokens": (1, 50_000_000),
+        "max_output_tokens": (1, 1_000_000),
+        "max_wall_seconds": (60, 2580),
+    }
+
+    model: str
+    max_turns: int
+    max_input_tokens: int
+    max_output_tokens: int
+    max_wall_seconds: int
+
+    @classmethod
+    def from_table(cls, map_agent: Any) -> "AgentOptions":
+        """Read and check the ``[agent]`` table.
+
+        Args:
+            map_agent: the table
+
+        Returns:
+            the options
+
+        Raises:
+            ManifestError: a key is missing, unknown or out of range
+        """
+        JobManifest.check_table(
+            value=map_agent,
+            set_key={"model"} | set(AgentOptions.MAP_BOUND),
+            where="[agent]",
+        )
+        if not AgentOptions.MODEL_PATTERN.match(str(map_agent.get("model", ""))):
+            raise ManifestError("[agent] needs 'model', one of the agent models 'xtrace hardware' lists")
+        for key, (low, high) in AgentOptions.MAP_BOUND.items():
+            JobManifest.check_integer(
+                value=map_agent.get(key),
+                where=f"[agent] {key}",
+                low=low,
+                high=high,
+            )
+        return cls(
+            model=map_agent["model"],
+            max_turns=map_agent["max_turns"],
+            max_input_tokens=map_agent["max_input_tokens"],
+            max_output_tokens=map_agent["max_output_tokens"],
+            max_wall_seconds=map_agent["max_wall_seconds"],
+        )
+
+    def to_analysis(self) -> dict[str, Any]:
+        """The agent analysis the API takes.
+
+        Returns:
+            the analysis, mode ``agent``
+        """
+        return {
+            "mode": "agent",
+            "model": self.model,
+            "max_turns": self.max_turns,
+            "max_input_tokens_total": self.max_input_tokens,
+            "max_output_tokens_total": self.max_output_tokens,
+            "max_wall_seconds": self.max_wall_seconds,
+        }
+
+
+@dataclass
+class WorkspaceSpec:
+    """The ``[workspace]`` table: what the agent on the GPU host works with, relative to the
+    job directory.
+
+    Args:
+        list_cubin: the cubins, 1 to 8
+        source: a directory of source the agent may read, build and run, or None
+        manifest: a ``marscompute.kernel-launch`` file describing a launch, or None
+        list_tensors: safetensors files of input data, 0 to 8
+        list_file: other files, such as a host driver script or a build file, 0 to 8
+    """
+
+    CUBINS_MAX = 8
+    TENSORS_MAX = 8
+    FILES_MAX = 8
+    SET_KEY = {
+        "cubins",
+        "source",
+        "manifest",
+        "tensors",
+        "files",
+    }
+    # names left out of the source archive: version control and the harness's own caches
+    SET_EXCLUDED_NAME = {
+        ".git",
+        ".xtrace-cache",
+        "xtrace-results",
+    }
+    SOURCE_ARCHIVE_NAME = "source.tar.gz"
+    MODE_EXECUTABLE = 0o755
+    MODE_REGULAR = 0o644
+    EXECUTABLE_BITS = 0o111
+
+    list_cubin: list[str]
+    source: str | None = None
+    manifest: str | None = None
+    list_tensors: list[str] = field(default_factory=list)
+    list_file: list[str] = field(default_factory=list)
+
+    @staticmethod
+    def _list_of_paths(
+        value: Any,
+        where: str,
+        low: int,
+        high: int,
+    ) -> list[str]:
+        """A list of ``low`` to ``high`` paths."""
+        if (
+            not isinstance(
+                value,  # obj
+                list,   # class_or_tuple
+            )
+            or not low <= len(value) <= high
+            or not all(
+                isinstance(
+                    path,  # obj
+                    str,   # class_or_tuple
+                )
+                for path in value
+            )
+        ):
+            raise ManifestError(f"{where} lists {low} to {high} paths")
+        return list(value)
+
+    @classmethod
+    def from_table(cls, map_workspace: Any) -> "WorkspaceSpec":
+        """Read the ``[workspace]`` table.
+
+        Args:
+            map_workspace: the table
+
+        Returns:
+            the workspace
+
+        Raises:
+            ManifestError: a key is unknown or a list has the wrong length
+        """
+        JobManifest.check_table(
+            value=map_workspace,
+            set_key=WorkspaceSpec.SET_KEY,
+            where="[workspace]",
+        )
+        return cls(
+            list_cubin=WorkspaceSpec._list_of_paths(
+                value=map_workspace.get("cubins"),
+                where="[workspace] cubins",
+                low=1,
+                high=WorkspaceSpec.CUBINS_MAX,
+            ),
+            source=map_workspace.get("source"),
+            manifest=map_workspace.get("manifest"),
+            list_tensors=WorkspaceSpec._list_of_paths(
+                value=map_workspace.get(
+                    "tensors",
+                    [],
+                ),
+                where="[workspace] tensors",
+                low=0,
+                high=WorkspaceSpec.TENSORS_MAX,
+            ),
+            list_file=WorkspaceSpec._list_of_paths(
+                value=map_workspace.get(
+                    "files",
+                    [],
+                ),
+                where="[workspace] files",
+                low=0,
+                high=WorkspaceSpec.FILES_MAX,
+            ),
+        )
+
+    def validate(self, directory: str) -> list[KernelBinary]:
+        """Check every file the workspace names, and that it names each once.
+
+        Args:
+            directory: the job directory
+
+        Returns:
+            the cubins
+
+        Raises:
+            ManifestError: a file is absent, outside the job directory, named twice or not
+                what its key says
+            HarnessError: a cubin is not a cubin
+        """
+        list_path = [
+            *self.list_cubin,
+            *([self.manifest] if self.manifest is not None else []),
+            *self.list_tensors,
+            *self.list_file,
+        ]
+        for relative_path in list_path:
+            JobManifest._check_path(
+                directory=directory,
+                relative_path=relative_path,
+                where="[workspace]",
+            )
+        set_seen = set()
+        for relative_path in list_path:
+            normalized_path = os.path.normpath(relative_path)
+            if normalized_path in set_seen:
+                raise ManifestError(f"[workspace] names {relative_path} twice; each file uploads once")
+            set_seen.add(normalized_path)
+        if self.source is not None:
+            JobManifest._check_path(
+                directory=directory,
+                relative_path=self.source,
+                where="[workspace] source",
+                is_directory=True,
+            )
+        if self.manifest is not None:
+            manifest_path = os.path.join(
+                directory,
+                self.manifest,
+            )
+            with open(
+                file=manifest_path,
+                mode="r",
+                encoding="utf-8",
+            ) as launch_file:
+                try:
+                    map_launch = json.load(launch_file)
+                except ValueError as err:
+                    raise ManifestError(f"[workspace] manifest: {self.manifest} is not JSON") from err
+            if (
+                not isinstance(
+                    map_launch,  # obj
+                    dict,        # class_or_tuple
+                )
+                or map_launch.get("schema_version") != LaunchJobManifest.LAUNCH_SCHEMA
+            ):
+                raise ManifestError(
+                    f"[workspace] manifest: {self.manifest} is not a {LaunchJobManifest.LAUNCH_SCHEMA} manifest"
+                )
+        for relative_path in self.list_tensors:
+            TensorFile.load(
+                os.path.join(
+                    directory,
+                    relative_path,
+                )
+            )
+        return [
+            KernelBinary.load(
+                os.path.join(
+                    directory,
+                    relative_path,
+                )
+            )
+            for relative_path in self.list_cubin
+        ]
+
+    @staticmethod
+    def _normalize(member: tarfile.TarInfo) -> tarfile.TarInfo:
+        """A member of the source archive with its owner, times and mode made reproducible."""
+        member.uid = 0
+        member.gid = 0
+        member.uname = ""
+        member.gname = ""
+        member.mtime = 0
+        if member.isdir() or member.mode & WorkspaceSpec.EXECUTABLE_BITS:
+            member.mode = WorkspaceSpec.MODE_EXECUTABLE
+        else:
+            member.mode = WorkspaceSpec.MODE_REGULAR
+        return member
+
+    def archive_source(self, directory: str) -> bytes:
+        """The source directory as a reproducible ``.tar.gz``, without version control.
+
+        Args:
+            directory: the job directory
+
+        Returns:
+            the archive's bytes; the same tree always gives the same bytes
+        """
+        source_path = os.path.join(
+            directory,
+            str(self.source),
+        )
+        archive = io.BytesIO()
+        with gzip.GzipFile(
+            fileobj=archive,
+            mode="wb",
+            mtime=0,
+        ) as compressed, tarfile.open(
+            fileobj=compressed,
+            mode="w",
+            format=tarfile.PAX_FORMAT,
+        ) as tar:
+            for root, list_directory, list_name in os.walk(source_path):
+                list_directory[:] = sorted(
+                    name for name in list_directory if name not in WorkspaceSpec.SET_EXCLUDED_NAME
+                )
+                for name in sorted([*list_directory, *list_name]):
+                    if name in WorkspaceSpec.SET_EXCLUDED_NAME:
+                        continue
+                    path = os.path.join(
+                        root,
+                        name,
+                    )
+                    tar.add(
+                        name=path,
+                        arcname=os.path.relpath(
+                            path,
+                            source_path,
+                        ),
+                        recursive=False,
+                        filter=WorkspaceSpec._normalize,
+                    )
+        return archive.getvalue()
+
+
+@dataclass(kw_only=True)
+class AgentJobManifest(JobManifest):
+    """The manifest of an agent-mode job: an agent on the GPU host reads the workspace,
+    instruments and runs the kernel within its budget, and returns one ``xtrace.json``.
+
+    Args:
+        workspace: the files the agent works with
+        agent: the model and the session's budget
+        list_binary: the workspace's cubins
+    """
+
+    BUNDLE_KIND = "agent_workspace"
+    SET_KEY = {
+        "workspace",
+        "agent",
+    }
+    # artifact kind of each workspace part
+    MAP_KIND = {
+        "cubin": "cubin",
+        "source": "source",
+        "manifest": "launch_manifest",
+        "tensors": "safetensors",
+        "files": "workspace_file",
+    }
+
+    workspace: WorkspaceSpec
+    agent: AgentOptions
+    list_binary: list[KernelBinary] = field(default_factory=list)
+
+    @classmethod
+    def from_table(
+        cls,
+        directory: str,
+        path: str,
+        map_manifest: dict[str, Any],
+    ) -> "AgentJobManifest":
+        """Read and check the manifest of an agent-mode job.
+
+        Args:
+            directory: the job directory
+            path: the manifest file, for the message
+            map_manifest: the manifest's table, whose common keys are checked
+
+        Returns:
+            the manifest
+
+        Raises:
+            ManifestError: a table is missing, malformed or names an absent file
+            HarnessError: a cubin is not a cubin
+        """
+        JobManifest.check_table(
+            value=map_manifest,
+            set_key=JobManifest.SET_COMMON_KEY | AgentJobManifest.SET_KEY,
+            where=f"{JobManifest.FILE_NAME} in agent mode",
+        )
+        for key in AgentJobManifest.SET_KEY:
+            if key not in map_manifest:
+                raise ManifestError(f"{path}: agent mode needs [workspace] and [agent]; [{key}] is missing")
+        workspace = WorkspaceSpec.from_table(map_manifest["workspace"])
+        return cls(
+            directory=directory,
+            hardware=map_manifest["hardware"],
+            intent=map_manifest["intent"],
+            limits=JobLimits.from_table(
+                map_manifest.get(
+                    "limits",
+                    {},
+                )
+            ),
+            workspace=workspace,
+            agent=AgentOptions.from_table(map_manifest["agent"]),
+            list_binary=workspace.validate(directory),
+        )
+
+    def select_compute(self, map_capabilities: dict[str, Any]) -> dict[str, Any]:
+        """The capabilities entry of the manifest's hardware, checked to run the agent.
 
         Args:
             map_capabilities: the platform's capabilities
-            map_artifact_id: artifact kind to the id of the uploaded artifact, including
-                ``launch_manifest``
-            listing: the inspected kernel when it is cached, whose listing every site must name
 
         Returns:
-            the estimate input, ``marscompute.xtrace.submit.v1``
+            the entry
+
+        Raises:
+            ManifestError: the hardware cannot run the workspace, or the model is not offered
         """
-        map_bundle = {
-            "kind": "cubin_launch",
-            "cubin_artifact_id": map_artifact_id["cubin"],
-            "manifest_artifact_id": map_artifact_id["launch_manifest"],
+        map_entry = super().select_compute(map_capabilities)
+        list_model = map_capabilities.get("agent_models", [])
+        if self.agent.model not in list_model:
+            raise ManifestError(
+                f"agent model '{self.agent.model}' is not offered; 'xtrace hardware' lists: "
+                f"{', '.join(list_model) or 'none'}"
+            )
+        return map_entry
+
+    def check_entry(self, map_entry: dict[str, Any]) -> None:
+        """Check that a capabilities entry runs agent workspaces and every cubin.
+
+        Args:
+            map_entry: the entry of the manifest's hardware
+
+        Raises:
+            ManifestError: the entry cannot run the job
+        """
+        if AgentJobManifest.BUNDLE_KIND not in map_entry["bundle_kinds"]:
+            raise ManifestError(
+                f"{self.hardware} does not run agent mode; pick an environment whose bundle kinds "
+                f"list {AgentJobManifest.BUNDLE_KIND}"
+            )
+        architecture = map_entry["architecture"]
+        for relative_path, binary in zip(
+            self.workspace.list_cubin,
+            self.list_binary,
+        ):
+            if not binary.runs_on(architecture):
+                raise ManifestError(
+                    f"{relative_path} targets {binary.target()}, but {self.hardware} is "
+                    f"{architecture}; rebuild it for {architecture}"
+                )
+
+    def list_artifact(
+        self,
+        architecture: str,
+        listing: KernelListing | None,
+    ) -> list[JobArtifact]:
+        """The files the workspace uploads.
+
+        Args:
+            architecture: the hardware's architecture
+            listing: unused; an agent inspects the kernel itself
+
+        Returns:
+            the cubins, the source archive, the launch manifest, the tensors and the files
+        """
+        list_artifact = [
+            JobArtifact(
+                kind=AgentJobManifest.MAP_KIND["cubin"],
+                path=os.path.join(
+                    self.directory,
+                    relative_path,
+                ),
+            )
+            for relative_path in self.workspace.list_cubin
+        ]
+        if self.workspace.source is not None:
+            list_artifact.append(
+                JobArtifact(
+                    kind=AgentJobManifest.MAP_KIND["source"],
+                    path=os.path.join(
+                        self.directory,
+                        WorkspaceSpec.SOURCE_ARCHIVE_NAME,
+                    ),
+                    content_type="application/gzip",
+                    data=self.workspace.archive_source(self.directory),
+                )
+            )
+        if self.workspace.manifest is not None:
+            list_artifact.append(
+                JobArtifact(
+                    kind=AgentJobManifest.MAP_KIND["manifest"],
+                    path=os.path.join(
+                        self.directory,
+                        self.workspace.manifest,
+                    ),
+                    content_type="application/json",
+                )
+            )
+        for key, list_relative_path in (
+            ("tensors", self.workspace.list_tensors),
+            ("files", self.workspace.list_file),
+        ):
+            list_artifact.extend(
+                JobArtifact(
+                    kind=AgentJobManifest.MAP_KIND[key],
+                    path=os.path.join(
+                        self.directory,
+                        relative_path,
+                    ),
+                )
+                for relative_path in list_relative_path
+            )
+        return list_artifact
+
+    def bundle(self, map_artifact_ids: dict[str, list[str]]) -> dict[str, Any]:
+        """The ``agent_workspace`` bundle of the uploaded files.
+
+        Args:
+            map_artifact_ids: artifact kind to the ids of the uploaded artifacts of that kind
+
+        Returns:
+            the bundle
+        """
+        map_bundle: dict[str, Any] = {
+            "kind": AgentJobManifest.BUNDLE_KIND,
+            "cubin_artifact_ids": list(map_artifact_ids[AgentJobManifest.MAP_KIND["cubin"]]),
+            "tensor_artifact_ids": list(map_artifact_ids.get(AgentJobManifest.MAP_KIND["tensors"], [])),
+            "file_artifact_ids": list(map_artifact_ids.get(AgentJobManifest.MAP_KIND["files"], [])),
         }
-        if "safetensors" in map_artifact_id:
-            map_bundle["tensors_artifact_id"] = map_artifact_id["safetensors"]
-        if "reference" in map_artifact_id:
-            map_bundle["reference_artifact_id"] = map_artifact_id["reference"]
-        return {
-            "schema_version": JobManifest.SUBMIT_SCHEMA,
-            "prompt": self.intent,
-            "bundle": map_bundle,
-            "compute": self.select_compute(map_capabilities)["compute"],
-            "analysis": self.analysis(listing),
-            "limits": self.limits.to_api(map_capabilities.get("limits", {})),
-        }
+        for key, bundle_key in (
+            ("source", "source_archive_artifact_id"),
+            ("manifest", "launch_manifest_artifact_id"),
+        ):
+            list_id = map_artifact_ids.get(AgentJobManifest.MAP_KIND[key])
+            if list_id:
+                map_bundle[bundle_key] = list_id[0]
+        return map_bundle
+
+    def analysis(self, listing: KernelListing | None) -> dict[str, Any]:
+        """The agent analysis.
+
+        Args:
+            listing: unused; an agent inspects the kernel itself
+
+        Returns:
+            the analysis, mode ``agent``
+        """
+        return self.agent.to_analysis()

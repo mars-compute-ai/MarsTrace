@@ -4,6 +4,7 @@ import http.server
 import json
 import os
 import re
+import shutil
 import threading
 import urllib.parse
 import uuid
@@ -76,6 +77,9 @@ COMPUTE_H100 = {
     "fallback": "none",
 }
 COMPUTE_B200 = dict(COMPUTE_H100, gpu_type="B200")
+COMPUTE_H200 = dict(COMPUTE_H100, gpu_type="H200", purchase_option="spot")
+COMPUTE_B300 = dict(COMPUTE_H100, gpu_type="B300", purchase_option="spot")
+AGENT_MODEL = "claude-opus-5-5"
 CAPABILITIES = {
     "schema_version": "marscompute.xtrace.capabilities.v1",
     "enabled": True,
@@ -109,9 +113,33 @@ CAPABILITIES = {
             "gpu_micro_usd_per_hour": "6400000",
             "architectures": {"xtrace": ["sm_100a"], "range_profile": [], "pc_sampling": [], "comparison": []},
         },
+        {
+            "compute": COMPUTE_H200,
+            "environment_id": "h200-cuda12.9",
+            "image_digest": "sha256:" + "c" * 64,
+            "architecture": "sm_90a",
+            "qualified": True,
+            "bundle_kinds": ["cubin_launch", "agent_workspace"],
+            "build_templates": [],
+            "stages": ["xtrace"],
+            "gpu_micro_usd_per_hour": "4000000",
+            "architectures": {"xtrace": ["sm_90a"], "range_profile": [], "pc_sampling": [], "comparison": []},
+        },
+        {
+            "compute": COMPUTE_B300,
+            "environment_id": "b300-cuda13.0",
+            "image_digest": "sha256:" + "f" * 64,
+            "architecture": "sm_103a",
+            "qualified": True,
+            "bundle_kinds": ["agent_workspace"],
+            "build_templates": [],
+            "stages": ["xtrace"],
+            "gpu_micro_usd_per_hour": "9600000",
+            "architectures": {"xtrace": ["sm_103a"], "range_profile": [], "pc_sampling": [], "comparison": []},
+        },
     ],
     "models": ["planner-small"],
-    "agent_models": [],
+    "agent_models": [AGENT_MODEL],
     "max_upload_bytes": 1 << 30,
     "max_query_records": 1000,
     "retention_seconds": {"inputs": 86400, "results": 86400, "staging": 3600},
@@ -123,6 +151,27 @@ CAPABILITIES = {
         "max_trace_bytes": 1 << 30,
     },
 }
+
+
+def agent_job(directory: str) -> None:
+    """Write an agent-mode job of the example cubin, its source and a driver script into a directory."""
+    shutil.copyfile(os.path.join(EXAMPLE_DIRECTORY, "matmul.cubin"), os.path.join(directory, "matmul.cubin"))
+    for relative_path, text in (
+        ("src/matmul.cu", "// kernel\n"),
+        ("src/.git/HEAD", "ref: refs/heads/main\n"),
+        ("run.py", "print('drive')\n"),
+    ):
+        os.makedirs(os.path.dirname(os.path.join(directory, relative_path)), exist_ok=True)
+        with open(os.path.join(directory, relative_path), "w") as source_file:
+            source_file.write(text)
+    with open(os.path.join(directory, "xtrace.toml"), "w") as manifest_file:
+        manifest_file.write(
+            'hardware = "h200-cuda12.9"\nintent = "find the longest bubble of the mainloop"\n'
+            '[workspace]\ncubins = ["matmul.cubin"]\nsource = "src"\nfiles = ["run.py"]\n'
+            f'[agent]\nmodel = "{AGENT_MODEL}"\nmax_turns = 50\nmax_input_tokens = 2000000\n'
+            "max_output_tokens = 100000\nmax_wall_seconds = 1800\n"
+            "[limits]\nmax_cost_usd = 30.0\nmax_gpu_seconds = 2400\n"
+        )
 
 
 def candidates_of(symbol: str) -> bytes:
@@ -689,34 +738,53 @@ class FakeControlPlane(http.server.BaseHTTPRequestHandler):
                 {"artifacts": [self._download_grant(artifact_id, state.map_artifact[artifact_id]["name"]) for artifact_id in map_body["artifact_ids"]]},
             )
         elif path == "/v1/xtrace/quotes":
-            for key, artifact_id in map_body["bundle"].items():
-                if key.endswith("_artifact_id") and state.map_artifact[artifact_id]["status"] != "verified":
+            for key, value in map_body["bundle"].items():
+                list_id = value if key.endswith("_artifact_ids") else [value] if key.endswith("_artifact_id") else []
+                if any(state.map_artifact[artifact_id]["status"] != "verified" for artifact_id in list_id):
                     self._fail(422, "artifact_not_verified", key)
                     return
             quote_id = str(uuid.uuid4())
             state.map_quote[quote_id] = {"request": map_body}
-            self._answer(
-                201,
-                {
-                    "quote_id": quote_id,
-                    "request_hash": "c" * 64,
-                    "input_digests": [],
-                    "compute": map_body["compute"],
-                    "permitted_fallbacks": [],
-                    "limits": map_body["limits"],
-                    "rate_snapshot": {
-                        "rate_version": "rate-1",
-                        "sku_id": "sku-1",
-                        "image_digest": "sha256:" + "a" * 64,
-                        "gpu_micro_usd_per_hour": "3200000",
-                        "failure_policy_version": "policy-1",
-                        "gpu_time_policy": "authorized_execution_only",
-                        "model_rates": [],
-                    },
-                    "created_at": TIMESTAMP,
-                    "expires_at": TIMESTAMP,
+            quote = {
+                "quote_id": quote_id,
+                "request_hash": "c" * 64,
+                "input_digests": [],
+                "compute": map_body["compute"],
+                "permitted_fallbacks": [],
+                "limits": map_body["limits"],
+                "rate_snapshot": {
+                    "rate_version": "rate-1",
+                    "sku_id": "sku-1",
+                    "image_digest": "sha256:" + "a" * 64,
+                    "gpu_micro_usd_per_hour": "3200000",
+                    "failure_policy_version": "policy-1",
+                    "gpu_time_policy": "authorized_execution_only",
+                    "model_rates": [],
                 },
-            )
+                "created_at": TIMESTAMP,
+                "expires_at": TIMESTAMP,
+            }
+            if map_body["analysis"]["mode"] == "agent":
+                quote["rate_snapshot"]["model_rates"] = [
+                    {
+                        "model": map_body["analysis"]["model"],
+                        "price_snapshot_id": "snapshot-1",
+                        "input_micro_usd_per_million": "18000000",
+                        "cached_input_micro_usd_per_million": "1800000",
+                        "output_micro_usd_per_million": "90000000",
+                    },
+                ]
+                quote["rate_snapshot"]["price_book"] = {
+                    "rate_card_version_id": "card-1",
+                    "tool_fee_micro_usd": "500000",
+                    "cache_write_rates": [
+                        {
+                            "dimension": "cache_write_300_explicit_tokens",
+                            "micro_usd_per_million": "22500000",
+                        },
+                    ],
+                }
+            self._answer(201, quote)
         elif path == "/v1/xtrace/jobs":
             key = self.headers.get("Idempotency-Key")
             if not key or map_body.get("idempotency_key") not in (None, key):

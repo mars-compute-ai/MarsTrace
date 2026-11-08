@@ -5,7 +5,7 @@ import shutil
 import tempfile
 import unittest
 from unittest import mock
-from fake_control_plane import EXAMPLE_DIRECTORY, TOP_UP_URL, FakeServer
+from fake_control_plane import EXAMPLE_DIRECTORY, TOP_UP_URL, FakeServer, agent_job
 from xtrace_harness.cli import CommandLine
 from xtrace_harness.workflow import XtraceWorkflow
 
@@ -43,7 +43,9 @@ class CommandLineTest(unittest.TestCase):
         status, output, _ = self.run_cli("hardware")
         self.assertEqual(status, 0)
         self.assertRegex(output, r"h100-sxm\s+H100\s+x1 sm_90a\s+\$3.200000/GPU-hour")
+        self.assertRegex(output, r"b300-cuda13.0\s+B300 .* bundles: agent_workspace")
         self.assertIn("planner models: planner-small", output)
+        self.assertIn("agent models: claude-opus-5-5", output)
 
     def test_credit(self) -> None:
         status, output, _ = self.run_cli("credit")
@@ -111,6 +113,18 @@ class CommandLineTest(unittest.TestCase):
         self.assertIn("cost cap  $2.000000 at most", output)
         self.assertIn("rate      $3.200000 per GPU-hour", output)
         self.assertEqual(self.fake.state.requests_to("POST", r"^/v1/xtrace/jobs$"), [])
+
+    def test_agent_estimate_prints_the_job_fee_and_token_rates(self) -> None:
+        directory = os.path.join(self.directory, "agent")
+        os.makedirs(directory)
+        agent_job(directory)
+        status, output, error = self.run_cli("estimate", directory)
+        self.assertEqual(status, 0, error)
+        self.assertIn("hardware  h200-cuda12.9 (sm_90a)", output)
+        self.assertIn("job fee   $0.500000", output)
+        self.assertIn("tokens    claude-opus-5-5: $18.000000 input, $1.800000 cached input, $90.000000 output per million", output)
+        self.assertIn("cost cap  $30.000000 at most", output)
+        self.assertIn("upload    source", error)
 
     def test_submit_asks_before_spending(self) -> None:
         status, _, error = self.run_cli("submit", self.directory)

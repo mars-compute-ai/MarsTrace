@@ -30,6 +30,7 @@ class SchemaCheck:
     # (method, path pattern) of a response -> the schema its body follows
     LIST_RESPONSE_SCHEMA = [
         ("GET", re.compile(r"^/v1/xtrace/capabilities$"), "capabilities"),
+        ("POST", re.compile(r"^/v1/xtrace/quotes$"), "quote"),
         ("GET", re.compile(r"^/v1/xtrace/inspections/capabilities$"), "inspection-capabilities"),
         ("POST", re.compile(r"^/v1/xtrace/inspections/quotes$"), "inspection-quote"),
         ("POST", re.compile(r"^/v1/xtrace/inspections$"), "inspection"),

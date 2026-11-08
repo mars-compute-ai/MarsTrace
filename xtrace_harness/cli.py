@@ -80,10 +80,13 @@ class JobCommands:
                 f"x{map_compute.get('gpu_count', '')} {map_entry.get('architecture', ''):<8} "
                 f"{XtraceWorkflow.usd(map_entry.get('gpu_micro_usd_per_hour'))}/GPU-hour  "
                 f"{map_compute.get('purchase_option', '')} {map_compute.get('region', '')}  "
-                f"stages: {', '.join(map_entry.get('stages', []))}"
+                f"stages: {', '.join(map_entry.get('stages', []))}  "
+                f"bundles: {', '.join(map_entry.get('bundle_kinds', []))}"
             )
         if map_capabilities.get("models"):
             print(f"planner models: {', '.join(map_capabilities['models'])}")
+        if map_capabilities.get("agent_models"):
+            print(f"agent models: {', '.join(map_capabilities['agent_models'])}")
 
     @staticmethod
     def credit(args: argparse.Namespace) -> None:
@@ -319,6 +322,17 @@ class JobCommands:
         print(f"quote     {map_summary['quote_id']} (expires {map_summary['expires_at']})")
         print(f"hardware  {map_summary['hardware']} ({map_summary['architecture']})")
         print(f"rate      {map_summary['gpu_usd_per_hour']} per GPU-hour")
+        if "job_fee_usd" in map_summary:
+            print(f"job fee   {map_summary['job_fee_usd']}")
+        map_agent_rate = map_summary.get("agent_usd_per_million_tokens")
+        if map_agent_rate is not None:
+            print(
+                f"tokens    {map_agent_rate['model']}: {map_agent_rate['input']} input, "
+                f"{map_agent_rate['cached_input']} cached input, {map_agent_rate['output']} output "
+                "per million"
+            )
+            for dimension, rate in map_agent_rate["map_cache_write"].items():
+                print(f"          {rate} per million {dimension}")
         print(f"cost cap  {map_summary['max_cost_usd']} at most")
 
     @staticmethod

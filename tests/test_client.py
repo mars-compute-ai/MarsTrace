@@ -1,10 +1,12 @@
 import hashlib
+import io
 import json
 import os
 import shutil
+import tarfile
 import tempfile
 import unittest
-from fake_control_plane import EXAMPLE_DIRECTORY, TOP_UP_URL, FakeControlPlane, FakeServer
+from fake_control_plane import EXAMPLE_DIRECTORY, TOP_UP_URL, FakeControlPlane, FakeServer, agent_job
 from xtrace_harness.binary import KernelBinary
 from xtrace_harness.client import Credentials, MarsComputeClient
 from xtrace_harness.error import HarnessError, PlatformError
@@ -189,6 +191,37 @@ class ControlPlaneTest(unittest.TestCase):
             manifest["parameter_layout"],
             [{"index": index, "offset": 8 * index, "size_bytes": 8 if index < 3 else 4} for index in range(4)],
         )
+
+    def test_agent_mode_uploads_the_workspace_and_quotes_the_fees(self) -> None:
+        directory = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, directory)
+        agent_job(directory)
+        quoted = self.workflow.quote(directory)
+        bundle = quoted.map_request["bundle"]
+        self.assertEqual(bundle["kind"], "agent_workspace")
+        self.assertEqual(
+            [self.fake.state.map_artifact[artifact_id]["kind"] for artifact_id in [*bundle["cubin_artifact_ids"], bundle["source_archive_artifact_id"], *bundle["file_artifact_ids"]]],
+            ["cubin", "source", "workspace_file"],
+        )
+        with tarfile.open(fileobj=io.BytesIO(self.fake.state.map_blob[bundle["source_archive_artifact_id"]]), mode="r:gz") as tar:
+            self.assertEqual(tar.getnames(), ["matmul.cu"])
+        self.assertEqual(quoted.map_request["analysis"]["mode"], "agent")
+        self.assertEqual(quoted.map_request["compute"]["gpu_type"], "H200")
+        summary = quoted.summary()
+        self.assertEqual(summary["job_fee_usd"], "$0.500000")
+        self.assertEqual(
+            summary["agent_usd_per_million_tokens"],
+            {
+                "model": "claude-opus-5-5",
+                "input": "$18.000000",
+                "cached_input": "$1.800000",
+                "output": "$90.000000",
+                "map_cache_write": {"cache_write_300_explicit_tokens": "$22.500000"},
+            },
+        )
+        job = self.workflow.submit(quoted=quoted, idempotency_key="agent-1")
+        self.assertEqual(self.workflow.wait(job["job_id"])["job"]["state"], "succeeded")
+        self.assertEqual(self.fake.state.requests_to("POST", r"^/v1/xtrace/inspections"), [])
 
     def test_submit_is_idempotent(self) -> None:
         quoted = self.workflow.quote(self.directory)

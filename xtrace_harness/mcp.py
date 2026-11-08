@@ -108,7 +108,8 @@ class McpServer:
         "Trace CUDA kernels on MarsCompute GPUs. Inspect the cubin (a paid inspection: estimate, "
         "get the user's yes to the fee, submit, wait, fetch the result), pick sites from xtrace_sass, "
         "estimate the job, get the user's yes to the cost cap, submit with accept_max_cost_usd, wait, "
-        "fetch, then read the trace with xtrace_show."
+        "fetch, then read the trace with xtrace_show. In agent mode a job directory with [workspace] "
+        "and [agent] needs no inspection: estimate and submit it directly."
     )
     # JSON-RPC error codes
     PARSE_ERROR = -32700
@@ -376,7 +377,8 @@ class McpServer:
             McpTool(
                 name="xtrace_hardware",
                 description="List the hardware a job can run on: environment id, GPU, architecture, "
-                "rate per GPU-hour, stages; and the planner models and default limits.",
+                "rate per GPU-hour, stages and bundle kinds (agent_workspace runs agent mode); and the "
+                "planner models, agent models and default limits.",
                 map_input_schema=McpServer._schema(
                     map_property={},
                     list_required=[],
@@ -578,8 +580,9 @@ class McpServer:
             ),
             McpTool(
                 name="xtrace_estimate",
-                description="Upload a job directory, check its sites and quote it: the cost cap "
-                "and the GPU rate. Show the cap to the user before submitting.",
+                description="Upload a job directory, check it and quote it: the cost cap and the GPU "
+                "rate, and in agent mode the job fee and token rates. Show the cap to the user before "
+                "submitting.",
                 map_input_schema=McpServer._schema(
                     map_property={
                         "directory": map_directory,

@@ -34,19 +34,42 @@ class QuotedJob:
         """What the quote commits to, in dollars.
 
         Returns:
-            the quote id, the hardware, the cost cap, the GPU rate, the limits and the expiry
+            the quote id, the hardware, the cost cap, the GPU rate, the limits and the expiry;
+            for an agent-mode job also the job fee and the agent model's token rates
         """
-        return {
+        map_rate = self.map_quote["rate_snapshot"]
+        map_summary = {
             "quote_id": self.map_quote["quote_id"],
             "hardware": self.manifest.hardware,
             "architecture": self.architecture,
             "max_cost_usd": XtraceWorkflow.usd(self.map_quote["limits"]["max_total_cost_micro_usd"]),
-            "gpu_usd_per_hour": XtraceWorkflow.usd(
-                self.map_quote["rate_snapshot"]["gpu_micro_usd_per_hour"]
-            ),
+            "gpu_usd_per_hour": XtraceWorkflow.usd(map_rate["gpu_micro_usd_per_hour"]),
             "limits": self.map_quote["limits"],
             "expires_at": self.map_quote.get("expires_at"),
         }
+        map_price_book = map_rate.get("price_book")
+        if map_price_book is not None:
+            map_summary["job_fee_usd"] = XtraceWorkflow.usd(map_price_book["tool_fee_micro_usd"])
+            map_agent_rate = next(
+                (
+                    map_model_rate
+                    for map_model_rate in map_rate["model_rates"]
+                    if map_model_rate["model"] == self.map_request["analysis"].get("model")
+                ),
+                None,
+            )
+            if map_agent_rate is not None:
+                map_summary["agent_usd_per_million_tokens"] = {
+                    "model": map_agent_rate["model"],
+                    "input": XtraceWorkflow.usd(map_agent_rate["input_micro_usd_per_million"]),
+                    "cached_input": XtraceWorkflow.usd(map_agent_rate["cached_input_micro_usd_per_million"]),
+                    "output": XtraceWorkflow.usd(map_agent_rate["output_micro_usd_per_million"]),
+                    "map_cache_write": {
+                        map_cache_write["dimension"]: XtraceWorkflow.usd(map_cache_write["micro_usd_per_million"])
+                        for map_cache_write in map_price_book["cache_write_rates"]
+                    },
+                }
+        return map_summary
 
 
 @dataclass
@@ -484,7 +507,7 @@ class XtraceWorkflow:
         directory: str,
         hardware: str | None = None,
     ) -> QuotedJob:
-        """Translate a job directory, check its sites against a cached listing, upload it and quote it.
+        """Translate a job directory, check it against a cached listing, upload it and quote it.
 
         Args:
             directory: the job directory, holding ``xtrace.toml``
@@ -494,45 +517,30 @@ class XtraceWorkflow:
             the quoted job
 
         Raises:
-            HarnessError: the manifest is wrong, a site is not in the listing, or the platform refused
+            HarnessError: the manifest is wrong, does not fit the listing, or the platform refused
         """
         manifest = JobManifest.load(directory)
         if hardware is not None:
             manifest.hardware = hardware
         map_capabilities = self._client.capabilities()
         map_entry = manifest.select_compute(map_capabilities)
-        upload_bytes_max = map_capabilities.get("max_upload_bytes")
-        listing = InspectionCache.load(
-            binary_path=os.path.join(
-                directory,
-                manifest.kernel.binary,
-            ),
-            sha256=manifest.binary.sha256,
-            kernel_symbol=manifest.kernel.name,
-        )
-        if listing is not None:
-            manifest.check_parameters(listing)
-        manifest.analysis(listing)
-        launch_manifest = manifest.launch_manifest_bytes(
+        listing = manifest.cached_listing()
+        manifest.check_listing(listing)
+        list_artifact = manifest.list_artifact(
             architecture=map_entry["architecture"],
             listing=listing,
         )
-        map_artifact_id = {}
-        for artifact in manifest.list_artifact():
-            map_artifact_id[artifact.kind] = self._upload_file(
-                artifact=artifact,
-                upload_bytes_max=upload_bytes_max,
-            )["artifact_id"]
-        self._say(f"upload    launch_manifest ({len(launch_manifest)} bytes)")
-        map_artifact_id["launch_manifest"] = self._client.upload(
-            data=launch_manifest,
-            kind="launch_manifest",
-            name=JobManifest.MANIFEST_NAME,
-            content_type="application/json",
-        )["artifact_id"]
+        map_artifact_ids: dict[str, list[str]] = {}
+        for artifact in list_artifact:
+            map_artifact_ids.setdefault(artifact.kind, []).append(
+                self._upload_file(
+                    artifact=artifact,
+                    upload_bytes_max=map_capabilities.get("max_upload_bytes"),
+                )["artifact_id"]
+            )
         map_request = manifest.estimate_input(
             map_capabilities=map_capabilities,
-            map_artifact_id=map_artifact_id,
+            map_artifact_ids=map_artifact_ids,
             listing=listing,
         )
         return QuotedJob(
