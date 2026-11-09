@@ -260,7 +260,7 @@
                   "kind": {
                     "default": "trace",
                     "type": "string",
-                    "enum": ["trace", "comparison"]
+                    "enum": ["trace", "comparison", "agent"]
                   },
                   "diagnostic_stages": {
                     "anyOf": [
@@ -854,6 +854,10 @@
                           "cache_write_rates"
                         ],
                         "additionalProperties": false
+                      },
+                      "workspace_image_digest": {
+                        "type": "string",
+                        "pattern": "^sha256:[a-f0-9]{64}$"
                       }
                     },
                     "required": [

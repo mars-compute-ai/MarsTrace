@@ -10,7 +10,7 @@
     "kind": {
       "default": "trace",
       "type": "string",
-      "enum": ["trace", "comparison"]
+      "enum": ["trace", "comparison", "agent"]
     },
     "diagnostic_stages": {
       "anyOf": [
