@@ -42,9 +42,8 @@ class CommandLineTest(unittest.TestCase):
     def test_hardware_lists_rates_and_architectures(self) -> None:
         status, output, _ = self.run_cli("hardware")
         self.assertEqual(status, 0)
-        self.assertRegex(output, r"h100-sxm\s+H100\s+x1 sm_90a\s+\$3.200000/GPU-hour")
-        self.assertRegex(output, r"b300-cuda13.0\s+B300 .* bundles: agent_workspace")
-        self.assertIn("planner models: planner-small", output)
+        self.assertRegex(output, r"h200-cuda12.9\s+H200\s+x1 sm_90a\s+\$4.000000/GPU-hour  spot eu-north1")
+        self.assertRegex(output, r"b300-cuda13.0\s+B300\s+x1 sm_103a")
         self.assertIn("agent models: claude-opus-5-5", output)
 
     def test_credit(self) -> None:
@@ -53,78 +52,25 @@ class CommandLineTest(unittest.TestCase):
         self.assertIn("available $100.000000", output)
         self.assertIn(TOP_UP_URL, output)
 
-    def test_inspect_asks_then_caches_and_sass_reads_the_cache(self) -> None:
-        binary = os.path.join(self.directory, "matmul.cubin")
-        status, _, error = self.run_cli("sass", binary, "--kernel", "square_matrix_mul")
-        self.assertEqual(status, 1)
-        self.assertIn("run 'xtrace inspect' first", error)
-        status, output, error = self.run_cli("inspect", binary, "--kernel", "square_matrix_mul")
-        self.assertEqual(status, 1)
-        self.assertIn("fee       $0.020000", output)
-        self.assertIn("--yes", error)
-        self.assertEqual(self.fake.state.map_inspection, {})
-        status, output, _ = self.run_cli("inspect", binary, "--kernel", "square_matrix_mul", is_tty=True, answer="y")
-        self.assertEqual(status, 0, output)
-        self.assertIn("state     terminal completed", output)
-        self.assertIn("param 3", output)
-        count = len(self.fake.state.list_request)
-        status, output, _ = self.run_cli("inspect", binary, "--kernel", "square_matrix_mul")
-        self.assertEqual(status, 0)
-        status, output, _ = self.run_cli("sass", binary, "--kernel", "square_matrix_mul", "--grep", "STG")
-        self.assertEqual(status, 0)
-        self.assertIn("   199  0x000c70  STG.E", output)
-        self.assertEqual(len(self.fake.state.list_request), count)
-
-    def test_inspection_steps(self) -> None:
-        binary = os.path.join(self.directory, "matmul.cubin")
-        status, output, _ = self.run_cli("inspection", "profiles")
-        self.assertEqual(status, 0)
-        self.assertIn("static-cubin-v1", output)
-        self.assertIn("$0.020000 per inspection", output)
-        status, output, _ = self.run_cli("inspection", "estimate", binary)
-        self.assertEqual(status, 0)
-        self.assertIn("profile   static-cubin-v1", output)
-        self.fake.state.inspection_polls = 1000
-        status, output, _ = self.run_cli("inspection", "submit", binary, "--kernel", "square_matrix_mul", "--yes")
-        self.assertEqual(status, 0, output)
-        inspection_id = next(iter(self.fake.state.map_inspection))
-        self.assertIn(f"inspection {inspection_id}", output)
-        status, output, _ = self.run_cli("inspection", "list")
-        self.assertIn(inspection_id, output)
-        status, output, _ = self.run_cli("inspection", "get", inspection_id)
-        self.assertIn("state     running", output)
-        self.fake.state.inspection_polls = 0
-        status, output, _ = self.run_cli("inspection", "get", inspection_id, "--wait")
-        self.assertIn("state     terminal completed", output)
-        status, output, _ = self.run_cli("inspection", "result", inspection_id, binary, "--kernel", "square_matrix_mul")
-        self.assertEqual(status, 0, output)
-        self.assertIn("* square_matrix_mul", output)
-        artifact_id = self.fake.state.map_inspection[inspection_id]["_result"]["kernel_catalog"]["kernels"][0]["instructions"]["artifact"]["artifact_id"]
-        output_directory = os.path.join(self.directory, "downloaded")
-        status, output, _ = self.run_cli("inspection", "downloads", inspection_id, artifact_id, "-o", output_directory)
-        self.assertEqual(status, 0)
-        self.assertEqual(os.listdir(output_directory), [f"{artifact_id}.json"])
-        status, output, _ = self.run_cli("inspection", "cancel", inspection_id)
-        self.assertIn("state     terminal completed", output)
-
     def test_estimate_prints_the_cap_and_rate(self) -> None:
         status, output, _ = self.run_cli("estimate", self.directory)
         self.assertEqual(status, 0)
-        self.assertIn("cost cap  $2.000000 at most", output)
-        self.assertIn("rate      $3.200000 per GPU-hour", output)
+        self.assertIn("hardware  h200-cuda12.9 (sm_90a)", output)
+        self.assertIn("cost cap  $20.000000 at most", output)
+        self.assertIn("rate      $4.000000 per GPU-hour", output)
         self.assertEqual(self.fake.state.requests_to("POST", r"^/v1/xtrace/jobs$"), [])
 
-    def test_agent_estimate_prints_the_job_fee_and_token_rates(self) -> None:
+    def test_estimate_prints_the_job_fee_and_token_rates(self) -> None:
         directory = os.path.join(self.directory, "agent")
         os.makedirs(directory)
         agent_job(directory)
-        status, output, error = self.run_cli("estimate", directory)
+        status, output, error = self.run_cli("estimate", directory, "--hardware", "h200-cuda12.9")
         self.assertEqual(status, 0, error)
-        self.assertIn("hardware  h200-cuda12.9 (sm_90a)", output)
         self.assertIn("job fee   $0.500000", output)
         self.assertIn("tokens    claude-opus-5-5: $18.000000 input, $1.800000 cached input, $90.000000 output per million", output)
         self.assertIn("cost cap  $30.000000 at most", output)
         self.assertIn("upload    source", error)
+        self.assertIn("upload    workspace_file", error)
 
     def test_submit_asks_before_spending(self) -> None:
         status, _, error = self.run_cli("submit", self.directory)
@@ -175,8 +121,20 @@ class CommandLineTest(unittest.TestCase):
         self.assertEqual(status, 0)
         self.assertEqual(
             sorted(os.listdir(output_directory)),
-            ["result-manifest.json", "summary.json", "xtrace.json"],
+            ["result-manifest.json", "xtrace.json"],
         )
+
+    def test_cubin_find_copies_into_the_workspace(self) -> None:
+        cache = os.path.join(self.directory, "cache")
+        os.makedirs(cache)
+        shutil.copyfile(os.path.join(self.directory, "matmul.cubin"), os.path.join(cache, "matmul.cubin"))
+        job = os.path.join(self.directory, "job")
+        with mock.patch("xtrace_harness.binary.DslCache.default_roots", return_value=[]):
+            status, output, error = self.run_cli("cubin", "find", "square", "--dir", cache, "--copy-to", job)
+        self.assertEqual(status, 0, error)
+        self.assertIn("[0] square_matrix_mul", output)
+        self.assertIn("add it to [workspace] cubins", output)
+        self.assertTrue(os.path.isfile(os.path.join(job, "matmul.cubin")))
 
     def test_cubin_show(self) -> None:
         status, output, _ = self.run_cli("cubin", "show", os.path.join(self.directory, "matmul.cubin"))

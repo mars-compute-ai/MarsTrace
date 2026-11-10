@@ -6,17 +6,14 @@ import shutil
 import tarfile
 import tempfile
 import unittest
-from fake_control_plane import EXAMPLE_DIRECTORY, TOP_UP_URL, FakeControlPlane, FakeServer, agent_job
-from xtrace_harness.binary import KernelBinary
+from fake_control_plane import EXAMPLE_DIRECTORY, FIXTURE_DIRECTORY, TOP_UP_URL, FakeServer, agent_job
 from xtrace_harness.client import Credentials, MarsComputeClient
-from xtrace_harness.error import HarnessError, PlatformError
-from xtrace_harness.listing import InspectionCache, KernelListing
-from xtrace_harness.tensors import TensorFile
+from xtrace_harness.error import PlatformError
 from xtrace_harness.workflow import XtraceWorkflow
 
 
 def copy_example() -> str:
-    """A copy of the example job directory, so caches written beside the cubin stay local."""
+    """A copy of the example job directory, so results fetched into it stay local."""
     directory = tempfile.mkdtemp()
     shutil.copytree(EXAMPLE_DIRECTORY, directory, dirs_exist_ok=True)
     return directory
@@ -42,7 +39,7 @@ class ControlPlaneTest(unittest.TestCase):
         self.assertEqual(self.fake.state.list_schema_error, [])
 
     def test_capabilities_and_credit(self) -> None:
-        self.assertEqual(self.workflow.hardware()["compute"][0]["environment_id"], "h100-sxm")
+        self.assertEqual(self.workflow.hardware()["compute"][0]["environment_id"], "h200-cuda12.9")
         self.assertEqual(self.workflow.credit()["top_up_url"], TOP_UP_URL)
         for request in self.fake.state.list_request:
             self.assertEqual(request["authorization"], "Bearer mc_live_v1_test")
@@ -70,129 +67,18 @@ class ControlPlaneTest(unittest.TestCase):
             [{"part_number": number, "etag": f'"etag-{number}"'} for number in (1, 2, 3)],
         )
 
-    def inspect(self, kernel_symbol: str | None = "square_matrix_mul", idempotency_key: str | None = None) -> str:
-        """Run a whole inspection of the example cubin and return the cached result's path."""
-        binary = os.path.join(self.directory, "matmul.cubin")
-        quoted = self.workflow.quote_inspection(binary_path=binary, kernel_symbol=kernel_symbol)
-        status = self.workflow.submit_inspection(quoted=quoted, idempotency_key=idempotency_key)
-        self.workflow.wait_inspection(status["inspection_id"])
-        return self.workflow.fetch_inspection(
-            inspection_id=status["inspection_id"],
-            binary_path=binary,
-            kernel_symbol=kernel_symbol,
-        )
-
-    def test_inspection_is_quoted_accepted_and_cached_beside_the_cubin(self) -> None:
-        binary = os.path.join(self.directory, "matmul.cubin")
-        quoted = self.workflow.quote_inspection(binary_path=binary, kernel_symbol="square_matrix_mul")
-        self.assertEqual(quoted.summary()["fee_usd"], "$0.020000")
-        self.assertEqual(quoted.summary()["profile_id"], "static-cubin-v1")
-        request = json.loads(self.fake.state.requests_to("POST", r"^/v1/xtrace/inspections/quotes$")[0]["body"])
-        self.assertEqual(request["kernel_selector"], {"kind": "symbol", "symbol": "square_matrix_mul"})
-        self.assertEqual(request["binary"]["sha256"], KernelBinary.load(binary).sha256)
-        self.assertEqual(self.fake.state.map_inspection, {})
-        status = self.workflow.submit_inspection(quoted=quoted, idempotency_key="inspect-1")
-        accept = self.fake.state.requests_to("POST", r"^/v1/xtrace/inspections$")[0]
-        self.assertEqual(accept["idempotency"], "inspect-1")
-        self.assertEqual(json.loads(accept["body"])["quote_sha256"], FakeControlPlane.digest(quoted.map_quote))
-        self.assertEqual(self.workflow.wait_inspection(status["inspection_id"])["execution"]["outcome"], "completed")
-        path = self.workflow.fetch_inspection(
-            inspection_id=status["inspection_id"],
-            binary_path=binary,
-            kernel_symbol="square_matrix_mul",
-        )
-        self.assertTrue(path.startswith(os.path.join(self.directory, InspectionCache.DIRECTORY_NAME)))
-        listing = KernelListing.load(path)
-        self.assertEqual(listing.inspected_kernel().list_instruction[199].opcode, "STG.E")
-        self.assertEqual(
-            InspectionCache.load(binary_path=binary, sha256=listing.binary_sha256, kernel_symbol="square_matrix_mul").inspection_id,
-            status["inspection_id"],
-        )
-
-    def test_inspection_acceptance_is_idempotent(self) -> None:
-        binary = os.path.join(self.directory, "matmul.cubin")
-        quoted = self.workflow.quote_inspection(binary_path=binary, kernel_symbol=None)
-        first = self.workflow.submit_inspection(quoted=quoted, idempotency_key="inspect-1")
-        again = self.workflow.submit_inspection(quoted=quoted, idempotency_key="inspect-1")
-        self.assertEqual(first["inspection_id"], again["inspection_id"])
-        self.assertEqual(len(self.fake.state.map_inspection), 1)
-
-    def test_kernel_catalog_downloads_no_listing(self) -> None:
-        path = self.inspect(kernel_symbol=None)
-        self.assertFalse(os.path.isfile(InspectionCache.instructions_path_of(path)))
-        self.assertEqual(self.fake.state.requests_to("POST", r".*/artifacts/downloads$"), [])
-        self.assertEqual(list(KernelListing.load(path).map_kernel), ["square_matrix_mul"])
-
-    def test_failed_inspection_names_its_outcome(self) -> None:
-        self.fake.state.inspection_outcome = "rejected_input"
-        with self.assertRaisesRegex(HarnessError, "ended rejected_input"):
-            self.inspect()
-
-    def test_unavailable_inspections_are_refused_before_upload(self) -> None:
-        self.fake.state.is_inspection_available = False
-        with self.assertRaisesRegex(HarnessError, "inspections are unavailable: not_configured"):
-            self.inspect()
-        self.assertEqual(self.fake.state.requests_to("POST", r"^/v1/xtrace/artifacts/uploads$"), [])
-
-    def test_inspection_list_cancel_and_downloads(self) -> None:
-        self.fake.state.inspection_polls = 1000
-        binary = os.path.join(self.directory, "matmul.cubin")
-        list_id = [
-            self.workflow.submit_inspection(self.workflow.quote_inspection(binary_path=binary, kernel_symbol=None))["inspection_id"]
-            for _ in range(3)
-        ]
-        first = self.workflow.inspections(limit=2)
-        second = self.workflow.inspections(limit=2, cursor=first["next_cursor"])
-        self.assertEqual([status["inspection_id"] for status in first["items"] + second["items"]], list_id)
-        self.assertIsNone(second["next_cursor"])
-        self.assertEqual(self.workflow.cancel_inspection(list_id[0])["execution"]["state"], "cancel_requested")
-        with self.assertRaisesRegex(HarnessError, "is still cancel_requested"):
-            self.workflow.fetch_inspection(inspection_id=list_id[0], binary_path=binary, kernel_symbol=None)
-        self.fake.state.inspection_polls = 0
-        self.workflow.wait_inspection(list_id[1])
-        result = self.client.inspection_result(list_id[1])
-        artifact_id = result["kernel_catalog"]["kernels"][0]["instructions"]["artifact"]["artifact_id"]
-        (path,) = self.workflow.download_inspection(
-            inspection_id=list_id[1],
-            list_artifact_id=[artifact_id],
-            output_directory=os.path.join(self.directory, "inspection"),
-        )
-        with open(path) as listing_file:
-            self.assertEqual(json.load(listing_file)["symbol"], "square_matrix_mul")
-
-    def test_estimate_uploads_resolves_and_quotes(self) -> None:
+    def test_estimate_uploads_the_example_and_quotes_it(self) -> None:
         quoted = self.workflow.quote(self.directory)
         request = quoted.map_request
         self.assertEqual(request["schema_version"], "marscompute.xtrace.submit.v1")
-        self.assertEqual(request["compute"]["gpu_type"], "H100")
-        self.assertEqual(
-            [site["instruction_index"] for site in request["analysis"]["trace_plan"]["sites"]],
-            [13, 199],
-        )
-        self.assertEqual(
-            set(request["bundle"]),
-            {"kind", "cubin_artifact_id", "manifest_artifact_id", "tensors_artifact_id"},
-        )
-        manifest = json.loads(self.fake.state.map_blob[request["bundle"]["manifest_artifact_id"]])
-        self.assertEqual(manifest["target"]["architecture"], "sm_90a")
-        self.assertIsNone(manifest["parameter_layout"])
-        with tempfile.NamedTemporaryFile(suffix=".safetensors") as tensors_file:
-            tensors_file.write(self.fake.state.map_blob[request["bundle"]["tensors_artifact_id"]])
-            tensors_file.flush()
-            self.assertEqual(sorted(TensorFile.load(tensors_file.name).map_tensor), ["a", "b"])
-        self.assertEqual(quoted.summary()["max_cost_usd"], "$2.000000")
-        self.assertEqual(quoted.summary()["gpu_usd_per_hour"], "$3.200000")
+        self.assertEqual(request["compute"]["gpu_type"], "H200")
+        self.assertEqual(set(request["bundle"]), {"kind", "cubin_artifact_ids", "source_archive_artifact_id", "tensor_artifact_ids", "file_artifact_ids"})
+        with tarfile.open(fileobj=io.BytesIO(self.fake.state.map_blob[request["bundle"]["source_archive_artifact_id"]]), mode="r:gz") as tar:
+            self.assertEqual(tar.getnames(), ["matmul.cu"])
+        self.assertEqual(quoted.summary()["max_cost_usd"], "$20.000000")
+        self.assertEqual(quoted.summary()["gpu_usd_per_hour"], "$4.000000")
 
-    def test_estimate_carries_the_cached_parameter_layout(self) -> None:
-        self.inspect()
-        request = self.workflow.quote(self.directory).map_request
-        manifest = json.loads(self.fake.state.map_blob[request["bundle"]["manifest_artifact_id"]])
-        self.assertEqual(
-            manifest["parameter_layout"],
-            [{"index": index, "offset": 8 * index, "size_bytes": 8 if index < 3 else 4} for index in range(4)],
-        )
-
-    def test_agent_mode_uploads_the_workspace_and_quotes_the_fees(self) -> None:
+    def test_workspace_uploads_by_kind_and_quotes_the_fees(self) -> None:
         directory = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, directory)
         agent_job(directory)
@@ -221,7 +107,6 @@ class ControlPlaneTest(unittest.TestCase):
         )
         job = self.workflow.submit(quoted=quoted, idempotency_key="agent-1")
         self.assertEqual(self.workflow.wait(job["job_id"])["job"]["state"], "succeeded")
-        self.assertEqual(self.fake.state.requests_to("POST", r"^/v1/xtrace/inspections"), [])
 
     def test_submit_is_idempotent(self) -> None:
         quoted = self.workflow.quote(self.directory)
@@ -252,10 +137,12 @@ class ControlPlaneTest(unittest.TestCase):
         list_path = self.workflow.fetch(job_id=job["job_id"], output_directory=output)
         self.assertEqual(
             sorted(os.path.basename(path) for path in list_path),
-            ["result-manifest.json", "summary.json", "xtrace.json"],
+            ["result-manifest.json", "xtrace.json"],
         )
-        with open(os.path.join(output, "summary.json")) as summary_file:
-            self.assertEqual(json.load(summary_file)["quality"], "usable")
+        with open(os.path.join(output, "xtrace.json"), "rb") as trace_file, open(os.path.join(FIXTURE_DIRECTORY, "trace_sass_regions.json"), "rb") as fixture_file:
+            self.assertEqual(trace_file.read(), fixture_file.read())
+        with open(os.path.join(output, "result-manifest.json")) as manifest_file:
+            self.assertEqual(json.load(manifest_file)["quality"], "usable")
 
     def test_wait_returns_at_the_timeout(self) -> None:
         self.fake.state.job_polls = 1000

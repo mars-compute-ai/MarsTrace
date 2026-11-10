@@ -9,7 +9,6 @@ from dataclasses import dataclass
 from typing import Any, TextIO
 from xtrace_harness.binary import DslCache, KernelBinary
 from xtrace_harness.error import HarnessError, PlatformError, ToolArgumentError
-from xtrace_harness.listing import InspectionCache, KernelListing
 from xtrace_harness.viewer.cli.show import ShowCommand
 from xtrace_harness.workflow import XtraceWorkflow
 
@@ -105,11 +104,11 @@ class McpServer:
     SERVER_NAME = "xtrace-harness"
     SERVER_VERSION = "0.1.0"
     INSTRUCTIONS = (
-        "Trace CUDA kernels on MarsCompute GPUs. Inspect the cubin (a paid inspection: estimate, "
-        "get the user's yes to the fee, submit, wait, fetch the result), pick sites from xtrace_sass, "
-        "estimate the job, get the user's yes to the cost cap, submit with accept_max_cost_usd, wait, "
-        "fetch, then read the trace with xtrace_show. In agent mode a job directory with [workspace] "
-        "and [agent] needs no inspection: estimate and submit it directly."
+        "Trace CUDA kernels on MarsCompute GPUs. A job directory holds xtrace.toml with [workspace] "
+        "(cubins, and optionally source, a launch manifest, tensors and files) and [agent] (the model "
+        "and its budget); an agent on the GPU host traces the kernel from them. Estimate the job, get "
+        "the user's yes to the cost cap, submit with accept_max_cost_usd, wait, fetch, then read the "
+        "trace with xtrace_show."
     )
     # JSON-RPC error codes
     PARSE_ERROR = -32700
@@ -325,7 +324,7 @@ class McpServer:
             if len(text) > McpServer.TEXT_CHARACTERS_MAX:
                 text = (
                     text[:McpServer.TEXT_CHARACTERS_MAX]
-                    + "\n[cut; narrow the request with line, grep, first or last]"
+                    + "\n[cut; narrow the view with filters such as --block, --warp or --tid]"
                 )
             return {
                 "content": [{"type": "text", "text": text}],
@@ -364,21 +363,11 @@ class McpServer:
             "type": "string",
             "description": "the job id",
         }
-        map_inspection_id = {
-            "type": "string",
-            "description": "the inspection id",
-        }
-        map_inspection_target = {
-            "binary": {"type": "string", "description": "the cubin"},
-            "kernel": {"type": "string", "description": "the kernel symbol; without it the kernel catalog only"},
-            "profile_id": {"type": "string", "description": "an inspection profile; the first one by default"},
-        }
         return [
             McpTool(
                 name="xtrace_hardware",
-                description="List the hardware a job can run on: environment id, GPU, architecture, "
-                "rate per GPU-hour, stages and bundle kinds (agent_workspace runs agent mode); and the "
-                "planner models, agent models and default limits.",
+                description="List the hardware a job can run on: environment id, GPU, architecture "
+                "and rate per GPU-hour; and the agent models and default limits.",
                 map_input_schema=McpServer._schema(
                     map_property={},
                     list_required=[],
@@ -398,7 +387,8 @@ class McpServer:
             McpTool(
                 name="xtrace_cubin_find",
                 description="Find a kernel's cubin in the Triton, torch.compile and TileLang caches "
-                "and given directories, newest first; optionally copy one into a job directory.",
+                "and given directories, newest first; optionally copy one into a job directory for "
+                "[workspace] cubins.",
                 map_input_schema=McpServer._schema(
                     map_property={
                         "pattern": {"type": "string", "description": "a regex searched in kernel names"},
@@ -425,163 +415,9 @@ class McpServer:
                 handler=self._cubin_show,
             ),
             McpTool(
-                name="xtrace_inspection_capabilities",
-                description="The inspection profiles open to the account, with their limits and "
-                "fixed fee per inspection, or why inspections are unavailable.",
-                map_input_schema=McpServer._schema(
-                    map_property={},
-                    list_required=[],
-                ),
-                handler=lambda map_arguments: self._workflow.inspection_capabilities(),
-            ),
-            McpTool(
-                name="xtrace_inspection_estimate",
-                description="Upload a cubin and quote its inspection: the profile and the fixed fee. "
-                "Show the fee to the user before submitting.",
-                map_input_schema=McpServer._schema(
-                    map_property=map_inspection_target,
-                    list_required=["binary"],
-                ),
-                handler=lambda map_arguments: self._workflow.quote_inspection(
-                    binary_path=map_arguments["binary"],
-                    kernel_symbol=map_arguments.get("kernel"),
-                    profile_id=map_arguments.get("profile_id"),
-                ).summary(),
-            ),
-            McpTool(
-                name="xtrace_inspection_submit",
-                description="Quote and accept an inspection of a cubin. Refused when the fee exceeds "
-                "accept_max_fee_usd, the amount the user agreed to.",
-                map_input_schema=McpServer._schema(
-                    map_property={
-                        **map_inspection_target,
-                        "accept_max_fee_usd": {"type": "number"},
-                        "idempotency_key": {
-                            "type": "string",
-                            "description": "reuse it when retrying an acceptance whose answer was lost",
-                        },
-                    },
-                    list_required=[
-                        "binary",
-                        "accept_max_fee_usd",
-                    ],
-                ),
-                handler=self._inspection_submit,
-            ),
-            McpTool(
-                name="xtrace_inspection_get",
-                description="One inspection's execution, cleanup and accounting.",
-                map_input_schema=McpServer._schema(
-                    map_property={"inspection_id": map_inspection_id},
-                    list_required=["inspection_id"],
-                ),
-                handler=lambda map_arguments: self._workflow.inspection(map_arguments["inspection_id"]),
-            ),
-            McpTool(
-                name="xtrace_inspection_wait",
-                description="Wait for an inspection to end, up to timeout_seconds; returns its last status.",
-                map_input_schema=McpServer._schema(
-                    map_property={
-                        "inspection_id": map_inspection_id,
-                        "timeout_seconds": {"type": "number"},
-                    },
-                    list_required=["inspection_id"],
-                ),
-                handler=lambda map_arguments: self._workflow.wait_inspection(
-                    inspection_id=map_arguments["inspection_id"],
-                    timeout_seconds=min(
-                        map_arguments.get("timeout_seconds", McpServer.WAIT_SECONDS_DEFAULT),
-                        McpServer.WAIT_SECONDS_MAX,
-                    ),
-                ),
-            ),
-            McpTool(
-                name="xtrace_inspection_query",
-                description="A page of the account's inspections, in inspection id order.",
-                map_input_schema=McpServer._schema(
-                    map_property={
-                        "limit": {"type": "integer"},
-                        "cursor": {"type": "string"},
-                    },
-                    list_required=[],
-                ),
-                handler=lambda map_arguments: self._workflow.inspections(
-                    limit=map_arguments.get("limit", McpServer.JOBS_LIMIT_DEFAULT),
-                    cursor=map_arguments.get("cursor"),
-                ),
-            ),
-            McpTool(
-                name="xtrace_inspection_cancel",
-                description="Ask an inspection to stop.",
-                map_input_schema=McpServer._schema(
-                    map_property={"inspection_id": map_inspection_id},
-                    list_required=["inspection_id"],
-                ),
-                handler=lambda map_arguments: self._workflow.cancel_inspection(map_arguments["inspection_id"]),
-            ),
-            McpTool(
-                name="xtrace_inspection_result",
-                description="Fetch a completed inspection of a cubin, download its kernel's listing and "
-                "cache both beside the cubin; returns the kernels, parameter layout and listing size.",
-                map_input_schema=McpServer._schema(
-                    map_property={
-                        "inspection_id": map_inspection_id,
-                        "binary": {"type": "string", "description": "the cubin it inspected"},
-                        "kernel": {"type": "string", "description": "the kernel whose listing to download"},
-                    },
-                    list_required=[
-                        "inspection_id",
-                        "binary",
-                    ],
-                ),
-                handler=self._inspection_result,
-            ),
-            McpTool(
-                name="xtrace_inspection_downloads",
-                description="Download artifacts an inspection result names into a local directory.",
-                map_input_schema=McpServer._schema(
-                    map_property={
-                        "inspection_id": map_inspection_id,
-                        "artifact_ids": {"type": "array", "items": {"type": "string"}},
-                        "output": {"type": "string", "description": "xtrace-inspections/<inspection> by default"},
-                    },
-                    list_required=[
-                        "inspection_id",
-                        "artifact_ids",
-                    ],
-                ),
-                handler=lambda map_arguments: {
-                    "files": self._workflow.download_inspection(
-                        inspection_id=map_arguments["inspection_id"],
-                        list_artifact_id=map_arguments["artifact_ids"],
-                        output_directory=map_arguments.get("output") or os.path.join(
-                            XtraceWorkflow.INSPECTIONS_DIRECTORY,
-                            map_arguments["inspection_id"],
-                        ),
-                    ),
-                },
-            ),
-            McpTool(
-                name="xtrace_sass",
-                description="A kernel's cached SASS listing, narrowed by regex or index range. "
-                "Inspect the cubin first with xtrace_inspection_submit and xtrace_inspection_result.",
-                map_input_schema=McpServer._schema(
-                    map_property={
-                        "listing": {"type": "string", "description": "a cubin or a cached .inspection-result.json"},
-                        "kernel": {"type": "string"},
-                        "kernels": {"type": "boolean", "description": "list kernels and parameters"},
-                        "grep": {"type": "string"},
-                        "first": {"type": "integer"},
-                        "last": {"type": "integer"},
-                    },
-                    list_required=["listing"],
-                ),
-                handler=self._sass,
-            ),
-            McpTool(
                 name="xtrace_estimate",
-                description="Upload a job directory, check it and quote it: the cost cap and the GPU "
-                "rate, and in agent mode the job fee and token rates. Show the cap to the user before "
+                description="Upload a job directory's workspace and quote it: the cost cap, the GPU "
+                "rate, the job fee and the agent's token rates. Show the cap to the user before "
                 "submitting.",
                 map_input_schema=McpServer._schema(
                     map_property={
@@ -724,84 +560,6 @@ class McpServer:
             raise HarnessError(
                 f"the quote's {what} is {XtraceWorkflow.usd(cap)}, above the accepted ${accepted_usd}; {remedy}"
             )
-
-    def _inspection_submit(self, map_arguments: dict[str, Any]) -> dict[str, Any]:
-        """Quote an inspection, check its fee against what the user accepted, and accept it."""
-        quoted = self._workflow.quote_inspection(
-            binary_path=map_arguments["binary"],
-            kernel_symbol=map_arguments.get("kernel"),
-            profile_id=map_arguments.get("profile_id"),
-        )
-        McpServer._check_accepted(
-            cap_micro_usd=quoted.map_quote["price"]["fixed_fee_micro_usd"],
-            accepted_usd=map_arguments["accept_max_fee_usd"],
-            what="fee",
-            remedy="ask the user",
-        )
-        return {
-            "quote": quoted.summary(),
-            "inspection": self._workflow.submit_inspection(
-                quoted=quoted,
-                idempotency_key=map_arguments.get("idempotency_key"),
-            ),
-        }
-
-    def _inspection_result(self, map_arguments: dict[str, Any]) -> dict[str, Any]:
-        """Fetch an inspection into the cache and summarize it."""
-        path = self._workflow.fetch_inspection(
-            inspection_id=map_arguments["inspection_id"],
-            binary_path=map_arguments["binary"],
-            kernel_symbol=map_arguments.get("kernel"),
-        )
-        listing = KernelListing.load(path)
-        return {
-            "listing": path,
-            "kernels": {
-                symbol: {
-                    "architecture": kernel.architecture,
-                    "instructions": kernel.instruction_count,
-                    "is_listing_complete": kernel.is_listing_complete,
-                    "parameters": (
-                        None
-                        if kernel.list_parameter is None
-                        else [
-                            {
-                                "index": parameter.index,
-                                "offset_bytes": parameter.offset_bytes,
-                                "size_bytes": parameter.size_bytes,
-                            }
-                            for parameter in kernel.list_parameter
-                        ]
-                    ),
-                }
-                for symbol, kernel in listing.map_kernel.items()
-            },
-            "listed_kernel": None if listing.kernel is None else listing.kernel.symbol,
-        }
-
-    def _sass(self, map_arguments: dict[str, Any]) -> str:
-        """A narrowed SASS listing from the cache."""
-        path = map_arguments["listing"]
-        if not path.endswith(".json"):
-            path = InspectionCache.path_of(
-                binary_path=path,
-                sha256=KernelBinary.load(path).sha256,
-                kernel_symbol=map_arguments.get("kernel"),
-            )
-            if not os.path.isfile(path):
-                raise HarnessError(
-                    f"no inspection of {map_arguments.get('kernel') or 'the kernel catalog'} is cached "
-                    f"beside {map_arguments['listing']}; run xtrace_inspection_submit and "
-                    "xtrace_inspection_result first"
-                )
-        listing = KernelListing.load(path)
-        if map_arguments.get("kernels"):
-            return listing.render_kernels()
-        return listing.render_listing(
-            opcode_pattern=map_arguments.get("grep"),
-            first_index=map_arguments.get("first"),
-            last_index=map_arguments.get("last"),
-        )
 
     def _submit(self, map_arguments: dict[str, Any]) -> dict[str, Any]:
         """Quote, check the cap against what the user accepted, and submit."""

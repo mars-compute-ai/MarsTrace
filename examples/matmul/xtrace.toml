@@ -1,60 +1,22 @@
-hardware = "h100-sxm"
-intent = "how long each thread spends in the dot-product loop, and how evenly the blocks run"
+hardware = "h200-cuda12.9"
+intent = """
+How long each thread spends in the dot-product loop of square_matrix_mul, and how evenly the
+blocks run, at n = 256: int32 matrices a, b and c of 256 x 256, a and b random, launched with
+grid (16, 16) and block (16, 16).
+"""
 
-# built with: nvcc -cubin -arch=sm_90a -lineinfo -o matmul.cubin matmul.cu
-[kernel]
-binary = "matmul.cubin"
-name = "square_matrix_mul"
-sources = ["matmul.cu"]
+# built with: nvcc -cubin -arch=sm_90a -lineinfo -o matmul.cubin src/matmul.cu
+[workspace]
+cubins = ["matmul.cubin"]
+source = "src"
 
-[[buffers]]
-name = "a"
-dtype = "i32"
-shape = [256, 256]
-init = "random"
-seed = 1
-
-[[buffers]]
-name = "b"
-dtype = "i32"
-shape = [256, 256]
-init = "random"
-seed = 2
-
-[[buffers]]
-name = "c"
-dtype = "i32"
-shape = [256, 256]
-output = true
-
-# square_matrix_mul(const int* a, const int* b, int* c, int n)
-[launch]
-grid = [16, 16]
-block = [16, 16]
-args = [
-    { kind = "buffer", buffer = "a" },
-    { kind = "buffer", buffer = "b" },
-    { kind = "buffer", buffer = "c" },
-    { kind = "scalar", dtype = "i32", value = 256 },
-]
+[agent]
+model = "claude-opus-5-5"
+max_turns = 60
+max_input_tokens = 4000000
+max_output_tokens = 60000
+max_wall_seconds = 1200
 
 [limits]
-max_cost_usd = 2.0
-max_gpu_seconds = 120
-
-[trace]
-clock = "gpu"
-per_thread_records = 512
-
-# the loop's bound check (line 8 of matmul.cu, ISETP.GE.AND at 0x00d0) and the store of
-# the result (line 11, STG.E at 0x0c70), by their index in 'xtrace sass'
-[[trace.sites]]
-index = 13
-
-[[trace.sites]]
-index = 199
-
-[[trace.regions]]
-enter = 0
-leave = 1
-label = "dot_product"
+max_cost_usd = 20.0
+max_gpu_seconds = 1500

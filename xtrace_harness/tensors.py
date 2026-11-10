@@ -1,5 +1,4 @@
 import json
-import math
 import struct
 from dataclasses import dataclass, field
 from xtrace_harness.error import ManifestError
@@ -26,13 +25,13 @@ class TensorEntry:
 
 @dataclass
 class TensorFile:
-    """The header of a safetensors file, which names the tensors a job's buffers start from."""
+    """The header of a safetensors file of a workspace: the tensors it holds and where their data lies."""
 
     HEADER_SIZE_BYTES = 8
     # the largest header a safetensors file may carry
     HEADER_BYTES_MAX = 100 * 1024 * 1024
     METADATA_KEY = "__metadata__"
-    # safetensors element types and the job's names for them
+    # safetensors element types and the harness's names for them
     MAP_DTYPE = {
         "BOOL": "bool",
         "U8": "u8",
@@ -51,12 +50,8 @@ class TensorFile:
         "F64": "f64",
     }
 
-    # the alignment of the data section that follows the header
-    HEADER_ALIGNMENT_BYTES = 8
-
     path: str
     map_tensor: dict[str, TensorEntry] = field(default_factory=dict)
-    data_offset_bytes: int = 0
 
     @classmethod
     def load(cls, path: str) -> "TensorFile":
@@ -106,85 +101,4 @@ class TensorFile:
         return cls(
             path=path,
             map_tensor=map_tensor,
-            data_offset_bytes=TensorFile.HEADER_SIZE_BYTES + header_bytes,
         )
-
-    def read_tensor(self, name: str) -> bytes:
-        """The data of one tensor of the file.
-
-        Args:
-            name: the tensor
-
-        Returns:
-            its bytes
-
-        Raises:
-            ManifestError: the file is shorter than its header says
-        """
-        tensor = self.map_tensor[name]
-        with open(
-            file=self.path,
-            mode="rb",
-        ) as tensor_file:
-            tensor_file.seek(self.data_offset_bytes + tensor.offset_bytes)
-            data = tensor_file.read(tensor.nbytes)
-        if len(data) != tensor.nbytes:
-            raise ManifestError(f"{self.path}: tensor '{name}' is truncated")
-        return data
-
-    @staticmethod
-    def encode(
-        list_tensor: list[tuple[TensorEntry, bytes]],
-        map_metadata: dict[str, str] | None = None,
-    ) -> bytes:
-        """A safetensors file holding the given tensors, in the given order.
-
-        Args:
-            list_tensor: each tensor's entry and data
-            map_metadata: text the file carries under ``__metadata__``, or None
-
-        Returns:
-            the file's bytes
-        """
-        map_safetensors_dtype = {dtype: name for name, dtype in TensorFile.MAP_DTYPE.items()}
-        map_header: dict[str, object] = {}
-        if map_metadata:
-            map_header[TensorFile.METADATA_KEY] = dict(map_metadata)
-        offset = 0
-        for tensor, data in list_tensor:
-            map_header[tensor.name] = {
-                "dtype": map_safetensors_dtype[tensor.dtype],
-                "shape": list(tensor.list_shape),
-                "data_offsets": [
-                    offset,
-                    offset + len(data),
-                ],
-            }
-            offset += len(data)
-        header = json.dumps(
-            map_header,
-            separators=(",", ":"),
-        ).encode("utf-8")
-        header += b" " * (-len(header) % TensorFile.HEADER_ALIGNMENT_BYTES)
-        return b"".join(
-            [
-                struct.pack(
-                    "<Q",         # format
-                    len(header),  # v1
-                ),
-                header,
-                *[data for _, data in list_tensor],
-            ]
-        )
-
-    @staticmethod
-    def element_count(list_shape: list[int]) -> int:
-        """The number of elements of a shape.
-
-        Args:
-            list_shape: the shape
-
-        Returns:
-            the product of its extents, 1 for a scalar
-        """
-        return math.prod(list_shape)

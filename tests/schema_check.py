@@ -23,21 +23,14 @@ class SchemaCheck:
         ("POST", re.compile(r"^/v1/xtrace/artifacts/[^/]+/complete$"), "upload-complete"),
         ("POST", re.compile(r"^/v1/xtrace/quotes$"), "estimate-input"),
         ("POST", re.compile(r"^/v1/xtrace/jobs$"), "submit-input"),
-        ("POST", re.compile(r"^/v1/xtrace/inspections/quotes$"), "inspection-request"),
-        ("POST", re.compile(r"^/v1/xtrace/inspections$"), "inspection-accept"),
-        ("POST", re.compile(r"^/v1/xtrace/inspections/[^/]+/artifacts/downloads$"), "inspection-downloads-request"),
     ]
     # (method, path pattern) of a response -> the schema its body follows
     LIST_RESPONSE_SCHEMA = [
         ("GET", re.compile(r"^/v1/xtrace/capabilities$"), "capabilities"),
         ("POST", re.compile(r"^/v1/xtrace/quotes$"), "quote"),
-        ("GET", re.compile(r"^/v1/xtrace/inspections/capabilities$"), "inspection-capabilities"),
-        ("POST", re.compile(r"^/v1/xtrace/inspections/quotes$"), "inspection-quote"),
-        ("POST", re.compile(r"^/v1/xtrace/inspections$"), "inspection"),
-        ("GET", re.compile(r"^/v1/xtrace/inspections/[0-9a-f-]{36}$"), "inspection"),
-        ("POST", re.compile(r"^/v1/xtrace/inspections/[^/]+/cancel$"), "inspection"),
-        ("GET", re.compile(r"^/v1/xtrace/inspections/[^/]+/result$"), "inspection-result"),
-        ("POST", re.compile(r"^/v1/xtrace/inspections/[^/]+/artifacts/downloads$"), "inspection-downloads"),
+        ("GET", re.compile(r"^/v1/xtrace/credit$"), "credit"),
+        ("POST", re.compile(r"^/v1/xtrace/jobs$"), "job"),
+        ("POST", re.compile(r"^/v1/xtrace/jobs/[^/]+/cancel$"), "job"),
     ]
     LAUNCH_MANIFEST = "launch-manifest"
 

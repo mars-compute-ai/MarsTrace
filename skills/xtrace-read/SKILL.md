@@ -1,15 +1,13 @@
 ---
 name: xtrace-read
-description: Read an Xtrace trace report of a CUDA kernel in the terminal with `xtrace show` — per-region statistics, per-thread timelines, pipeline bubbles, concurrency over time, outlier threads, the longest instances, and the region a user selected in the HTML panel. Use whenever there is an xtrace.json from a MarsCompute Xtrace job to analyse, launch job or agent mode alike, or its summary.json, correctness.json or result-manifest.json to judge, or when the user pastes a selection token starting with gwtrace/1.
+description: Read an Xtrace trace report of a CUDA kernel in the terminal with `xtrace show` — per-region statistics, per-thread timelines, pipeline bubbles, concurrency over time, outlier threads, the longest instances, and the region a user selected in the HTML panel. Use whenever there is an xtrace.json from a MarsCompute Xtrace job to analyse, or its result-manifest.json to judge, or when the user pastes a selection token starting with gwtrace/1.
 ---
 
 # Reading an Xtrace report
 
 A job's results land in `xtrace-results/<job>/` (`xtrace fetch`): `xtrace.json` (the
-trace report), `summary.json` (quality, reason codes and headline figures),
-`correctness.json` (the output checks) and `result-manifest.json`. An agent-mode job
-returns `xtrace.json` and `result-manifest.json` only. Read the report with `xtrace show`;
-it needs no GPU and no network.
+trace report) and `result-manifest.json` (its quality and reason codes). Read the report
+with `xtrace show`; it needs no GPU and no network.
 
 ## 1. Use `xtrace show`, not a JSON parser
 
@@ -55,10 +53,9 @@ paired-region tables; read those from `--stats`.
 
 ## 2. Gate the trace first
 
-Read `summary.json` and `correctness.json` before any number of the report; for an
-agent-mode job, read the same fields (`quality`, `reason_codes`, `correctness`) in
-`result-manifest.json`. An agent-mode job that ended without a trace is `unusable`: tell
-the user, and look at the intent, the workspace and the budget before submitting again.
+Read `quality` and `reason_codes` in `result-manifest.json` before any number of the
+report. A job that ended without a trace is `unusable`: tell the user, and look at the
+intent, the workspace and the budget before submitting again.
 
 `quality` is `usable`, `partial` or `unusable`. `reason_codes` says why it is not
 `usable`; each code limits what the trace can support:
@@ -67,28 +64,19 @@ the user, and look at the intent, the workspace and the budget before submitting
 | --- | --- |
 | `empty_trace` | nothing recorded: the sites never executed under this launch. No timeline exists |
 | `sites_without_records` | some sites never executed on the traced path; regions using them are empty |
-| `record_capacity_reached_possible_wrap` | some rows filled their ring: counts are lower bounds and the earliest records are lost. Raise `per_thread_records` or use `warp_level` |
-| `unpaired_region_boundaries` | a region's pair rate is below 100%: unequal enter and leave counts, or a wrapped ring. Say which before using its numbers |
+| `record_capacity_reached_possible_wrap` | some rows filled their record buffer: counts are lower bounds and the earliest records are lost. Ask in `intent` for fewer sites per iteration or for warp-level records |
+| `unpaired_region_boundaries` | a region's pair rate is below 100%: unequal enter and leave counts, or a wrapped record buffer. Say which before using its numbers |
 | `regions_without_intervals` | a declared region produced no interval: its sites are backwards or on disjoint paths |
-| `correctness_failed` | an output differs: the traced run computed something else. Do not report its timeline until the cause is known |
-| `missing_reference` | no reference was given, so only traced against untraced was checked |
-| `empty_profile`, `missing_metric_values`, `sampling_loss_unknown`, `dropped_or_unattributed_samples`, `source_mapping_unavailable` | a profiler stage is incomplete; its numbers are partial |
 
 A code not in this table is still a limit: quote it to the user rather than ignore it.
-
-`correctness.json` holds one check per comparison: against the reference (when the job
-had `[validation]`), and each instrumented stage against the uninstrumented launch
-(`instrumented_vs_uninstrumented`, `range_profile_vs_uninstrumented`, ...). Each has a
-`status` (`passed`, `failed`, `not_verified`) and, per output buffer, the element count,
-the mismatches and the largest error. A failed instrumented check means the traced run
-diverged; a failed reference check means the kernel or the launch description is wrong.
 
 Then check the trace against the kernel's structure with `--stats`:
 
 - **Records per row match your model.** A loop of N iterations gives N records per row at
-  a loop-body site. A different count means the site is not where you thought.
+  a loop-body site. A different count means the site sits elsewhere than its region
+  assumes.
 - **Every declared site appears**, and **spans make sense**: an interval close to the
-  whole kernel is a wait you did not split out; a leave before its enter means the region
+  whole kernel is a wait the regions do not split out; a leave before its enter means the region
   is backwards.
 
 ## 3. Find the bubbles
@@ -96,8 +84,8 @@ Then check the trace against the kernel's structure with `--stats`:
 A bubble is time a row spends between its regions: waiting on a barrier, on memory, on
 another warp role. Work from the whole to the part:
 
-1. **Is the trace trustworthy?** Section 2: quality, reason codes, correctness, and
-   `--stats` against the kernel's structure. Stop and fix the sites if any is off.
+1. **Is the trace trustworthy?** Section 2: quality, reason codes, and `--stats` against
+   the kernel's structure. When any is off, tell the user before going on.
 2. **How much is idle?** `--bubbles` gives the bubble ratio and the rows with the most
    bubble time. A ratio of a few percent is a busy kernel; tens of percent is a pipeline
    that stalls.

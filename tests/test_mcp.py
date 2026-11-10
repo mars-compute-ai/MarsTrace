@@ -86,10 +86,7 @@ class McpStdioTest(unittest.TestCase):
             [tool["name"] for tool in list_tool],
             [
                 "xtrace_hardware", "xtrace_credit", "xtrace_cubin_find", "xtrace_cubin_show",
-                "xtrace_inspection_capabilities", "xtrace_inspection_estimate", "xtrace_inspection_submit",
-                "xtrace_inspection_get", "xtrace_inspection_wait", "xtrace_inspection_query",
-                "xtrace_inspection_cancel", "xtrace_inspection_result", "xtrace_inspection_downloads",
-                "xtrace_sass", "xtrace_estimate", "xtrace_submit", "xtrace_jobs", "xtrace_job", "xtrace_wait",
+                "xtrace_estimate", "xtrace_submit", "xtrace_jobs", "xtrace_job", "xtrace_wait",
                 "xtrace_cancel", "xtrace_fetch", "xtrace_show",
             ],
         )
@@ -111,32 +108,14 @@ class McpStdioTest(unittest.TestCase):
         self.initialize()
         self.assertEqual(self.call("xtrace_credit")["structuredContent"]["top_up_url"], TOP_UP_URL)
         binary = os.path.join(self.directory, "matmul.cubin")
-        profiles = self.call("xtrace_inspection_capabilities")["structuredContent"]
-        self.assertEqual(profiles["availability"]["state"], "available")
-        fee = self.call("xtrace_inspection_estimate", binary=binary, kernel="square_matrix_mul")["structuredContent"]
-        self.assertEqual(fee["fee_usd"], "$0.020000")
-        refused = self.call("xtrace_inspection_submit", binary=binary, kernel="square_matrix_mul", accept_max_fee_usd=0.01)
-        self.assertTrue(refused["isError"])
-        self.assertIn("fee is $0.020000, above the accepted $0.01", refused["structuredContent"]["error"]["message"])
-        self.assertEqual(self.fake.state.map_inspection, {})
-        accepted = self.call("xtrace_inspection_submit", binary=binary, kernel="square_matrix_mul", accept_max_fee_usd=0.02)
-        inspection_id = accepted["structuredContent"]["inspection"]["inspection_id"]
-        waited = self.call("xtrace_inspection_wait", inspection_id=inspection_id, timeout_seconds=30)["structuredContent"]
-        self.assertEqual(waited["execution"]["outcome"], "completed")
-        self.assertEqual(self.call("xtrace_inspection_query")["structuredContent"]["items"][0]["inspection_id"], inspection_id)
-        inspected = self.call("xtrace_inspection_result", inspection_id=inspection_id, binary=binary, kernel="square_matrix_mul")["structuredContent"]
-        self.assertEqual(inspected["listed_kernel"], "square_matrix_mul")
-        self.assertEqual(inspected["kernels"]["square_matrix_mul"]["instructions"], 216)
-        self.assertEqual(len(inspected["kernels"]["square_matrix_mul"]["parameters"]), 4)
-        listing = self.call("xtrace_sass", listing=binary, kernel="square_matrix_mul", first=13, last=13)
-        self.assertIn("ISETP.GE.AND", listing["content"][0]["text"])
+        self.assertEqual(self.call("xtrace_cubin_show", binary=binary)["structuredContent"]["kernels"], ["square_matrix_mul"])
         quote = self.call("xtrace_estimate", directory=self.directory)["structuredContent"]
-        self.assertEqual(quote["max_cost_usd"], "$2.000000")
-        refused = self.call("xtrace_submit", directory=self.directory, accept_max_cost_usd=1.5)
+        self.assertEqual((quote["max_cost_usd"], quote["job_fee_usd"]), ("$20.000000", "$0.500000"))
+        refused = self.call("xtrace_submit", directory=self.directory, accept_max_cost_usd=19.5)
         self.assertTrue(refused["isError"])
-        self.assertIn("above the accepted $1.5", refused["structuredContent"]["error"]["message"])
+        self.assertIn("above the accepted $19.5", refused["structuredContent"]["error"]["message"])
         self.assertEqual(self.fake.state.map_job, {})
-        submitted = self.call("xtrace_submit", directory=self.directory, accept_max_cost_usd=2, idempotency_key="k-1")
+        submitted = self.call("xtrace_submit", directory=self.directory, accept_max_cost_usd=20, idempotency_key="k-1")
         job_id = submitted["structuredContent"]["job"]["job_id"]
         self.assertEqual(self.call("xtrace_wait", job_id=job_id, timeout_seconds=30)["structuredContent"]["job"]["state"], "succeeded")
         files = self.call("xtrace_fetch", job_id=job_id)["structuredContent"]["files"]
@@ -147,7 +126,7 @@ class McpStdioTest(unittest.TestCase):
         self.assertIn("mainloop", shown["content"][0]["text"])
         self.assertEqual(self.call("xtrace_jobs")["structuredContent"]["items"][0]["job_id"], job_id)
 
-    def test_agent_mode_through_mcp(self) -> None:
+    def test_workspace_with_files_through_mcp(self) -> None:
         self.initialize()
         directory = os.path.join(self.directory, "agent")
         os.makedirs(directory)
@@ -157,12 +136,12 @@ class McpStdioTest(unittest.TestCase):
         self.assertEqual((quote["hardware"], quote["job_fee_usd"]), ("h200-cuda12.9", "$0.500000"))
         submitted = self.call("xtrace_submit", directory=directory, accept_max_cost_usd=30)
         self.assertFalse(submitted["isError"])
-        self.assertEqual(self.fake.state.map_inspection, {})
+        self.assertEqual(submitted["structuredContent"]["job"]["state"], "queued")
 
     def test_platform_refusal_is_a_tool_error(self) -> None:
         self.initialize()
         self.fake.state.available_micro_usd = 0
-        result = self.call("xtrace_submit", directory=self.directory, accept_max_cost_usd=5)
+        result = self.call("xtrace_submit", directory=self.directory, accept_max_cost_usd=25)
         self.assertTrue(result["isError"])
         self.assertEqual(result["structuredContent"]["error"]["code"], "insufficient_credit")
         self.assertEqual(result["structuredContent"]["error"]["top_up_url"], TOP_UP_URL)

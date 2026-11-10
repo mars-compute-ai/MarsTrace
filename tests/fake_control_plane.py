@@ -22,123 +22,56 @@ EXAMPLE_DIRECTORY = os.path.join(
     "matmul",
 )
 TIMESTAMP = "2026-11-08T12:00:00.000Z"
-LATER = "2026-11-08T13:00:00.000Z"
-OWNER = {"tenant_id": "6f1c3b8e-0d4a-4c3e-9a51-0e3f4b2a7c10", "account_id": "0b8e6f52-3c1d-4b7a-8e2f-5a9c1d3e7b20"}
-DIGEST = "d" * 64
-IMAGE = "sha256:" + "e" * 64
-INSPECTION_PROFILE = {
-    "profile": {
-        "profile_id": "static-cubin-v1",
-        "revision": "r1",
-        "image_digest": IMAGE,
-        "parser_revision": "p1",
-        "capability_evidence_sha256": DIGEST,
-    },
-    "limits": {
-        "max_input_bytes": 1 << 27,
-        "max_output_bytes": 1 << 24,
-        "max_kernels": 256,
-        "max_instructions_per_kernel": 1 << 20,
-        "max_parameters_per_kernel": 256,
-        "cpus": 1,
-        "memory_bytes": 1 << 30,
-        "pids": 64,
-        "scratch_bytes": 1 << 28,
-        "max_queue_seconds": 600,
-        "max_wall_seconds": 120,
-        "max_tool_seconds": 60,
-        "max_upload_seconds": 60,
-        "max_cleanup_seconds": 60,
-    },
-    "price": {
-        "currency": "USD",
-        "fixed_fee_micro_usd": "20000",
-        "price_revision": "price-1",
-        "charge_policy_revision": "policy-1",
-        "charge_policy_sha256": DIGEST,
-        "tax_behavior": "exclusive",
-        "billing_mapping_sha256": DIGEST,
-    },
-}
-# the parameter layout of square_matrix_mul(const int*, const int*, int*, int)
-MATMUL_PARAMETERS = [
-    {"index": 0, "offset": 0, "size": 8},
-    {"index": 1, "offset": 8, "size": 8},
-    {"index": 2, "offset": 16, "size": 8},
-    {"index": 3, "offset": 24, "size": 4},
-]
 TOP_UP_URL = "https://console.marscompute.ai/billing/credit"
-COMPUTE_H100 = {
+COMPUTE_H200 = {
     "provider": "nebius",
     "region": "eu-north1",
-    "gpu_type": "H100",
+    "gpu_type": "H200",
     "gpu_count": 1,
-    "purchase_option": "on_demand",
+    "purchase_option": "spot",
     "fallback": "none",
 }
-COMPUTE_B200 = dict(COMPUTE_H100, gpu_type="B200")
-COMPUTE_H200 = dict(COMPUTE_H100, gpu_type="H200", purchase_option="spot")
-COMPUTE_B300 = dict(COMPUTE_H100, gpu_type="B300", purchase_option="spot")
+COMPUTE_B200 = dict(COMPUTE_H200, gpu_type="B200", purchase_option="on_demand")
+COMPUTE_B300 = dict(COMPUTE_H200, gpu_type="B300")
 AGENT_MODEL = "claude-opus-5-5"
 CAPABILITIES = {
     "schema_version": "marscompute.xtrace.capabilities.v1",
     "enabled": True,
     "compute": [
         {
-            "compute": COMPUTE_H100,
-            "environment_id": "h100-sxm",
-            "image_digest": "sha256:" + "a" * 64,
+            "compute": COMPUTE_H200,
+            "environment_id": "h200-cuda12.9",
+            "workspace_image_digest": "sha256:" + "a" * 64,
             "architecture": "sm_90a",
+            "architectures": {"xtrace": ["sm_90a"]},
+            "gpu_micro_usd_per_hour": "4000000",
             "qualified": True,
-            "bundle_kinds": ["cubin_launch"],
-            "build_templates": [],
-            "stages": ["xtrace", "range_profile", "pc_sampling"],
-            "gpu_micro_usd_per_hour": "3200000",
-            "architectures": {
-                "xtrace": ["sm_90a"],
-                "range_profile": ["sm_90a"],
-                "pc_sampling": ["sm_90a"],
-                "comparison": ["sm_90a"],
-            },
+            "bundle_kinds": ["agent_workspace"],
+            "stages": ["xtrace"],
         },
         {
             "compute": COMPUTE_B200,
-            "environment_id": "b200",
-            "image_digest": "sha256:" + "b" * 64,
+            "environment_id": "b200-cuda12.9",
+            "workspace_image_digest": "sha256:" + "b" * 64,
             "architecture": "sm_100a",
-            "qualified": True,
-            "bundle_kinds": ["cubin_launch"],
-            "build_templates": [],
-            "stages": ["xtrace"],
+            "architectures": {"xtrace": ["sm_100a"]},
             "gpu_micro_usd_per_hour": "6400000",
-            "architectures": {"xtrace": ["sm_100a"], "range_profile": [], "pc_sampling": [], "comparison": []},
-        },
-        {
-            "compute": COMPUTE_H200,
-            "environment_id": "h200-cuda12.9",
-            "image_digest": "sha256:" + "c" * 64,
-            "architecture": "sm_90a",
             "qualified": True,
-            "bundle_kinds": ["cubin_launch", "agent_workspace"],
-            "build_templates": [],
+            "bundle_kinds": ["agent_workspace"],
             "stages": ["xtrace"],
-            "gpu_micro_usd_per_hour": "4000000",
-            "architectures": {"xtrace": ["sm_90a"], "range_profile": [], "pc_sampling": [], "comparison": []},
         },
         {
             "compute": COMPUTE_B300,
             "environment_id": "b300-cuda13.0",
-            "image_digest": "sha256:" + "f" * 64,
+            "workspace_image_digest": "sha256:" + "c" * 64,
             "architecture": "sm_103a",
+            "architectures": {"xtrace": ["sm_103a"]},
+            "gpu_micro_usd_per_hour": "9600000",
             "qualified": True,
             "bundle_kinds": ["agent_workspace"],
-            "build_templates": [],
             "stages": ["xtrace"],
-            "gpu_micro_usd_per_hour": "9600000",
-            "architectures": {"xtrace": ["sm_103a"], "range_profile": [], "pc_sampling": [], "comparison": []},
         },
     ],
-    "models": ["planner-small"],
     "agent_models": [AGENT_MODEL],
     "max_upload_bytes": 1 << 30,
     "max_query_records": 1000,
@@ -154,7 +87,7 @@ CAPABILITIES = {
 
 
 def agent_job(directory: str) -> None:
-    """Write an agent-mode job of the example cubin, its source and a driver script into a directory."""
+    """Write a job of the example cubin, its source and a driver script into a directory."""
     shutil.copyfile(os.path.join(EXAMPLE_DIRECTORY, "matmul.cubin"), os.path.join(directory, "matmul.cubin"))
     for relative_path, text in (
         ("src/matmul.cu", "// kernel\n"),
@@ -174,100 +107,6 @@ def agent_job(directory: str) -> None:
         )
 
 
-def candidates_of(symbol: str) -> bytes:
-    """The site candidates document of a kernel, which names no qualified site."""
-    return json.dumps(
-        {
-            "schema_version": "marscompute.xtrace.static-candidates.v1",
-            "symbol": symbol,
-            "policy_version": "no-qualified-native-sites-v1",
-            "candidates": [],
-        }
-    ).encode()
-
-
-def inspection_result(
-    inspection_id: str,
-    quote_id: str,
-    quote_sha256: str,
-    request: dict[str, Any],
-    listing: bytes,
-    listing_id: str,
-    candidates: bytes,
-    candidates_id: str,
-) -> dict[str, Any]:
-    """An inspection result of one kernel whose listing and candidates are the given artifacts."""
-    map_listing = json.loads(listing)
-    count = len(map_listing["instructions"])
-    attempt = {"attempt_id": "attempt-1", "epoch": 1, "supervisor_id": "supervisor-1", "started_at": TIMESTAMP}
-    return {
-        "schema_version": "marscompute.xtrace.inspection-result.v1",
-        "inspection_id": inspection_id,
-        "quote_id": quote_id,
-        "quote_sha256": quote_sha256,
-        "request_sha256": FakeControlPlane.digest(request),
-        "binary": request["binary"],
-        "profile_id": "static-cubin-v1",
-        "profile_revision": "r1",
-        "image_digest": IMAGE,
-        "parser_revision": "p1",
-        "static_only": True,
-        "gpu_executed": False,
-        "kernel_catalog": {
-            "coverage": {"returned_count": 1, "total_count": 1, "complete": True, "truncated": False},
-            "kernels": [
-                {
-                    "symbol": map_listing["symbol"],
-                    "architecture": "sm_90a",
-                    "parameter_layout": {"state": "extracted", "evidence_sha256": DIGEST, "parameters": MATMUL_PARAMETERS},
-                    "resources": {"registers": None, "static_shared_memory_bytes": None},
-                    "instructions": {
-                        "artifact": {
-                            "artifact_id": listing_id,
-                            "sha256": hashlib.sha256(listing).hexdigest(),
-                            "size_bytes": len(listing),
-                            "media_type": "application/json",
-                        },
-                        "coverage": {"returned_count": count, "total_count": count, "complete": True, "truncated": False},
-                        "index_space_id": map_listing["index_space_id"],
-                    },
-                    "site_policy": {
-                        "policy_version": "no-qualified-native-sites-v1",
-                        "candidates": {
-                            "artifact": {
-                                "artifact_id": candidates_id,
-                                "sha256": hashlib.sha256(candidates).hexdigest(),
-                                "size_bytes": len(candidates),
-                                "media_type": "application/json",
-                            },
-                            "coverage": {"returned_count": 0, "total_count": None, "complete": False, "truncated": True},
-                        },
-                        "native_equivalence": {"state": "not_qualified", "reason": "native_equivalence_not_established"},
-                    },
-                }
-            ],
-        },
-        "provenance": dict(attempt, toolchain_sha256=DIGEST, completed_at=TIMESTAMP),
-    }
-
-
-def matmul_documents() -> tuple[dict, dict, bytes]:
-    """An inspection result of the example kernel, its listing, and the listing's bytes."""
-    with open(os.path.join(FIXTURE_DIRECTORY, "matmul_instructions.json"), "rb") as fixture_file:
-        listing = fixture_file.read()
-    result = inspection_result(
-        inspection_id="0c9d2a4e-1b3f-4e5a-8c6d-7e8f9a0b1c2d",
-        quote_id="quote-1",
-        quote_sha256="a" * 64,
-        request={"binary": {"artifact_id": "cubin-1", "sha256": "b" * 64, "size_bytes": 10664, "format": "cubin"}},
-        listing=listing,
-        listing_id="listing-1",
-        candidates=candidates_of("square_matrix_mul"),
-        candidates_id="candidates-1",
-    )
-    return result, json.loads(listing), listing
-
-
 class FakeState:
     """What the fake Control Plane holds between requests."""
 
@@ -280,22 +119,13 @@ class FakeState:
         self.map_quote: dict[str, dict[str, Any]] = {}
         self.map_job: dict[str, dict[str, Any]] = {}
         self.map_job_of_key: dict[str, str] = {}
-        self.map_inspection: dict[str, dict[str, Any]] = {}
-        self.map_inspection_quote: dict[str, dict[str, Any]] = {}
-        self.map_inspection_of_key: dict[str, str] = {}
-        self.list_inspection_order: list[str] = []
-        self.is_inspection_available = True
-        # the outcome an inspection ends with, or None to complete every cubin
-        self.inspection_outcome: str | None = None
         self.list_job_order: list[str] = []
         self.available_micro_usd = 100_000_000
         # files larger than this are granted as multipart uploads of PART_BYTES parts
         self.multipart_threshold = 1 << 20
         self.part_bytes = 4096
-        # polls a job and an inspection stay unfinished for
+        # polls a job stays unfinished for
         self.job_polls = 1
-        self.inspection_polls = 1
-        self.instructions_fixture = os.path.join(FIXTURE_DIRECTORY, "matmul_instructions.json")
 
     def requests_to(self, method: str, pattern: str) -> list[dict[str, Any]]:
         regex = re.compile(pattern)
@@ -411,44 +241,6 @@ class FakeControlPlane(http.server.BaseHTTPRequestHandler):
                     "top_up_url": TOP_UP_URL,
                 },
             )
-        elif path == "/v1/xtrace/inspections/capabilities":
-            availability: dict[str, Any] = {"state": "unavailable", "reason": "not_configured", "profiles": []}
-            if state.is_inspection_available:
-                availability = {"state": "available", "profiles": [dict(INSPECTION_PROFILE, valid_until=LATER)]}
-            self._answer(
-                200,
-                {
-                    "schema_version": "marscompute.xtrace.inspection-capabilities.v1",
-                    "environment": "test",
-                    "availability": availability,
-                },
-            )
-        elif path == "/v1/xtrace/inspections":
-            query = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
-            limit = int(query["limit"][0])
-            list_id = state.list_inspection_order
-            if "cursor" in query:
-                list_id = list_id[list_id.index(query["cursor"][0]) + 1:]
-            self._answer(
-                200,
-                {
-                    "items": [self._public(state.map_inspection[inspection_id]) for inspection_id in list_id[:limit]],
-                    "next_cursor": list_id[limit - 1] if len(list_id) > limit else None,
-                },
-            )
-        elif match := re.match(r"^/v1/xtrace/inspections/([^/]+)/result$", path):
-            inspection = state.map_inspection.get(match.group(1))
-            if inspection is None:
-                self._fail(404, "inspection_not_found", "no such inspection")
-            elif inspection["_result"] is None:
-                self._fail(409, "inspection_result_not_ready", "not completed")
-            else:
-                self._answer(200, inspection["_result"])
-        elif match := re.match(r"^/v1/xtrace/inspections/([^/]+)$", path):
-            if match.group(1) not in state.map_inspection:
-                self._fail(404, "inspection_not_found", "no such inspection")
-                return
-            self._answer(200, self._poll_inspection(match.group(1)))
         elif path == "/v1/xtrace/jobs":
             query = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
             limit = int(query["limit"][0])
@@ -485,79 +277,18 @@ class FakeControlPlane(http.server.BaseHTTPRequestHandler):
     def _public(job: dict[str, Any]) -> dict[str, Any]:
         return {key: value for key, value in job.items() if not key.startswith("_")}
 
-    @staticmethod
-    def digest(value: Any) -> str:
-        """The canonical digest the platform binds quotes with: sorted keys, no whitespace."""
-        return hashlib.sha256(
-            json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
-        ).hexdigest()
-
-    def _inspection_result(self, inspection: dict[str, Any]) -> dict[str, Any]:
-        """The result of a completed inspection, with the listing of its kernel stored as an artifact."""
-        with open(FakeControlPlane.state.instructions_fixture, "rb") as fixture_file:
-            listing = fixture_file.read()
-        candidates = candidates_of(json.loads(listing)["symbol"])
-        return inspection_result(
-            inspection_id=inspection["inspection_id"],
-            quote_id=inspection["quote_id"],
-            quote_sha256=inspection["quote_sha256"],
-            request=inspection["_request"],
-            listing=listing,
-            listing_id=self._store(listing, "kernel_metadata", "kernel-000-instructions.json"),
-            candidates=candidates,
-            candidates_id=self._store(candidates, "kernel_metadata", "kernel-000-candidates.json"),
-        )
-
-    def _poll_inspection(self, inspection_id: str) -> dict[str, Any]:
-        state = FakeControlPlane.state
-        inspection = state.map_inspection[inspection_id]
-        inspection["_polls"] += 1
-        attempt = {"attempt_id": "attempt-1", "epoch": 1, "supervisor_id": "supervisor-1", "started_at": TIMESTAMP}
-        if inspection["execution"]["state"] == "queued":
-            inspection["execution"] = {"state": "running", "attempt": attempt}
-        elif inspection["execution"]["state"] == "running" and inspection["_polls"] > state.inspection_polls:
-            artifact = state.map_artifact[inspection["_request"]["binary"]["artifact_id"]]
-            outcome = state.inspection_outcome or ("completed" if artifact["data"].startswith(b"\x7fELF") else "rejected_input")
-            if outcome == "completed":
-                inspection["_result"] = self._inspection_result(inspection)
-            inspection["execution"] = {
-                "state": "terminal",
-                "outcome": outcome,
-                "attempt": attempt,
-                "completed_at": TIMESTAMP,
-                "result_sha256": FakeControlPlane.digest(inspection["_result"]) if outcome == "completed" else None,
-            }
-            inspection["cleanup"] = {"state": "confirmed", "evidence_sha256": DIGEST, "confirmed_at": TIMESTAMP}
-        return self._public(inspection)
-
     def _finish(self, job: dict[str, Any]) -> None:
+        """End a job with the trace fixture as its xtrace.json, served gzip-encoded."""
         state = FakeControlPlane.state
         with open(os.path.join(FIXTURE_DIRECTORY, "trace_sass_regions.json"), "rb") as trace_file:
             trace = trace_file.read()
-        summary = json.dumps({"quality": "usable", "reason_codes": [], "correctness": "passed"}).encode()
-        list_file = []
-        for name, kind, data, encoding in (
-            ("xtrace.json", "xtrace", trace, "identity"),
-            ("summary.json", "summary", gzip.compress(summary), "gzip"),
-        ):
-            artifact_id = self._store(data, kind, name)
-            entry = {
-                "artifact_id": artifact_id,
-                "kind": kind,
-                "name": name,
-                "sha256": hashlib.sha256(data).hexdigest(),
-                "size_bytes": len(data),
-                "content_type": "application/json",
-                "encoding": encoding,
-            }
-            if encoding == "gzip":
-                entry["uncompressed_sha256"] = hashlib.sha256(summary).hexdigest()
-                entry["uncompressed_size_bytes"] = len(summary)
-            list_file.append(entry)
+        data = gzip.compress(trace)
+        artifact_id = self._store(data, "xtrace", "xtrace.json")
         job["state"] = "succeeded"
         job["result_manifest"] = {
             "schema_version": "marscompute.xtrace.result.v1",
-            "kind": "trace",
+            "kind": "agent",
+            "diagnostic_stages": {"kernel": ["xtrace"]},
             "job_id": job["job_id"],
             "attempt_id": "attempt-1",
             "epoch": 1,
@@ -567,10 +298,37 @@ class FakeControlPlane(http.server.BaseHTTPRequestHandler):
             "evidence": "gpu",
             "quality": "usable",
             "reason_codes": [],
-            "correctness": "passed",
-            "files": list_file,
-            "environment": {},
+            "correctness": "not_verified",
+            "files": [
+                {
+                    "artifact_id": artifact_id,
+                    "kind": "xtrace",
+                    "name": "xtrace.json",
+                    "sha256": hashlib.sha256(data).hexdigest(),
+                    "size_bytes": len(data),
+                    "content_type": "application/json",
+                    "encoding": "gzip",
+                    "uncompressed_sha256": hashlib.sha256(trace).hexdigest(),
+                    "uncompressed_size_bytes": len(trace),
+                },
+            ],
+            "environment": {
+                "gpu_type": job["compute"]["gpu_type"],
+                "architecture": "sm_90a",
+                "workspace_image_digest": "sha256:" + "a" * 64,
+                "driver_version": "575.57.08",
+                "cuda_version": "12.9",
+                "workspace_version": "1.0.0",
+                "executor_version": "1.0.0+abcdef0",
+                "clock_type": "globaltimer_ns",
+                "record_granularity": "thread",
+                "observer_effect": "unknown",
+            },
         }
+        try:
+            SchemaCheck.validate("result-manifest", job["result_manifest"])
+        except jsonschema.ValidationError as err:
+            state.list_schema_error.append(f"result manifest: {err.message}")
         state.map_job[job["job_id"]] = job
 
     def _result(self, job_id: str) -> dict[str, Any]:
@@ -652,91 +410,6 @@ class FakeControlPlane(http.server.BaseHTTPRequestHandler):
                     "expires_at": TIMESTAMP,
                 },
             )
-        elif path == "/v1/xtrace/inspections/quotes":
-            artifact = state.map_artifact.get(map_body["binary"]["artifact_id"])
-            if (
-                artifact is None
-                or artifact["kind"] != "cubin"
-                or artifact["status"] != "verified"
-                or artifact["sha256"] != map_body["binary"]["sha256"]
-            ):
-                self._fail(422, "inspection_input_unavailable", "not a verified cubin")
-                return
-            quote = {
-                "schema_version": "marscompute.xtrace.inspection-quote.v1",
-                "quote_id": str(uuid.uuid4()),
-                "owner": OWNER,
-                "environment": "test",
-                "request_sha256": FakeControlPlane.digest(map_body),
-                "profile": INSPECTION_PROFILE["profile"],
-                "limits": INSPECTION_PROFILE["limits"],
-                "price": INSPECTION_PROFILE["price"],
-                "issued_at": TIMESTAMP,
-                "expires_at": LATER,
-            }
-            state.map_inspection_quote[quote["quote_id"]] = quote
-            self._answer(201, quote)
-        elif path == "/v1/xtrace/inspections":
-            key = self.headers.get("Idempotency-Key")
-            if key is not None and key != map_body["idempotency_key"]:
-                self._fail(409, "idempotency_conflict", "header and body differ")
-                return
-            if map_body["idempotency_key"] in state.map_inspection_of_key:
-                self._answer(201, self._public(state.map_inspection[state.map_inspection_of_key[map_body["idempotency_key"]]]))
-                return
-            quote = state.map_inspection_quote.get(map_body["quote_id"])
-            if (
-                quote is None
-                or map_body["quote_sha256"] != FakeControlPlane.digest(quote)
-                or quote["request_sha256"] != FakeControlPlane.digest(map_body["request"])
-            ):
-                self._fail(409, "inspection_acceptance_binding_mismatch", "the acceptance differs from the quote")
-                return
-            if int(quote["price"]["fixed_fee_micro_usd"]) > state.available_micro_usd:
-                self._fail(409, "insufficient_credit", "credit does not cover the fee", top_up_url=TOP_UP_URL)
-                return
-            inspection_id = str(uuid.uuid4())
-            state.map_inspection[inspection_id] = {
-                "schema_version": "marscompute.xtrace.inspection-status.v1",
-                "inspection_id": inspection_id,
-                "owner": OWNER,
-                "environment": "test",
-                "quote_id": quote["quote_id"],
-                "quote_sha256": map_body["quote_sha256"],
-                "created_at": TIMESTAMP,
-                "execution": {"state": "queued"},
-                "cleanup": {"state": "pending"},
-                "accounting": {"state": "held", "reserved_micro_usd": quote["price"]["fixed_fee_micro_usd"]},
-                "_request": map_body["request"],
-                "_result": None,
-                "_polls": 0,
-            }
-            state.map_inspection_of_key[map_body["idempotency_key"]] = inspection_id
-            state.list_inspection_order.append(inspection_id)
-            self._answer(201, self._public(state.map_inspection[inspection_id]))
-        elif match := re.match(r"^/v1/xtrace/inspections/([^/]+)/cancel$", path):
-            inspection = state.map_inspection[match.group(1)]
-            if map_body != {}:
-                self._fail(400, "invalid_payload", "cancel takes {}")
-                return
-            if inspection["execution"]["state"] != "terminal":
-                inspection["execution"] = {"state": "cancel_requested", "attempt": inspection["execution"].get("attempt")}
-            self._answer(200, self._public(inspection))
-        elif match := re.match(r"^/v1/xtrace/inspections/([^/]+)/artifacts/downloads$", path):
-            inspection = state.map_inspection[match.group(1)]
-            result = inspection["_result"]
-            set_named = {
-                kernel[part]["artifact"]["artifact_id"] if part == "instructions" else kernel[part]["candidates"]["artifact"]["artifact_id"]
-                for kernel in (result or {"kernel_catalog": {"kernels": []}})["kernel_catalog"]["kernels"]
-                for part in ("instructions", "site_policy")
-            }
-            if not set(map_body["artifact_ids"]) <= set_named:
-                self._fail(404, "inspection_result_artifact_unavailable", "not named by the result")
-                return
-            self._answer(
-                200,
-                {"artifacts": [self._download_grant(artifact_id, state.map_artifact[artifact_id]["name"]) for artifact_id in map_body["artifact_ids"]]},
-            )
         elif path == "/v1/xtrace/quotes":
             for key, value in map_body["bundle"].items():
                 list_id = value if key.endswith("_artifact_ids") else [value] if key.endswith("_artifact_id") else []
@@ -755,35 +428,33 @@ class FakeControlPlane(http.server.BaseHTTPRequestHandler):
                 "rate_snapshot": {
                     "rate_version": "rate-1",
                     "sku_id": "sku-1",
-                    "image_digest": "sha256:" + "a" * 64,
-                    "gpu_micro_usd_per_hour": "3200000",
+                    "workspace_image_digest": "sha256:" + "a" * 64,
+                    "gpu_micro_usd_per_hour": "4000000",
                     "failure_policy_version": "policy-1",
                     "gpu_time_policy": "authorized_execution_only",
-                    "model_rates": [],
+                    "model_rates": [
+                        {
+                            "model": map_body["analysis"]["model"],
+                            "price_snapshot_id": "snapshot-1",
+                            "input_micro_usd_per_million": "18000000",
+                            "cached_input_micro_usd_per_million": "1800000",
+                            "output_micro_usd_per_million": "90000000",
+                        },
+                    ],
+                    "price_book": {
+                        "rate_card_version_id": "card-1",
+                        "tool_fee_micro_usd": "500000",
+                        "cache_write_rates": [
+                            {
+                                "dimension": "cache_write_300_explicit_tokens",
+                                "micro_usd_per_million": "22500000",
+                            },
+                        ],
+                    },
                 },
                 "created_at": TIMESTAMP,
                 "expires_at": TIMESTAMP,
             }
-            if map_body["analysis"]["mode"] == "agent":
-                quote["rate_snapshot"]["model_rates"] = [
-                    {
-                        "model": map_body["analysis"]["model"],
-                        "price_snapshot_id": "snapshot-1",
-                        "input_micro_usd_per_million": "18000000",
-                        "cached_input_micro_usd_per_million": "1800000",
-                        "output_micro_usd_per_million": "90000000",
-                    },
-                ]
-                quote["rate_snapshot"]["price_book"] = {
-                    "rate_card_version_id": "card-1",
-                    "tool_fee_micro_usd": "500000",
-                    "cache_write_rates": [
-                        {
-                            "dimension": "cache_write_300_explicit_tokens",
-                            "micro_usd_per_million": "22500000",
-                        },
-                    ],
-                }
             self._answer(201, quote)
         elif path == "/v1/xtrace/jobs":
             key = self.headers.get("Idempotency-Key")
