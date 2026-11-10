@@ -142,6 +142,17 @@ class TranslationTest(unittest.TestCase):
         with self.assertRaisesRegex(ManifestError, "matmul.cubin targets sm_90, but b200 is sm_100a"):
             self.load(AGENT_TOP.replace("h200", "b200") + WORKSPACE + AGENT + LIMITS).select_hardware(HARDWARE)
 
+    def test_cuda_version_is_spelled_and_offered(self) -> None:
+        manifest = self.load(AGENT_TOP + 'cuda_version = "12.9"\n' + WORKSPACE + AGENT + LIMITS)
+        self.assertEqual(manifest.cuda_version, "12.9")
+        self.assertEqual(self.request(manifest)["cuda_version"], "12.9")
+        self.assertNotIn("cuda_version", self.request(self.load()))
+        for value in ('"13"', '"v13.0"', "13.0"):
+            with self.subTest(value=value), self.assertRaisesRegex(ManifestError, "'cuda_version' must be a CUDA version such as"):
+                self.load(AGENT_TOP + f"cuda_version = {value}\n" + WORKSPACE + AGENT + LIMITS)
+        with self.assertRaisesRegex(ManifestError, r"h200 does not offer CUDA 12.7; it offers 12.8, 12.9, 13.0, see 'marstrace hardware'"):
+            self.load(AGENT_TOP + 'cuda_version = "12.7"\n' + WORKSPACE + AGENT + LIMITS).select_hardware(HARDWARE)
+
     def test_agent_budgets_are_bounded(self) -> None:
         for key, value, message in (
             ("max_turns", 501, r"max_turns must be an integer in \[1, 500\]"),

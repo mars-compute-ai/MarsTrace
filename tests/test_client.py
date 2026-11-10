@@ -97,29 +97,27 @@ class ServiceTest(unittest.TestCase):
         with tarfile.open(fileobj=io.BytesIO(self.fake.state.map_upload[request["inputs"]["source_archive"]]["data"]), mode="r:gz") as tar:
             self.assertEqual(tar.getnames(), ["matmul.cu"])
         summary = quoted.summary()
-        self.assertEqual(summary["rates"]["gpu_usd_per_hour"], "$4.320000")
-        self.assertEqual(summary["rates"]["job_fee_usd"], "$0.500000")
+        self.assertEqual(set(summary["rates"]), {"agent_model", "agent_usd_per_million_tokens"})
         self.assertEqual(summary["rates"]["agent_usd_per_million_tokens"]["cache_write_1h"], "$36.000000")
-        self.assertEqual(summary["bounds_per_attempt"], {"gpu_seconds": 1320, "agent_input_tokens": 4000000, "agent_output_tokens": 60000})
+        self.assertEqual(summary["cuda_version"], "13.0")
+        self.assertEqual(summary["bounds_per_attempt"], {"agent_input_tokens": 4000000, "agent_output_tokens": 60000})
         self.assertEqual(
             summary["cost_at_bounds"],
-            {"job_fee_usd": "$0.500000", "gpu_per_attempt_usd": "$1.584000", "agent_tokens_per_attempt_usd": "$149.400000", "total_usd": "$302.468000"},
+            {"agent_tokens_per_attempt_usd": "$149.400000", "total_usd": "$298.800000"},
         )
         self.assertEqual((summary["max_attempts"], summary["minimum_usd"], summary["available_usd"]), (2, "$100.000000", "$118.250000"))
         self.assertTrue(summary["admissible"])
         self.assertEqual(self.fake.state.map_job, {})
 
-    def test_estimate_without_limits_and_without_a_fee(self) -> None:
+    def test_estimate_without_limits(self) -> None:
         with open(os.path.join(self.directory, "marstrace.toml")) as manifest_file:
             text = manifest_file.read().replace("[limits]\nmax_attempts = 2\n", "")
         with open(os.path.join(self.directory, "marstrace.toml"), "w") as manifest_file:
             manifest_file.write(text)
-        del self.fake.state.map_hardware["hardware"][0]["rates"]["job_fee_micro_usd"]
         quoted = self.workflow.quote(self.directory)
         self.assertNotIn("limits", quoted.map_request)
         summary = quoted.summary()
-        self.assertEqual((summary["max_attempts"], summary["rates"]["job_fee_usd"], summary["cost_at_bounds"]["job_fee_usd"]), (2, "-", "-"))
-        self.assertEqual(summary["cost_at_bounds"]["total_usd"], "$301.968000")
+        self.assertEqual((summary["max_attempts"], summary["cost_at_bounds"]["total_usd"]), (2, "$298.800000"))
         job = self.workflow.submit(quoted)
         self.assertEqual(job["limits"], {"max_attempts": 2})
 
@@ -232,8 +230,9 @@ class ServiceTest(unittest.TestCase):
         finished = self.workflow.wait(job["job_id"])
         self.assertEqual([(attempt["status"], attempt["failure"]) for attempt in finished["attempts"]], [("failed", "supplier"), ("succeeded", None)])
         self.assertEqual(finished["attempts"][0]["error"]["code"], "vm_preempted")
-        self.assertEqual(finished["cost"]["charged_micro_usd"], "5453300")
-        self.assertEqual(sum(int(line["amount_micro_usd"]) for line in finished["cost"]["lines"]), 5453300)
+        self.assertEqual(finished["cost"]["charged_micro_usd"], "5516100")
+        self.assertEqual(sum(int(line["amount_micro_usd"]) for line in finished["cost"]["lines"]), 5516100)
+        self.assertTrue(all(line["dimension"].startswith("service_agent_") for line in finished["cost"]["lines"]))
         self.assertEqual(finished["result"]["name"], "marstrace.json")
 
     def test_wait_then_fetch(self) -> None:
@@ -241,8 +240,9 @@ class ServiceTest(unittest.TestCase):
         self.assertEqual(job["status"], "queued")
         finished = self.workflow.wait(job["job_id"])
         self.assertEqual(finished["status"], "succeeded")
-        self.assertEqual(finished["cost"]["charged_micro_usd"], "5078900")
-        self.assertEqual(finished["progress"]["usage_micro_usd"], "6120000")
+        self.assertEqual(finished["cost"]["charged_micro_usd"], "4954500")
+        self.assertEqual(finished["progress"]["usage_micro_usd"], "5034000")
+        self.assertEqual(finished["cuda_version"], "13.0")
         list_wait = self.fake.state.requests_to("GET", r"^/v1/jobs/[^/]+/wait$")
         self.assertEqual(len(list_wait), 4)
         self.assertEqual(list_wait[0]["query"]["timeout_seconds"], ["60"])
@@ -309,10 +309,14 @@ class ServiceTest(unittest.TestCase):
 
     def test_a_malformed_answer_is_refused(self) -> None:
         self.assertIsNone(self.workflow.hardware()["hardware"][2]["rates"])
-        self.fake.state.map_hardware["hardware"][0]["rates"]["job_fee_micro_usd"] = 500000
-        with self.assertRaisesRegex(ServiceError, r"GET /v1/hardware answered with an unexpected body: the answer.hardware\[0\].rates.job_fee_micro_usd"):
+        self.fake.state.map_hardware["hardware"][0]["rates"]["agent_output_micro_usd_per_million"] = 90000000
+        with self.assertRaisesRegex(ServiceError, r"GET /v1/hardware answered with an unexpected body: the answer.hardware\[0\].rates.agent_output_micro_usd_per_million"):
             self.workflow.hardware()
-        self.fake.state.map_hardware["hardware"][0]["rates"]["job_fee_micro_usd"] = "500000"
+        self.fake.state.map_hardware["hardware"][0]["rates"]["agent_output_micro_usd_per_million"] = "90000000"
+        self.fake.state.map_hardware["hardware"][0]["cuda_versions"] = ["13"]
+        with self.assertRaisesRegex(ServiceError, r"the answer.hardware\[0\].cuda_versions\[0\] is not a string"):
+            self.workflow.hardware()
+        self.fake.state.map_hardware["hardware"][0]["cuda_versions"] = ["13.0"]
         del self.fake.state.map_hardware["agent"]
         with self.assertRaisesRegex(ServiceError, "the answer has no 'agent'"):
             self.workflow.hardware()

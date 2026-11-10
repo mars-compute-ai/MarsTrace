@@ -28,6 +28,7 @@ what the workspace holds, within the caps of `[agent]`, and returns one `marstra
 
 ```toml
 hardware = "b200"
+cuda_version = "13.0"
 intent = "find the longest bubble in the mainloop of the producer warps at M=N=K=8192"
 
 [workspace]
@@ -52,6 +53,7 @@ max_attempts = 2
 | `marstrace.toml` | Job request |
 | --- | --- |
 | `hardware` (required) | `hardware`, an `id` of `GET /v1/hardware` that is `available`; every cubin must target its `architecture` |
+| `cuda_version` (optional, `M.m` such as `13.0`) | `cuda_version`, one of the hardware's `cuda_versions` in `GET /v1/hardware`; absent, the request has no `cuda_version` and the job runs the hardware's `default_cuda_version`. The agent's CUDA toolkit is that version, and the result manifest's `device.cuda_toolkit_version` names it |
 | `intent` (required, 1 to 32,000 characters, no NUL) | `prompt` |
 | `[workspace] cubins` (1 to 8, each at most 64 MiB) | uploads of role `cubin` → `inputs.cubins` |
 | `[workspace] source` (a directory) | archived as `source.tar.gz` (at most 256 MiB) → role `source_archive` → `inputs.source_archive` |
@@ -61,9 +63,11 @@ max_attempts = 2
 | `[agent] max_turns` (1 to 500), `max_input_tokens` (1 to 50,000,000), `max_output_tokens` (1 to 1,000,000), `max_wall_seconds` (60 to 2,580) | `agent`; an absent key takes `agent.defaults` of `GET /v1/hardware`, and none may exceed `agent.maximums` |
 | `[limits] max_attempts` (1 to 3) | `limits.max_attempts`; absent, the request has no `limits` and the service takes 2 |
 
-`[workspace]` is required, `[agent]` and `[limits]` are optional, and any other key or
-table is refused. The request carries no amount of money: a job is charged its actual
-usage (section 7). The agent's
+`[workspace]` is required, `cuda_version`, `[agent]` and `[limits]` are optional, and any
+other key or table is refused. `marstrace estimate` and `submit` take `--cuda-version` to
+override `cuda_version`, and the MCP tools take `cuda_version`; the client checks the
+version against the hardware before it uploads anything. The request carries no amount of
+money: a job is charged the agent tokens it actually used (section 7). The agent's
 model is not a request field: every job runs the model `GET /v1/hardware` names. A file is
 named once in `[workspace]`, and all inputs together hold at most 256 MiB. A cubin is an
 ELF cubin; PTX is refused. A launch manifest is JSON whose `schema_version` is
@@ -85,7 +89,7 @@ set. Each path below is appended to that URL, so `GET /v1/hardware` goes to
 
 | Step | Call | Client |
 | --- | --- | --- |
-| hardware | `GET /v1/hardware` | `marstrace hardware` |
+| hardware | `GET /v1/hardware` → per hardware its `architecture`, `cuda_versions`, `default_cuda_version` and token `rates` | `marstrace hardware` |
 | credit | `GET /v1/credit` | `marstrace credit` |
 | upload | `POST /v1/uploads` `{role, name, size_bytes, sha256, content_type}` → grant; `PUT` the bytes to `upload_url` with the grant's `headers`, or each 32 MiB range to its `parts[].upload_url` keeping each part's `ETag`; `POST /v1/uploads/{id}/complete` `{sha256, size_bytes, parts?}`, `parts` being `[{part_number, etag}]` | `marstrace estimate`, `marstrace submit` |
 | estimate | `POST /v1/quotes` with the job request; the service stores and holds nothing | `marstrace estimate` |
@@ -96,8 +100,9 @@ set. Each path below is appended to that URL, so `GET /v1/hardware` goes to
 | cancel | `POST /v1/jobs/{id}/cancel` with `{}` | `marstrace cancel` |
 | result | `GET /v1/jobs/{id}/result` → `manifest`, `download_url` | `marstrace fetch` |
 
-`estimate` and `submit` check the hardware and the size limits, then upload the workspace
-and price it. A grant's `x-amz-checksum-sha256` header must be the base64 of the file's
+`estimate` and `submit` check the hardware, the CUDA version and the size limits, then
+upload the workspace and price it. The estimate and the job carry the CUDA version the job
+runs with, the default one when the request names none. A grant's `x-amz-checksum-sha256` header must be the base64 of the file's
 digest. The service keys a submission by the account, the `Idempotency-Key` and the
 SHA-256 of the body as sent, with keys sorted, for 24 hours: the same key and body answer
 the job it started, and another body is `idempotency_conflict`. A submission whose answer
@@ -132,7 +137,7 @@ contract:
 
 | Code | Status | Client |
 | --- | --- | --- |
-| `invalid_request` | 400 | the message names the field |
+| `invalid_request` | 400 | the message names the field; a CUDA version the hardware does not offer names the ones it does |
 | `authentication_required` | 401 | set `MARSTRACE_API_KEY` to a live key |
 | `insufficient_credit`, `spending_limit_exceeded`, `billing_suspended` | 402 | the available balance is below the minimum a job needs, or billing is not active; names the console page where credit is added |
 | `forbidden` | 403 | the account or workspace is not active for MarsTrace |
@@ -149,18 +154,19 @@ A failed job carries `error` with `code` and `message`, and each failed attempt 
 
 ## 7. Cost
 
-A job is charged its actual usage, whatever its outcome: the GPU time and agent tokens of
-every attempt, retried and failed attempts included, plus the job fee once when the rate
-card has one. A job whose attempts never started is charged nothing. The usage is charged
-in full even when it passes the available balance.
+A job is charged the agent tokens it actually used, whatever its outcome: the input, output,
+cache-read and cache-write tokens of every attempt, retried and failed attempts included,
+at the token rates of the hardware's service model. A job whose agent never ran is charged
+nothing. The usage is charged in full even when it passes the available balance.
 
 An estimate (`POST /v1/quotes`) answers:
 
 | Field | Holds |
 | --- | --- |
-| `rates` | the GPU rate per hour, the job fee when there is one, and the agent's token rates per million |
-| `bounds_per_attempt` | `gpu_milliseconds`, `(max_wall_seconds + 120) × 1000`, and the agent's `agent_input_tokens` and `agent_output_tokens` caps |
-| `cost_at_bounds_micro_usd` | `job_fee` (when priced), `gpu_per_attempt`, `agent_tokens_per_attempt` and `total`, the fee plus `max_attempts` attempts at their bounds: the most the job can cost |
+| `cuda_version` | the CUDA version the job runs with |
+| `rates` | the agent's token rates per million: input, cache read, 5-minute and 1-hour cache write, output |
+| `bounds_per_attempt` | the agent's `agent_input_tokens` and `agent_output_tokens` caps |
+| `cost_at_bounds_micro_usd` | `agent_tokens_per_attempt` and `total`, `max_attempts` attempts at their token bounds: the most the job can cost |
 | `minimum_micro_usd` | the balance a job needs to start, set by MarsCompute administrators |
 | `available_micro_usd` | the workspace's available balance; negative while it owes for a job that ran past it, null without a spending limit |
 | `admissible`, `message` | whether a job would start now, and why not |
@@ -169,8 +175,8 @@ Nothing is held against the cost at the bounds. Admission holds the minimum unti
 settles (`cost.held_micro_usd` of the job), so a workspace runs as many jobs at once as its
 balance holds minimums. A job's `progress.usage_micro_usd` is its usage so far; once it
 settles, `cost.charged_micro_usd` and `cost.lines`, `{dimension, quantity,
-amount_micro_usd}` per rate card dimension, hold the charge, which may exceed the hold.
-`marstrace submit` prints the rates, the cost at the bounds and the balance, refuses a job
+amount_micro_usd}` per token dimension of the rate card, hold the charge, which may exceed the hold.
+`marstrace submit` prints the CUDA version, the token rates, the cost at the bounds and the balance, refuses a job
 that is not admissible, and asks before it submits, unless `--yes`.
 
 ## 8. Local MCP server

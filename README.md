@@ -11,15 +11,15 @@ work with them; no local GPU is needed.
 
 Create a MarsTrace API key in the [MarsCompute console](https://console.marscompute.ai)
 and add credit; a job starts only while the workspace's balance reaches the minimum that
-`marstrace credit` shows, and it is charged the GPU time and agent tokens it used. Then:
+`marstrace credit` shows, and it is charged the agent tokens it used. Then:
 
 ```bash
 pip install git+https://github.com/mars-compute-ai/mars-trace
 export MARSTRACE_API_KEY=mt_live_...
 
-marstrace hardware                                        # hardware, rates, agent model
+marstrace hardware                                        # hardware, CUDA versions, token rates, agent model
 marstrace cubin find my_triton_kernel --copy-to my-job    # or nvcc -cubin; see the skill
-marstrace estimate examples/matmul                        # rates, the most the job can cost, the balance
+marstrace estimate examples/matmul                        # token rates, the most the job can cost, the balance
 marstrace submit examples/matmul --wait
 marstrace show examples/matmul/marstrace-results/<job>/marstrace.json --stats --bubbles
 ```

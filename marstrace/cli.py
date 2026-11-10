@@ -42,7 +42,7 @@ class JobCommands:
 
     @staticmethod
     def print_job(map_job: dict[str, Any]) -> None:
-        """One job's status, hardware, attempts, progress and cost.
+        """One job's status, hardware, CUDA version, attempts, progress and cost.
 
         Args:
             map_job: the job
@@ -52,13 +52,13 @@ class JobCommands:
         print(f"job       {map_job['job_id']}")
         print(f"status    {map_job['status']}")
         print(f"hardware  {map_job['hardware']}")
+        print(f"cuda      {map_job['cuda_version']}")
         print(f"created   {map_job['created_at']}")
         if map_job["ended_at"]:
             print(f"ended     {map_job['ended_at']}")
         if map_progress:
             print(
                 f"progress  agent turn {map_progress['agent_turn']}, "
-                f"{map_progress['gpu_seconds']} GPU seconds, "
                 f"{MarsTraceWorkflow.usd(map_progress['usage_micro_usd'])} used so far"
             )
         for map_attempt in map_job["attempts"]:
@@ -83,7 +83,8 @@ class JobCommands:
 
     @staticmethod
     def hardware(args: argparse.Namespace) -> None:
-        """List the hardware a job can run on, with rates and architectures, and the agent model."""
+        """List the hardware a job can run on, with its architecture, CUDA versions and token
+        rates, and the agent model."""
         map_hardware = JobCommands._workflow().hardware()
         if args.json:
             JobCommands._print_json(map_hardware)
@@ -93,15 +94,20 @@ class JobCommands:
             if map_rates is None:
                 price = "no published price"
             else:
-                fee = map_rates.get("job_fee_micro_usd")
                 price = (
-                    f"{MarsTraceWorkflow.usd(map_rates['gpu_micro_usd_per_hour'])}/GPU-hour  "
-                    f"{'no job fee' if fee is None else 'fee ' + MarsTraceWorkflow.usd(fee)}"
+                    f"{MarsTraceWorkflow.usd(map_rates['agent_input_micro_usd_per_million'])} input, "
+                    f"{MarsTraceWorkflow.usd(map_rates['agent_output_micro_usd_per_million'])} output "
+                    "per million tokens"
                 )
+            list_version = [
+                f"{version} (default)" if version == map_entry["default_cuda_version"] else version
+                for version in map_entry["cuda_versions"]
+            ]
             print(
                 f"{map_entry['id']:<8} {map_entry['gpu']:<8} {map_entry['architecture']:<8} "
                 f"{price}  {'available' if map_entry['available'] else 'not available now'}"
             )
+            print(f"{'':<8} CUDA {', '.join(list_version)}")
         map_agent = map_hardware["agent"]
         print(f"agent model: {map_agent['model']}")
         print(
@@ -145,22 +151,21 @@ class JobCommands:
         map_bounds = map_summary["bounds_per_attempt"]
         map_cost = map_summary["cost_at_bounds"]
         print(f"hardware  {map_summary['hardware']}, {map_summary['gpu']} ({map_summary['architecture']})")
-        print(f"rates     {map_rates['gpu_usd_per_hour']} per GPU-hour, job fee {map_rates['job_fee_usd']}")
+        print(f"cuda      {map_summary['cuda_version']}")
         print(
             f"tokens    {map_rates['agent_model']}: {map_token['input']} input, "
             f"{map_token['cache_read']} cache read, {map_token['cache_write_5m']} 5-minute cache write, "
             f"{map_token['cache_write_1h']} 1-hour cache write, {map_token['output']} output per million"
         )
         print(
-            f"bounds    per attempt {map_bounds['gpu_seconds']} GPU seconds, "
+            f"bounds    per attempt "
             f"{map_bounds['agent_input_tokens']} input and {map_bounds['agent_output_tokens']} output tokens; "
             f"{map_summary['max_attempts']} attempt(s)"
         )
         print(
-            f"at most   {map_cost['total_usd']}: fee {map_cost['job_fee_usd']}, plus per attempt "
-            f"{map_cost['gpu_per_attempt_usd']} GPU and {map_cost['agent_tokens_per_attempt_usd']} tokens"
+            f"at most   {map_cost['total_usd']}: {map_cost['agent_tokens_per_attempt_usd']} of tokens per attempt"
         )
-        print("charged   actual usage of every attempt, failed ones included, plus the fee")
+        print("charged   the tokens every attempt actually used, failed ones included")
         print(f"balance   {map_summary['available_usd']} available, {map_summary['minimum_usd']} needed to start")
         if not map_summary["admissible"]:
             print(f"refused   {map_summary['message'] or 'the available balance is below the minimum'}")
@@ -172,6 +177,7 @@ class JobCommands:
         quoted = JobCommands._workflow().quote(
             directory=args.directory,
             hardware=args.hardware,
+            cuda_version=args.cuda_version,
         )
         if args.json:
             JobCommands._print_json(quoted.summary())
@@ -193,6 +199,7 @@ class JobCommands:
             quoted = workflow.quote(
                 directory=args.directory,
                 hardware=args.hardware,
+                cuda_version=args.cuda_version,
             )
             JobCommands._print_quote(quoted)
             workflow.check_admissible(quoted)
@@ -346,13 +353,18 @@ class CommandLine:
             default=None,
             help="override the manifest's hardware, a hardware id from 'marstrace hardware'",
         )
+        parser.add_argument(
+            "--cuda-version",
+            default=None,
+            help="override the manifest's CUDA version, one the hardware offers in 'marstrace hardware'",
+        )
 
     @staticmethod
     def _add_service_commands(subparsers: argparse._SubParsersAction) -> None:
         """The commands that read the account and run jobs."""
         hardware = subparsers.add_parser(
             name="hardware",
-            help="list the hardware a job can run on, with rates and architectures, and the agent model",
+            help="list the hardware a job can run on, with its CUDA versions and token rates, and the agent model",
         )
         CommandLine._add_json(hardware)
         hardware.set_defaults(func=JobCommands.hardware)

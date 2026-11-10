@@ -23,7 +23,6 @@ class QuotedJob:
         agent_model: the model every job's agent runs
     """
 
-    MILLISECONDS_PER_SECOND = 1000
     # rate key of each agent token kind
     MAP_TOKEN_RATE = {
         "input": "agent_input_micro_usd_per_million",
@@ -42,12 +41,13 @@ class QuotedJob:
     def summary(self) -> dict[str, Any]:
         """What the job would cost, in dollars.
 
-        A job is charged its actual usage over every attempt, failed ones included; the cost
-        at the bounds is the most it can reach, and nothing is held against it.
+        A job is charged the agent tokens it actually used over every attempt, failed ones
+        included; the cost at the bounds is the most it can reach, and nothing is held against
+        it.
 
         Returns:
-            the hardware, the rates, the bounds of one attempt, the attempts, the cost at the
-            bounds, the minimum balance a job needs, the available balance, and whether the
+            the hardware, the CUDA version, the token rates, the token bounds of one attempt,
+            the attempts, the cost at the bounds, the minimum balance a job needs, the available balance, and whether the
             service admits the job now
         """
         map_rates = self.map_quote["rates"]
@@ -58,9 +58,8 @@ class QuotedJob:
             "hardware": self.map_request["hardware"],
             "gpu": self.map_hardware_entry["gpu"],
             "architecture": self.map_hardware_entry["architecture"],
+            "cuda_version": self.map_quote["cuda_version"],
             "rates": {
-                "gpu_usd_per_hour": MarsTraceWorkflow.usd(map_rates["gpu_micro_usd_per_hour"]),
-                "job_fee_usd": MarsTraceWorkflow.usd(map_rates.get("job_fee_micro_usd")),
                 "agent_model": self.agent_model,
                 "agent_usd_per_million_tokens": {
                     kind: MarsTraceWorkflow.usd(map_rates[rate_key])
@@ -68,14 +67,11 @@ class QuotedJob:
                 },
             },
             "bounds_per_attempt": {
-                "gpu_seconds": map_bounds["gpu_milliseconds"] // QuotedJob.MILLISECONDS_PER_SECOND,
                 "agent_input_tokens": map_bounds["agent_input_tokens"],
                 "agent_output_tokens": map_bounds["agent_output_tokens"],
             },
             "max_attempts": self.manifest.limits.attempts(),
             "cost_at_bounds": {
-                "job_fee_usd": MarsTraceWorkflow.usd(map_cost.get("job_fee")),
-                "gpu_per_attempt_usd": MarsTraceWorkflow.usd(map_cost["gpu_per_attempt"]),
                 "agent_tokens_per_attempt_usd": MarsTraceWorkflow.usd(map_cost["agent_tokens_per_attempt"]),
                 "total_usd": MarsTraceWorkflow.usd(map_cost["total"]),
             },
@@ -188,12 +184,14 @@ class MarsTraceWorkflow:
         self,
         directory: str,
         hardware: str | None = None,
+        cuda_version: str | None = None,
     ) -> QuotedJob:
         """Translate a job directory, upload its workspace and price it.
 
         Args:
             directory: the job directory, holding ``marstrace.toml``
             hardware: a hardware id overriding the manifest's ``hardware``
+            cuda_version: a CUDA version overriding the manifest's ``cuda_version``
 
         Returns:
             the priced job
@@ -204,6 +202,12 @@ class MarsTraceWorkflow:
         manifest = JobManifest.load(directory)
         if hardware is not None:
             manifest.hardware = hardware
+        if cuda_version is not None:
+            JobManifest.check_cuda_version(
+                value=cuda_version,
+                where="the CUDA version",
+            )
+            manifest.cuda_version = cuda_version
         map_hardware = self._client.hardware()
         map_entry = manifest.select_hardware(map_hardware)
         list_input = manifest.list_input()

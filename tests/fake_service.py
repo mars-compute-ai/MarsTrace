@@ -27,10 +27,7 @@ AGENT_MODEL = "claude-opus-5-5"
 CROCKFORD = "0123456789abcdefghjkmnpqrstvwxyz"
 MIB = 1 << 20
 MILLION = 1_000_000
-MILLISECONDS_PER_HOUR = 3_600_000
 RATES_H200 = {
-    "gpu_micro_usd_per_hour": "4320000",
-    "job_fee_micro_usd": "500000",
     "agent_input_micro_usd_per_million": "18000000",
     "agent_cache_read_micro_usd_per_million": "1800000",
     "agent_cache_write_5m_micro_usd_per_million": "22500000",
@@ -45,14 +42,24 @@ LIST_INPUT_RATE = [
 ]
 AGENT_DEFAULTS = {"max_turns": 60, "max_input_tokens": 4000000, "max_output_tokens": 60000, "max_wall_seconds": 1200}
 AGENT_MAXIMUMS = {"max_turns": 500, "max_input_tokens": 50000000, "max_output_tokens": 1000000, "max_wall_seconds": 2580}
+LIST_CUDA_VERSION = ["12.8", "12.9", "13.0"]
+LIST_CUDA_VERSION_B300 = ["12.9", "13.0"]
+CUDA_VERSION_DEFAULT = "13.0"
 HARDWARE = {
     "hardware": [
-        {"id": "h200", "gpu": "H200", "architecture": "sm_90a", "available": True, "service_model": "marstrace-h200", "rates": RATES_H200},
+        {
+            "id": "h200", "gpu": "H200", "architecture": "sm_90a", "available": True, "service_model": "marstrace-h200",
+            "cuda_versions": LIST_CUDA_VERSION, "default_cuda_version": CUDA_VERSION_DEFAULT, "rates": RATES_H200,
+        },
         {
             "id": "b200", "gpu": "B200", "architecture": "sm_100a", "available": True, "service_model": "marstrace-b200",
-            "rates": dict(RATES_H200, gpu_micro_usd_per_hour="6480000"),
+            "cuda_versions": LIST_CUDA_VERSION, "default_cuda_version": CUDA_VERSION_DEFAULT,
+            "rates": dict(RATES_H200, agent_output_micro_usd_per_million="95000000"),
         },
-        {"id": "b300", "gpu": "B300", "architecture": "sm_103a", "available": False, "service_model": "marstrace-b300", "rates": None},
+        {
+            "id": "b300", "gpu": "B300", "architecture": "sm_103a", "available": False, "service_model": "marstrace-b300",
+            "cuda_versions": LIST_CUDA_VERSION_B300, "default_cuda_version": CUDA_VERSION_DEFAULT, "rates": None,
+        },
     ],
     "agent": {"model": AGENT_MODEL, "defaults": AGENT_DEFAULTS, "maximums": AGENT_MAXIMUMS},
 }
@@ -60,7 +67,6 @@ HARDWARE = {
 LIST_JOB_STEP = ["queued", "starting", "running", "finishing", "succeeded"]
 SET_FINAL = {"succeeded", "failed", "cancelled"}
 IDEMPOTENCY_KEY_PATTERN = re.compile(r"^[A-Za-z0-9._:-]{1,255}$")
-FINALIZE_MARGIN_SECONDS = 120
 MAX_ATTEMPTS_DEFAULT = 2
 # HTTP status and retryability of each error code, as errors.ts maps them
 MAP_ERROR_STATUS = {
@@ -167,6 +173,7 @@ class RequestSchema:
     LIMITS = {"max_attempts": Field(int, low=1, high=3, is_optional=True, default=MAX_ATTEMPTS_DEFAULT)}
     JOB = {
         "hardware": Field(str, low=1, high=32),
+        "cuda_version": Field(str, pattern=r"^[1-9][0-9]*\.[0-9]+$", is_optional=True),
         "prompt": Field(str, low=1, high=32000, pattern=r"^[^\x00]*$"),
         "inputs": Field(INPUTS),
         "agent": Field(AGENT, is_optional=True, default={}),
@@ -495,7 +502,7 @@ class FakeService(http.server.BaseHTTPRequestHandler):
             job["attempts"].append(self._attempt(1))
         if job["status"] in ("running", "finishing"):
             job["attempts"][-1]["status"] = job["status"]
-            job["progress"] = {"agent_turn": 14, "gpu_seconds": 312, "usage_micro_usd": "6120000"}
+            job["progress"] = {"agent_turn": 14, "usage_micro_usd": "5034000"}
         if job["status"] == "succeeded":
             with open(os.path.join(FIXTURE_DIRECTORY, "trace_sass_regions.json"), "rb") as trace_file:
                 trace = trace_file.read()
@@ -503,16 +510,15 @@ class FakeService(http.server.BaseHTTPRequestHandler):
             job["attempts"][-1].update(status="succeeded", ended_at=TIMESTAMP)
             job["ended_at"] = TIMESTAMP
             list_line = [
-                {"dimension": "service_job_fee", "quantity": 1, "amount_micro_usd": "500000"},
-                {"dimension": "service_gpu_milliseconds", "quantity": 905000, "amount_micro_usd": "1086000"},
+                {"dimension": "service_agent_cache_read_tokens", "quantity": 812000, "amount_micro_usd": "1461600"},
                 *(
                     {"dimension": dimension, "quantity": 0, "amount_micro_usd": "0"}
-                    for dimension in ("service_agent_input_tokens", "service_agent_cache_read_tokens", "service_agent_cache_write_5m_tokens", "service_agent_cache_write_1h_tokens")
+                    for dimension in ("service_agent_input_tokens", "service_agent_cache_write_5m_tokens", "service_agent_cache_write_1h_tokens")
                 ),
                 {"dimension": "service_agent_output_tokens", "quantity": 38810, "amount_micro_usd": "3492900"},
             ]
             if len(job["attempts"]) > 1:
-                list_line[1] = {"dimension": "service_gpu_milliseconds", "quantity": 1217000, "amount_micro_usd": "1460400"}
+                list_line[0] = {"dimension": "service_agent_cache_read_tokens", "quantity": 1124000, "amount_micro_usd": "2023200"}
             job["cost"]["charged_micro_usd"] = str(sum(int(line["amount_micro_usd"]) for line in list_line))
             job["cost"]["lines"] = list_line
             job["result"] = self._result_summary(job)
@@ -536,7 +542,7 @@ class FakeService(http.server.BaseHTTPRequestHandler):
                 "quality": "usable",
                 "reason_codes": [],
                 "file": {"name": "marstrace.json", "size_bytes": summary["size_bytes"], "sha256": summary["sha256"]},
-                "device": {"gpu_name": "H200", "compute_capability": "90a", "cuda_driver_version": "575.57.08", "cuda_toolkit_version": "12.9"},
+                "device": {"gpu_name": "H200", "compute_capability": "90a", "cuda_driver_version": "575.57.08", "cuda_toolkit_version": job["cuda_version"]},
                 "clock_type": "gpu",
                 "granularity": "warp",
             },
@@ -630,6 +636,12 @@ class FakeService(http.server.BaseHTTPRequestHandler):
             raise ServiceError("hardware_unavailable", f"Unknown hardware {request['hardware']}; see GET /v1/hardware")
         if entry["rates"] is None:
             raise ServiceError("hardware_unavailable", "This hardware has no published price now")
+        cuda_version = request.get("cuda_version", entry["default_cuda_version"])
+        if cuda_version not in entry["cuda_versions"]:
+            raise ServiceError(
+                "invalid_request",
+                f"Invalid cuda_version: {entry['id']} offers CUDA {', '.join(entry['cuda_versions'])}",
+            )
         return entry
 
     def _quote(self, request: dict[str, Any]) -> dict[str, Any]:
@@ -638,24 +650,18 @@ class FakeService(http.server.BaseHTTPRequestHandler):
         rates = entry["rates"]
         map_agent = request["agent"]
         attempts = request["limits"]["max_attempts"]
-        gpu_milliseconds = (map_agent["max_wall_seconds"] + FINALIZE_MARGIN_SECONDS) * 1000
-        gpu_per_attempt = ceil_rate(gpu_milliseconds, int(rates["gpu_micro_usd_per_hour"]), MILLISECONDS_PER_HOUR)
         input_per_attempt = max(ceil_rate(map_agent["max_input_tokens"], int(rates[key]), MILLION) for key in LIST_INPUT_RATE)
         tokens_per_attempt = input_per_attempt + ceil_rate(map_agent["max_output_tokens"], int(rates["agent_output_micro_usd_per_million"]), MILLION)
-        fee = int(rates.get("job_fee_micro_usd", "0"))
         map_cost = {
-            "gpu_per_attempt": str(gpu_per_attempt),
             "agent_tokens_per_attempt": str(tokens_per_attempt),
-            "total": str(fee + attempts * (gpu_per_attempt + tokens_per_attempt)),
+            "total": str(attempts * tokens_per_attempt),
         }
-        if "job_fee_micro_usd" in rates:
-            map_cost = {"job_fee": str(fee), **map_cost}
         quote = {
             "service_model": entry["service_model"],
             "rate_card_version_id": "rcv_1",
+            "cuda_version": request.get("cuda_version", entry["default_cuda_version"]),
             "rates": rates,
             "bounds_per_attempt": {
-                "gpu_milliseconds": gpu_milliseconds,
                 "agent_input_tokens": map_agent["max_input_tokens"],
                 "agent_output_tokens": map_agent["max_output_tokens"],
             },
@@ -738,6 +744,7 @@ class FakeService(http.server.BaseHTTPRequestHandler):
             "started_at": None,
             "ended_at": None,
             "hardware": entry["id"],
+            "cuda_version": request.get("cuda_version", entry["default_cuda_version"]),
             "agent": request["agent"],
             "limits": request["limits"],
             "progress": None,

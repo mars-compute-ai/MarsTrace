@@ -86,9 +86,8 @@ class ResponseSchema:
         "data?": (dict, list, None),
         "error": (ERROR, None),
     }
+    CUDA_VERSION = re.compile(r"^[1-9][0-9]*\.[0-9]+$")
     RATES = {
-        "gpu_micro_usd_per_hour": MONEY,
-        "job_fee_micro_usd?": MONEY,
         "agent_input_micro_usd_per_million": MONEY,
         "agent_cache_read_micro_usd_per_million": MONEY,
         "agent_cache_write_5m_micro_usd_per_million": MONEY,
@@ -109,6 +108,8 @@ class ResponseSchema:
                 "architecture": str,
                 "available": bool,
                 "service_model": str,
+                "cuda_versions": [CUDA_VERSION],
+                "default_cuda_version": CUDA_VERSION,
                 "rates": (RATES, None),
             }
         ],
@@ -154,15 +155,13 @@ class ResponseSchema:
     QUOTE = {
         "service_model": str,
         "rate_card_version_id": str,
+        "cuda_version": CUDA_VERSION,
         "rates": RATES,
         "bounds_per_attempt": {
-            "gpu_milliseconds": int,
             "agent_input_tokens": int,
             "agent_output_tokens": int,
         },
         "cost_at_bounds_micro_usd": {
-            "job_fee?": MONEY,
-            "gpu_per_attempt": MONEY,
             "agent_tokens_per_attempt": MONEY,
             "total": MONEY,
         },
@@ -179,12 +178,12 @@ class ResponseSchema:
         "started_at": (TIME, None),
         "ended_at": (TIME, None),
         "hardware": str,
+        "cuda_version": CUDA_VERSION,
         "agent": AGENT_LIMITS,
         "limits": {"max_attempts": int},
         "progress": (
             {
                 "agent_turn": int,
-                "gpu_seconds": int,
                 "usage_micro_usd": MONEY,
             },
             None,

@@ -107,10 +107,11 @@ class McpServer:
     INSTRUCTIONS = (
         "Trace CUDA kernels with MarsTrace. A job directory holds marstrace.toml with [workspace] "
         "(cubins, and optionally source, a launch manifest, tensors and files), [agent] (the session's "
-        "caps) and optionally [limits] (max_attempts); an agent on the GPU host traces the kernel from "
-        "them. A job starts only while the workspace's available balance reaches the minimum the "
-        "estimate names, and it is charged its actual usage over every attempt, failed ones included, "
-        "even past the balance. Estimate the job, show the user its rates and cost at the bounds and get "
+        "caps), optionally cuda_version (a CUDA version the hardware offers) and [limits] "
+        "(max_attempts); an agent on the GPU host traces the kernel from them. A job starts only while "
+        "the workspace's available balance reaches the minimum the estimate names, and it is charged "
+        "the agent tokens it actually used over every attempt, failed ones included, even past the "
+        "balance. Estimate the job, show the user its token rates and cost at the bounds and get "
         "their yes, submit with accept_cost_at_bounds_usd, wait, fetch, then read marstrace.json with "
         "marstrace_show."
     )
@@ -363,6 +364,11 @@ class McpServer:
             "type": "string",
             "description": "a hardware id overriding the manifest's hardware",
         }
+        map_cuda_version = {
+            "type": "string",
+            "description": "a CUDA version, such as 13.0, overriding the manifest's cuda_version; "
+            "one the hardware offers in marstrace_hardware",
+        }
         map_job_id = {
             "type": "string",
             "description": "the job id",
@@ -370,8 +376,9 @@ class McpServer:
         return [
             McpTool(
                 name="marstrace_hardware",
-                description="List the hardware a job can run on: id, GPU, architecture, availability "
-                "and rates; and the agent model with its default and maximum limits.",
+                description="List the hardware a job can run on: id, GPU, architecture, availability, "
+                "the CUDA versions a job can choose with the default one, and the agent's token rates; "
+                "and the agent model with its default and maximum limits.",
                 map_input_schema=McpServer._schema(
                     map_property={},
                     list_required=[],
@@ -422,7 +429,7 @@ class McpServer:
             McpTool(
                 name="marstrace_estimate",
                 description="Upload a job directory's workspace and price it; nothing is held. Returns "
-                "the rates, the GPU and token bounds of one attempt, the cost at those bounds over every "
+                "the CUDA version, the token rates, the token bounds of one attempt, the cost at those bounds over every "
                 "attempt (cost_at_bounds.total_usd, the most the job can cost), the minimum balance a job "
                 "needs, the available balance, and whether the job would start now. Show the rates and "
                 "the cost at the bounds to the user before submitting.",
@@ -430,18 +437,20 @@ class McpServer:
                     map_property={
                         "directory": map_directory,
                         "hardware": map_hardware,
+                        "cuda_version": map_cuda_version,
                     },
                     list_required=["directory"],
                 ),
                 handler=lambda map_arguments: self._workflow.quote(
                     directory=map_arguments["directory"],
                     hardware=map_arguments.get("hardware"),
+                    cuda_version=map_arguments.get("cuda_version"),
                 ).summary(),
             ),
             McpTool(
                 name="marstrace_submit",
                 description="Price and submit a job directory. Show the user the estimate's rates and "
-                "cost_at_bounds.total_usd first, say that the job is charged its actual usage over every "
+                "cost_at_bounds.total_usd first, say that the job is charged the tokens it actually used over every "
                 "attempt, failed ones included, even past the available balance, and submit only with "
                 "their consent. accept_cost_at_bounds_usd is the cost at the bounds they agreed to; a "
                 "higher one is refused. Reuse idempotency_key when retrying a submission whose answer "
@@ -454,6 +463,7 @@ class McpServer:
                             "description": "the cost at the bounds, in dollars, the user agreed to",
                         },
                         "hardware": map_hardware,
+                        "cuda_version": map_cuda_version,
                         "idempotency_key": {
                             "type": "string",
                             "description": "reuse it when retrying a submission whose answer was lost",
@@ -605,6 +615,7 @@ class McpServer:
         quoted = self._workflow.quote(
             directory=map_arguments["directory"],
             hardware=map_arguments.get("hardware"),
+            cuda_version=map_arguments.get("cuda_version"),
         )
         self._workflow.check_admissible(quoted)
         McpServer._check_accepted(

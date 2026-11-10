@@ -2,6 +2,7 @@ import gzip
 import io
 import json
 import os
+import re
 import tarfile
 import tomllib
 from dataclasses import dataclass, field
@@ -472,6 +473,8 @@ class JobManifest:
     Args:
         directory: the job directory
         hardware: the hardware id the job runs on
+        cuda_version: the CUDA toolkit version, ``M.m``, the job runs with; None for the
+            hardware's default
         intent: what the trace should answer, the job's prompt
         workspace: the files the agent works with
         agent: the session's budget
@@ -495,11 +498,13 @@ class JobManifest:
     }
     SET_KEY = {
         "hardware",
+        "cuda_version",
         "intent",
         "workspace",
         "agent",
         "limits",
     }
+    CUDA_VERSION_PATTERN = re.compile(r"[1-9][0-9]*\.[0-9]+")
     # upload role of each workspace key
     MAP_ROLE = {
         "cubins": "cubin",
@@ -520,6 +525,7 @@ class JobManifest:
     directory: str
     hardware: str
     intent: str
+    cuda_version: str | None = None
     workspace: WorkspaceSpec
     agent: AgentOptions
     limits: JobLimits = field(default_factory=JobLimits)
@@ -586,6 +592,29 @@ class JobManifest:
             bound = f"from {low}" if high is None else f"in [{low}, {high}]"
             raise ManifestError(f"{where} must be an integer {bound}, not {value!r}")
 
+    @staticmethod
+    def check_cuda_version(
+        value: Any,
+        where: str,
+    ) -> None:
+        """Check the spelling of a CUDA toolkit version.
+
+        Args:
+            value: the version
+            where: the value's place, for the message
+
+        Raises:
+            ManifestError: the value is not a major and minor version such as ``13.0``
+        """
+        if (
+            not isinstance(
+                value,  # obj
+                str,    # class_or_tuple
+            )
+            or JobManifest.CUDA_VERSION_PATTERN.fullmatch(value) is None
+        ):
+            raise ManifestError(f"{where} must be a CUDA version such as \"13.0\", not {value!r}")
+
     @classmethod
     def load(cls, directory: str) -> "JobManifest":
         """Read and check the manifest of a job directory.
@@ -637,9 +666,16 @@ class JobManifest:
             if key not in map_manifest:
                 raise ManifestError(f"{path}: [{key}] is required: the files the agent works with")
         workspace = WorkspaceSpec.from_table(map_manifest["workspace"])
+        cuda_version = map_manifest.get("cuda_version")
+        if cuda_version is not None:
+            JobManifest.check_cuda_version(
+                value=cuda_version,
+                where=f"{path}: 'cuda_version'",
+            )
         return cls(
             directory=directory,
             hardware=map_manifest["hardware"],
+            cuda_version=cuda_version,
             intent=map_manifest["intent"],
             workspace=workspace,
             agent=AgentOptions.from_table(
@@ -664,11 +700,11 @@ class JobManifest:
             map_hardware: the service's hardware list
 
         Returns:
-            the entry, holding ``gpu``, ``architecture`` and ``rates``
+            the entry, holding ``gpu``, ``architecture``, ``cuda_versions`` and ``rates``
 
         Raises:
-            ManifestError: the hardware is unknown or not offered now, or a cubin targets
-                another architecture
+            ManifestError: the hardware is unknown or not offered now, does not offer the
+                manifest's CUDA version, or a cubin targets another architecture
         """
         list_entry = map_hardware["hardware"]
         map_entry = next(
@@ -686,6 +722,14 @@ class JobManifest:
             )
         if not map_entry["available"]:
             raise ManifestError(f"{self.hardware} is not offered now; see 'marstrace hardware'")
+        if (
+            self.cuda_version is not None
+            and self.cuda_version not in map_entry["cuda_versions"]
+        ):
+            raise ManifestError(
+                f"{self.hardware} does not offer CUDA {self.cuda_version}; it offers "
+                f"{', '.join(map_entry['cuda_versions'])}, see 'marstrace hardware'"
+            )
         architecture = map_entry["architecture"]
         for relative_path, binary in zip(
             self.workspace.list_cubin,
@@ -808,8 +852,8 @@ class JobManifest:
             map_upload_ids: upload role to the ids of the verified uploads of that role
 
         Returns:
-            ``hardware``, ``prompt``, ``inputs``, ``agent``, and ``limits`` when the manifest
-            sets ``max_attempts``
+            ``hardware``, ``prompt``, ``inputs``, ``agent``, ``cuda_version`` when the
+            manifest sets it, and ``limits`` when the manifest sets ``max_attempts``
         """
         map_request = {
             "hardware": self.select_hardware(map_hardware)["id"],
@@ -817,6 +861,8 @@ class JobManifest:
             "inputs": JobManifest.inputs(map_upload_ids),
             "agent": self.agent.to_api(map_hardware["agent"]),
         }
+        if self.cuda_version is not None:
+            map_request["cuda_version"] = self.cuda_version
         map_limits = self.limits.to_api()
         if map_limits is not None:
             map_request["limits"] = map_limits

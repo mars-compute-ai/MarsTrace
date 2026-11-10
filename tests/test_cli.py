@@ -1,4 +1,5 @@
 import contextlib
+import json
 import io
 import os
 import shutil
@@ -40,7 +41,10 @@ class CommandLineTest(unittest.TestCase):
     def test_hardware_lists_rates_and_architectures(self) -> None:
         status, output, _ = self.run_cli("hardware")
         self.assertEqual(status, 0)
-        self.assertRegex(output, r"h200\s+H200\s+sm_90a\s+\$4.320000/GPU-hour  fee \$0.500000  available")
+        self.assertRegex(output, r"h200\s+H200\s+sm_90a\s+\$18.000000 input, \$90.000000 output per million tokens  available")
+        self.assertIn("CUDA 12.8, 12.9, 13.0 (default)", output)
+        self.assertIn("CUDA 12.9, 13.0 (default)", output)
+        self.assertNotIn("GPU-hour", output)
         self.assertRegex(output, r"b300\s+B300\s+sm_103a\s+no published price  not available now")
         self.assertIn("agent model: claude-opus-5-5", output)
         self.assertIn("max_wall_seconds 1200", output)
@@ -63,28 +67,39 @@ class CommandLineTest(unittest.TestCase):
         status, output, _ = self.run_cli("estimate", self.directory)
         self.assertEqual(status, 0)
         self.assertIn("hardware  h200, H200 (sm_90a)", output)
-        self.assertIn("rates     $4.320000 per GPU-hour, job fee $0.500000", output)
-        self.assertIn("bounds    per attempt 1320 GPU seconds, 4000000 input and 60000 output tokens; 2 attempt(s)", output)
-        self.assertIn("at most   $302.468000: fee $0.500000, plus per attempt $1.584000 GPU and $149.400000 tokens", output)
+        self.assertIn("cuda      13.0", output)
+        self.assertIn("bounds    per attempt 4000000 input and 60000 output tokens; 2 attempt(s)", output)
+        self.assertIn("at most   $298.800000: $149.400000 of tokens per attempt", output)
+        self.assertNotIn("GPU", output)
         self.assertIn("failed ones included", output)
         self.assertIn("balance   $118.250000 available, $100.000000 needed to start", output)
         self.assertNotIn("refused", output)
         self.assertEqual(self.fake.state.requests_to("POST", r"^/v1/jobs$"), [])
 
-    def test_estimate_prints_the_job_fee_and_token_rates(self) -> None:
+    def test_estimate_prints_the_token_rates_and_the_chosen_cuda_version(self) -> None:
         directory = os.path.join(self.directory, "agent")
         os.makedirs(directory)
         agent_job(directory)
-        status, output, error = self.run_cli("estimate", directory, "--hardware", "h200")
+        status, output, error = self.run_cli("estimate", directory, "--hardware", "h200", "--cuda-version", "12.9")
         self.assertEqual(status, 0, error)
         self.assertIn(
             "tokens    claude-opus-5-5: $18.000000 input, $1.800000 cache read, $22.500000 5-minute cache write, "
             "$36.000000 1-hour cache write, $90.000000 output per million",
             output,
         )
-        self.assertIn("1920 GPU seconds, 2000000 input and 100000 output tokens; 1 attempt(s)", output)
+        self.assertIn("per attempt 2000000 input and 100000 output tokens; 1 attempt(s)", output)
+        self.assertIn("cuda      12.9", output)
+        self.assertEqual(json.loads(self.fake.state.requests_to("POST", r"^/v1/quotes$")[-1]["body"])["cuda_version"], "12.9")
         self.assertIn("upload    source_archive", error)
         self.assertIn("upload    file", error)
+        nb_upload = len(self.fake.state.requests_to("POST", r"^/v1/uploads$"))
+        status, _, error = self.run_cli("estimate", directory, "--cuda-version", "12.7")
+        self.assertEqual(status, 1)
+        self.assertIn("h200 does not offer CUDA 12.7; it offers 12.8, 12.9, 13.0", error)
+        self.assertEqual(len(self.fake.state.requests_to("POST", r"^/v1/uploads$")), nb_upload)
+        status, _, error = self.run_cli("estimate", directory, "--cuda-version", "13")
+        self.assertEqual(status, 1)
+        self.assertIn("must be a CUDA version such as", error)
 
     def test_submit_refuses_below_the_minimum_before_asking(self) -> None:
         self.fake.state.available_micro_usd = 50_000_000
@@ -112,7 +127,8 @@ class CommandLineTest(unittest.TestCase):
         self.assertEqual(status, 0, output)
         self.assertIn("quality   usable", output)
         self.assertIn("held      $100.000000", output)
-        self.assertIn("charged   $5.078900", output)
+        self.assertIn("charged   $4.954500", output)
+        self.assertIn("cuda      13.0", output)
         self.assertIn("          service_agent_output_tokens 38810: $3.492900", output)
         self.assertNotIn("service_agent_input_tokens", output)
         self.assertIn("attempt   1 succeeded", output)
@@ -128,10 +144,10 @@ class CommandLineTest(unittest.TestCase):
         status, output, error = self.run_cli("submit", self.directory, "--yes", "--wait")
         self.assertEqual(status, 0, error)
         self.assertIn("attempt   1 failed (supplier): vm_preempted: The GPU machine was reclaimed by the supplier.", output)
-        self.assertIn("charged   $5.453300", output)
+        self.assertIn("charged   $5.516100", output)
         status, output, error = self.run_cli("submit", self.directory, "--yes")
         self.assertEqual(status, 1)
-        self.assertIn("balance   $12.796700 available, $100.000000 needed to start", output)
+        self.assertIn("balance   $12.733900 available, $100.000000 needed to start", output)
         self.assertIn(ADD_CREDIT_URL, error)
 
     def test_a_recorded_key_is_resubmitted(self) -> None:
