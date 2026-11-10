@@ -16,11 +16,11 @@ from marstrace.schema import ResponseSchema
 
 @dataclass
 class Credentials:
-    """The API key and the service origin the client calls MarsTrace with."""
+    """The API key and the service URL the client calls MarsTrace with."""
 
     ENV_API_KEY = "MARSTRACE_API_KEY"
     ENV_API_URL = "MARSTRACE_API_URL"
-    API_URL_DEFAULT = "https://trace.marscompute.ai"
+    API_URL_DEFAULT = "https://console.marscompute.ai/trace"
     API_KEY_PREFIX = "mt_live_"
 
     api_key: str
@@ -28,7 +28,7 @@ class Credentials:
 
     @classmethod
     def from_environment(cls) -> "Credentials":
-        """Read the key and origin from the environment.
+        """Read the key and service URL from the environment.
 
         Returns:
             the credentials
@@ -61,7 +61,7 @@ class MarsTraceClient:
     after checking it against the shape of its route, and raises the ``error``.
 
     Args:
-        credentials: the API key and origin
+        credentials: the API key and service URL
     """
 
     # seconds a request may take before it is abandoned, and the one that moves a file

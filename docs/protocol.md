@@ -78,8 +78,10 @@ same archive. It leaves out every `.git` and `marstrace-results` entry.
 ## 4. Calls
 
 Every call carries `Authorization: Bearer <MARSTRACE_API_KEY>` (an `mt_live_...` key) to
-`https://trace.marscompute.ai`, or to `MARSTRACE_API_URL` when it is set. Every answer is
-the envelope `{"request_id", "data", "error"}`; the client reads `data` and raises `error`.
+the service URL `https://console.marscompute.ai/trace`, or to `MARSTRACE_API_URL` when it is
+set. Each path below is appended to that URL, so `GET /v1/hardware` goes to
+`https://console.marscompute.ai/trace/v1/hardware`. Every answer is the envelope
+`{"request_id", "data", "error"}`; the client reads `data` and raises `error`.
 
 | Step | Call | Client |
 | --- | --- | --- |

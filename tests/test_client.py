@@ -32,7 +32,7 @@ class ServiceTest(unittest.TestCase):
 
     def setUp(self) -> None:
         self.fake.reset()
-        self.client = MarsTraceClient(Credentials(api_key=API_KEY, api_url=self.fake.origin))
+        self.client = MarsTraceClient(Credentials(api_key=API_KEY, api_url=self.fake.api_url))
         self.workflow = MarsTraceWorkflow(client=self.client)
         self.directory = copy_example()
         self.addCleanup(shutil.rmtree, self.directory)
@@ -57,7 +57,15 @@ class ServiceTest(unittest.TestCase):
         with mock.patch.dict(os.environ, {"MARSTRACE_API_KEY": "not-a-marstrace-key"}), self.assertRaisesRegex(ServiceError, "mt_live_"):
             Credentials.from_environment()
         with mock.patch.dict(os.environ, {"MARSTRACE_API_KEY": API_KEY}, clear=True):
-            self.assertEqual(Credentials.from_environment().api_url, "https://trace.marscompute.ai")
+            self.assertEqual(Credentials.from_environment().api_url, "https://console.marscompute.ai/trace")
+        with mock.patch.dict(os.environ, {"MARSTRACE_API_KEY": API_KEY, "MARSTRACE_API_URL": "https://console.marscompute.test/trace/"}, clear=True):
+            self.assertEqual(Credentials.from_environment().api_url, "https://console.marscompute.test/trace")
+
+    def test_requests_keep_the_base_path(self) -> None:
+        self.assertEqual(len(self.client.hardware()["hardware"]), 3)
+        bare_client = MarsTraceClient(Credentials(api_key=API_KEY, api_url=self.fake.origin))
+        with self.assertRaises(ServiceError):
+            bare_client.hardware()
 
     def test_single_upload_is_checksummed(self) -> None:
         upload = self.client.upload(data=b"abc", role="cubin", name="k.cubin")

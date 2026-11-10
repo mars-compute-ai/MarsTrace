@@ -301,8 +301,10 @@ class FakeState:
 
 
 class FakeService(http.server.BaseHTTPRequestHandler):
-    """A stand-in for the routes of http/app.ts and for R2's presigned URLs."""
+    """A stand-in for the routes of http/app.ts behind nginx's /trace/ location, and for R2's presigned URLs."""
 
+    # the base path nginx strips before the service sees a request, as at console.marscompute.ai/trace
+    BASE_PATH = "/trace"
     state = FakeState()
 
     def log_message(self, format: str, *args: Any) -> None:  # noqa: A002
@@ -321,13 +323,20 @@ class FakeService(http.server.BaseHTTPRequestHandler):
         body = json.dumps({"request_id": request_id, "data": data, "error": error}).encode()
         self._send(status, body, {"Content-Type": "application/json", "x-request-id": request_id, **(map_header or {})})
 
+    def _service_path(self) -> str | None:
+        """The path the service sees, or None for a path outside the base path."""
+        path = urllib.parse.urlsplit(self.path).path
+        if not path.startswith(f"{FakeService.BASE_PATH}/"):
+            return None
+        return path.removeprefix(FakeService.BASE_PATH)
+
     def _record(self) -> bytes:
         body = self.rfile.read(int(self.headers.get("Content-Length") or 0))
         split = urllib.parse.urlsplit(self.path)
         FakeService.state.list_request.append(
             {
                 "method": self.command,
-                "path": split.path,
+                "path": self._service_path() or split.path,
                 "query": urllib.parse.parse_qs(split.query),
                 "authorization": self.headers.get("Authorization"),
                 "idempotency": self.headers.get("Idempotency-Key"),
@@ -396,12 +405,19 @@ class FakeService(http.server.BaseHTTPRequestHandler):
         if path.startswith("/r2/results/"):
             self._send(200, FakeService.state.map_object[path.rsplit("/", 1)[1]])
             return
-        self._dispatch(self._get, path)
+        service_path = self._service_path()
+        if service_path is None:
+            self._send(404, b"not found")
+            return
+        self._dispatch(self._get, service_path)
 
     def do_POST(self) -> None:
         body = self._record()
         state = FakeService.state
-        path = urllib.parse.urlsplit(self.path).path
+        path = self._service_path()
+        if path is None:
+            self._send(404, b"not found")
+            return
         if path == "/v1/jobs" and state.drop_submissions > 0:
             state.drop_submissions -= 1
             self.close_connection = True
@@ -760,6 +776,7 @@ class FakeServer:
         FakeService.state = FakeState()
         self.server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), FakeService)
         self.origin = f"http://127.0.0.1:{self.server.server_port}"
+        self.api_url = f"{self.origin}{FakeService.BASE_PATH}"
         FakeService.state.origin = self.origin
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
 

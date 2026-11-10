@@ -28,7 +28,7 @@ class CommandLineTest(unittest.TestCase):
         stdout = io.StringIO()
         stderr = io.StringIO()
         with (
-            mock.patch.dict(os.environ, {"MARSTRACE_API_KEY": API_KEY, "MARSTRACE_API_URL": self.fake.origin}),
+            mock.patch.dict(os.environ, {"MARSTRACE_API_KEY": API_KEY, "MARSTRACE_API_URL": self.fake.api_url}),
             mock.patch("sys.stdin.isatty", return_value=is_tty),
             mock.patch("builtins.input", return_value=answer),
             contextlib.redirect_stdout(stdout),

@@ -30,7 +30,7 @@ class McpStdioTest(unittest.TestCase):
         environment = dict(
             os.environ,
             MARSTRACE_API_KEY=API_KEY,
-            MARSTRACE_API_URL=self.fake.origin,
+            MARSTRACE_API_URL=self.fake.api_url,
             PYTHONPATH=REPOSITORY,
         )
         self.process = subprocess.Popen(
