@@ -236,53 +236,19 @@
               "type": "string",
               "const": "marscompute.xtrace.result.v1"
             },
-            "kind": {
-              "default": "trace",
-              "type": "string",
-              "enum": ["trace", "comparison", "agent"]
-            },
+            "kind": { "type": "string", "const": "agent" },
             "diagnostic_stages": {
-              "anyOf": [
-                {
-                  "type": "object",
-                  "properties": {
-                    "kernel": {
-                      "minItems": 1,
-                      "maxItems": 3,
-                      "type": "array",
-                      "items": {
-                        "type": "string",
-                        "enum": ["xtrace", "range_profile", "pc_sampling"]
-                      }
-                    }
-                  },
-                  "required": ["kernel"],
-                  "additionalProperties": false
-                },
-                {
-                  "type": "object",
-                  "properties": {
-                    "baseline": {
-                      "maxItems": 3,
-                      "type": "array",
-                      "items": {
-                        "type": "string",
-                        "enum": ["xtrace", "range_profile", "pc_sampling"]
-                      }
-                    },
-                    "candidate": {
-                      "maxItems": 3,
-                      "type": "array",
-                      "items": {
-                        "type": "string",
-                        "enum": ["xtrace", "range_profile", "pc_sampling"]
-                      }
-                    }
-                  },
-                  "required": ["baseline", "candidate"],
-                  "additionalProperties": false
+              "type": "object",
+              "properties": {
+                "kernel": {
+                  "minItems": 1,
+                  "maxItems": 1,
+                  "type": "array",
+                  "items": { "type": "string", "const": "xtrace" }
                 }
-              ]
+              },
+              "required": ["kernel"],
+              "additionalProperties": false
             },
             "job_id": {
               "type": "string",
@@ -351,29 +317,13 @@
                       "safetensors",
                       "launch_manifest",
                       "source",
-                      "reference",
                       "xtrace",
-                      "summary",
-                      "provenance",
-                      "trace_plan",
-                      "baseline",
-                      "correctness",
-                      "runner_log",
-                      "range_profile",
-                      "pc_sampling",
-                      "interpretation",
-                      "comparison",
-                      "kernel_metadata",
                       "workspace_file"
                     ]
                   },
                   "name": {
                     "type": "string",
                     "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,255}$"
-                  },
-                  "kernel_role": {
-                    "type": "string",
-                    "enum": ["baseline", "candidate"]
                   },
                   "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
                   "size_bytes": {
@@ -424,10 +374,9 @@
                   "minLength": 1,
                   "maxLength": 1000
                 },
-                "image_digest": {
+                "workspace_image_digest": {
                   "type": "string",
-                  "minLength": 1,
-                  "maxLength": 1000
+                  "pattern": "^sha256:[a-f0-9]{64}$"
                 },
                 "driver_version": {
                   "type": "string",
@@ -439,14 +388,14 @@
                   "minLength": 1,
                   "maxLength": 1000
                 },
-                "executor_version": {
-                  "type": "string",
-                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(\\+[0-9a-f]{7,40})?$"
-                },
-                "runner_version": {
+                "workspace_version": {
                   "type": "string",
                   "minLength": 1,
                   "maxLength": 1000
+                },
+                "executor_version": {
+                  "type": "string",
+                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(\\+[0-9a-f]{7,40})?$"
                 },
                 "clock_type": {
                   "type": "string",
@@ -464,11 +413,11 @@
               "required": [
                 "gpu_type",
                 "architecture",
-                "image_digest",
+                "workspace_image_digest",
                 "driver_version",
                 "cuda_version",
+                "workspace_version",
                 "executor_version",
-                "runner_version",
                 "clock_type",
                 "record_granularity",
                 "observer_effect"

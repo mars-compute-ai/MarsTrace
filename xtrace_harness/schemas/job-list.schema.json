@@ -257,53 +257,19 @@
                     "type": "string",
                     "const": "marscompute.xtrace.result.v1"
                   },
-                  "kind": {
-                    "default": "trace",
-                    "type": "string",
-                    "enum": ["trace", "comparison", "agent"]
-                  },
+                  "kind": { "type": "string", "const": "agent" },
                   "diagnostic_stages": {
-                    "anyOf": [
-                      {
-                        "type": "object",
-                        "properties": {
-                          "kernel": {
-                            "minItems": 1,
-                            "maxItems": 3,
-                            "type": "array",
-                            "items": {
-                              "type": "string",
-                              "enum": ["xtrace", "range_profile", "pc_sampling"]
-                            }
-                          }
-                        },
-                        "required": ["kernel"],
-                        "additionalProperties": false
-                      },
-                      {
-                        "type": "object",
-                        "properties": {
-                          "baseline": {
-                            "maxItems": 3,
-                            "type": "array",
-                            "items": {
-                              "type": "string",
-                              "enum": ["xtrace", "range_profile", "pc_sampling"]
-                            }
-                          },
-                          "candidate": {
-                            "maxItems": 3,
-                            "type": "array",
-                            "items": {
-                              "type": "string",
-                              "enum": ["xtrace", "range_profile", "pc_sampling"]
-                            }
-                          }
-                        },
-                        "required": ["baseline", "candidate"],
-                        "additionalProperties": false
+                    "type": "object",
+                    "properties": {
+                      "kernel": {
+                        "minItems": 1,
+                        "maxItems": 1,
+                        "type": "array",
+                        "items": { "type": "string", "const": "xtrace" }
                       }
-                    ]
+                    },
+                    "required": ["kernel"],
+                    "additionalProperties": false
                   },
                   "job_id": {
                     "type": "string",
@@ -378,29 +344,13 @@
                             "safetensors",
                             "launch_manifest",
                             "source",
-                            "reference",
                             "xtrace",
-                            "summary",
-                            "provenance",
-                            "trace_plan",
-                            "baseline",
-                            "correctness",
-                            "runner_log",
-                            "range_profile",
-                            "pc_sampling",
-                            "interpretation",
-                            "comparison",
-                            "kernel_metadata",
                             "workspace_file"
                           ]
                         },
                         "name": {
                           "type": "string",
                           "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,255}$"
-                        },
-                        "kernel_role": {
-                          "type": "string",
-                          "enum": ["baseline", "candidate"]
                         },
                         "sha256": {
                           "type": "string",
@@ -454,10 +404,9 @@
                         "minLength": 1,
                         "maxLength": 1000
                       },
-                      "image_digest": {
+                      "workspace_image_digest": {
                         "type": "string",
-                        "minLength": 1,
-                        "maxLength": 1000
+                        "pattern": "^sha256:[a-f0-9]{64}$"
                       },
                       "driver_version": {
                         "type": "string",
@@ -469,14 +418,14 @@
                         "minLength": 1,
                         "maxLength": 1000
                       },
-                      "executor_version": {
-                        "type": "string",
-                        "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(\\+[0-9a-f]{7,40})?$"
-                      },
-                      "runner_version": {
+                      "workspace_version": {
                         "type": "string",
                         "minLength": 1,
                         "maxLength": 1000
+                      },
+                      "executor_version": {
+                        "type": "string",
+                        "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(\\+[0-9a-f]{7,40})?$"
                       },
                       "clock_type": {
                         "type": "string",
@@ -494,11 +443,11 @@
                     "required": [
                       "gpu_type",
                       "architecture",
-                      "image_digest",
+                      "workspace_image_digest",
                       "driver_version",
                       "cuda_version",
+                      "workspace_version",
                       "executor_version",
-                      "runner_version",
                       "clock_type",
                       "record_granularity",
                       "observer_effect"
@@ -753,10 +702,6 @@
                         "maxLength": 200,
                         "pattern": "^[A-Za-z0-9_.:-]+$"
                       },
-                      "image_digest": {
-                        "type": "string",
-                        "pattern": "^sha256:[a-f0-9]{64}$"
-                      },
                       "gpu_micro_usd_per_hour": {
                         "type": "string",
                         "pattern": "^(0|[1-9][0-9]{0,29})$"
@@ -863,219 +808,11 @@
                     "required": [
                       "rate_version",
                       "sku_id",
-                      "image_digest",
                       "gpu_micro_usd_per_hour",
                       "failure_policy_version",
                       "gpu_time_policy",
-                      "model_rates"
-                    ],
-                    "additionalProperties": false
-                  },
-                  "planner_data_path": {
-                    "type": "object",
-                    "properties": {
-                      "schema_version": {
-                        "type": "string",
-                        "const": "marscompute.xtrace.planner-data-path.v1"
-                      },
-                      "policy_id": {
-                        "type": "string",
-                        "minLength": 1,
-                        "maxLength": 200,
-                        "pattern": "^[A-Za-z0-9_.:-]+$"
-                      },
-                      "policy_revision": {
-                        "type": "string",
-                        "minLength": 1,
-                        "maxLength": 200,
-                        "pattern": "^[A-Za-z0-9_.:-]+$"
-                      },
-                      "policy_sha256": {
-                        "type": "string",
-                        "pattern": "^[a-f0-9]{64}$"
-                      },
-                      "model": {
-                        "type": "string",
-                        "minLength": 1,
-                        "maxLength": 200,
-                        "pattern": "^[A-Za-z0-9_.:-]+$"
-                      },
-                      "disclosure_classes": {
-                        "maxItems": 7,
-                        "type": "array",
-                        "items": {
-                          "type": "string",
-                          "enum": [
-                            "user_prompt",
-                            "kernel_identity",
-                            "launch_geometry",
-                            "instruction_and_register_metadata",
-                            "planning_limits",
-                            "artifact_identifiers_and_digests",
-                            "comparison_layout_correctness_and_timing"
-                          ]
-                        }
-                      },
-                      "primary_path": {
-                        "type": "object",
-                        "properties": {
-                          "path_id": {
-                            "type": "string",
-                            "minLength": 1,
-                            "maxLength": 200,
-                            "pattern": "^[A-Za-z0-9_.:-]+$"
-                          },
-                          "provider_id": {
-                            "type": "string",
-                            "minLength": 1,
-                            "maxLength": 200,
-                            "pattern": "^[A-Za-z0-9_.:-]+$"
-                          },
-                          "provider_model_id": {
-                            "type": "string",
-                            "minLength": 1,
-                            "maxLength": 200,
-                            "pattern": "^[A-Za-z0-9_.:-]+$"
-                          },
-                          "processing_regions": {
-                            "minItems": 1,
-                            "maxItems": 20,
-                            "type": "array",
-                            "items": {
-                              "type": "string",
-                              "minLength": 1,
-                              "maxLength": 200,
-                              "pattern": "^[A-Za-z0-9_.:-]+$"
-                            }
-                          },
-                          "retention": {
-                            "type": "object",
-                            "properties": {
-                              "policy_id": {
-                                "type": "string",
-                                "minLength": 1,
-                                "maxLength": 200,
-                                "pattern": "^[A-Za-z0-9_.:-]+$"
-                              },
-                              "revision": {
-                                "type": "string",
-                                "minLength": 1,
-                                "maxLength": 200,
-                                "pattern": "^[A-Za-z0-9_.:-]+$"
-                              },
-                              "disclosure": {
-                                "type": "string",
-                                "minLength": 1,
-                                "maxLength": 4000
-                              }
-                            },
-                            "required": ["policy_id", "revision", "disclosure"],
-                            "additionalProperties": false
-                          },
-                          "transport_binding_sha256": {
-                            "type": "string",
-                            "pattern": "^[a-f0-9]{64}$"
-                          }
-                        },
-                        "required": [
-                          "path_id",
-                          "provider_id",
-                          "provider_model_id",
-                          "processing_regions",
-                          "retention",
-                          "transport_binding_sha256"
-                        ],
-                        "additionalProperties": false
-                      },
-                      "fallback_paths": {
-                        "maxItems": 10,
-                        "type": "array",
-                        "items": {
-                          "type": "object",
-                          "properties": {
-                            "path_id": {
-                              "type": "string",
-                              "minLength": 1,
-                              "maxLength": 200,
-                              "pattern": "^[A-Za-z0-9_.:-]+$"
-                            },
-                            "provider_id": {
-                              "type": "string",
-                              "minLength": 1,
-                              "maxLength": 200,
-                              "pattern": "^[A-Za-z0-9_.:-]+$"
-                            },
-                            "provider_model_id": {
-                              "type": "string",
-                              "minLength": 1,
-                              "maxLength": 200,
-                              "pattern": "^[A-Za-z0-9_.:-]+$"
-                            },
-                            "processing_regions": {
-                              "minItems": 1,
-                              "maxItems": 20,
-                              "type": "array",
-                              "items": {
-                                "type": "string",
-                                "minLength": 1,
-                                "maxLength": 200,
-                                "pattern": "^[A-Za-z0-9_.:-]+$"
-                              }
-                            },
-                            "retention": {
-                              "type": "object",
-                              "properties": {
-                                "policy_id": {
-                                  "type": "string",
-                                  "minLength": 1,
-                                  "maxLength": 200,
-                                  "pattern": "^[A-Za-z0-9_.:-]+$"
-                                },
-                                "revision": {
-                                  "type": "string",
-                                  "minLength": 1,
-                                  "maxLength": 200,
-                                  "pattern": "^[A-Za-z0-9_.:-]+$"
-                                },
-                                "disclosure": {
-                                  "type": "string",
-                                  "minLength": 1,
-                                  "maxLength": 4000
-                                }
-                              },
-                              "required": [
-                                "policy_id",
-                                "revision",
-                                "disclosure"
-                              ],
-                              "additionalProperties": false
-                            },
-                            "transport_binding_sha256": {
-                              "type": "string",
-                              "pattern": "^[a-f0-9]{64}$"
-                            }
-                          },
-                          "required": [
-                            "path_id",
-                            "provider_id",
-                            "provider_model_id",
-                            "processing_regions",
-                            "retention",
-                            "transport_binding_sha256"
-                          ],
-                          "additionalProperties": false
-                        }
-                      }
-                    },
-                    "required": [
-                      "schema_version",
-                      "policy_id",
-                      "policy_revision",
-                      "policy_sha256",
-                      "model",
-                      "disclosure_classes",
-                      "primary_path",
-                      "fallback_paths"
+                      "model_rates",
+                      "workspace_image_digest"
                     ],
                     "additionalProperties": false
                   },

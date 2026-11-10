@@ -47,7 +47,7 @@
             "maxLength": 200,
             "pattern": "^[A-Za-z0-9_.:-]+$"
           },
-          "image_digest": {
+          "workspace_image_digest": {
             "type": "string",
             "pattern": "^sha256:[a-f0-9]{64}$"
           },
@@ -63,29 +63,9 @@
                 "maxItems": 64,
                 "type": "array",
                 "items": { "type": "string", "pattern": "^sm_[0-9]+[af]?$" }
-              },
-              "range_profile": {
-                "maxItems": 64,
-                "type": "array",
-                "items": { "type": "string", "pattern": "^sm_[0-9]+[af]?$" }
-              },
-              "pc_sampling": {
-                "maxItems": 64,
-                "type": "array",
-                "items": { "type": "string", "pattern": "^sm_[0-9]+[af]?$" }
-              },
-              "comparison": {
-                "maxItems": 64,
-                "type": "array",
-                "items": { "type": "string", "pattern": "^sm_[0-9]+[af]?$" }
               }
             },
-            "required": [
-              "xtrace",
-              "range_profile",
-              "pc_sampling",
-              "comparison"
-            ],
+            "required": ["xtrace"],
             "additionalProperties": false
           },
           "gpu_micro_usd_per_hour": {
@@ -95,61 +75,29 @@
           "qualified": { "type": "boolean", "const": true },
           "bundle_kinds": {
             "minItems": 1,
-            "maxItems": 4,
+            "maxItems": 1,
             "type": "array",
-            "items": {
-              "type": "string",
-              "enum": [
-                "cubin_launch",
-                "source_recipe",
-                "comparison",
-                "agent_workspace"
-              ]
-            }
-          },
-          "build_templates": {
-            "maxItems": 100,
-            "type": "array",
-            "items": {
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 200,
-              "pattern": "^[A-Za-z0-9_.:-]+$"
-            }
+            "items": { "type": "string", "const": "agent_workspace" }
           },
           "stages": {
             "minItems": 1,
-            "maxItems": 3,
+            "maxItems": 1,
             "type": "array",
-            "items": {
-              "type": "string",
-              "enum": ["xtrace", "range_profile", "pc_sampling"]
-            }
+            "items": { "type": "string", "const": "xtrace" }
           }
         },
         "required": [
           "compute",
           "environment_id",
-          "image_digest",
+          "workspace_image_digest",
           "architecture",
           "architectures",
           "gpu_micro_usd_per_hour",
           "qualified",
           "bundle_kinds",
-          "build_templates",
           "stages"
         ],
         "additionalProperties": false
-      }
-    },
-    "models": {
-      "maxItems": 100,
-      "type": "array",
-      "items": {
-        "type": "string",
-        "minLength": 1,
-        "maxLength": 200,
-        "pattern": "^[A-Za-z0-9_.:-]+$"
       }
     },
     "agent_models": {
@@ -224,7 +172,6 @@
     "schema_version",
     "enabled",
     "compute",
-    "models",
     "agent_models",
     "max_upload_bytes",
     "max_query_records",
