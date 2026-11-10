@@ -85,7 +85,7 @@ class PanelContract:
     )
 
     # the token a copied selection is, and the version this package writes
-    SELECTION_TOKEN_PREFIX = "gwtrace/1"
+    SELECTION_TOKEN_PREFIX = "mtrace/1"
     SELECTION_TOKEN_KEYS = (
         "kernel",
         "t",

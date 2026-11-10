@@ -323,7 +323,7 @@ class TraceResult:
         ):
             map_analysis = None
         list_record = []
-        for map_record in map_run.get("trace_results") or []:
+        for map_record in map_run.get("records") or []:
             record = cls.record_from_json(map_record)
             if record is not None:
                 list_record.append(record)

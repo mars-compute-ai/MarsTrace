@@ -306,7 +306,7 @@ class TraceData:
             )
             else None
         )
-        list_map_record = map_run.get("trace_results") or []
+        list_map_record = map_run.get("records") or []
         nb_record = len(list_map_record)
         list_record = [
             record
@@ -1618,7 +1618,7 @@ class ShowCommand:
             default=None,
             metavar="TOKEN",
             help="A selection token copied from the report's trace "
-            "panel ('gwtrace/1 ...'): show only the rows and the "
+            "panel ('mtrace/1 ...'): show only the rows and the "
             "stretch of time it names. Paste it verbatim.",
         )
         parser.add_argument(

@@ -1,6 +1,6 @@
 ---
 name: marstrace-read
-description: Read a MarsTrace trace report of a CUDA kernel in the terminal with `marstrace show` — per-region statistics, per-thread timelines, pipeline bubbles, concurrency over time, outlier threads, the longest instances, and the region a selection token names. Use whenever there is a marstrace.json from a MarsTrace job to analyse, or its result-manifest.json to judge, or when the user pastes a selection token starting with gwtrace/1.
+description: Read a MarsTrace trace report of a CUDA kernel in the terminal with `marstrace show` — per-region statistics, per-thread timelines, pipeline bubbles, concurrency over time, outlier threads, the longest instances, and the region a selection token names. Use whenever there is a marstrace.json from a MarsTrace job to analyse, or its result-manifest.json to judge, or when the user pastes a selection token starting with mtrace/1.
 ---
 
 # Reading a MarsTrace report
@@ -113,13 +113,13 @@ A selection token is one line that names a stretch of time and a set of lanes of
 kernel's trace:
 
 ```
-gwtrace/1 kernel=square_matrix_mul#ef46 t=4365:11462ns lane=block:15-33 order=role scopes=mainloop
+mtrace/1 kernel=square_matrix_mul#ef46 t=4365:11462ns lane=block:15-33 order=role scopes=mainloop
 ```
 
 When the user pastes one, hand it to the viewer verbatim:
 
 ```bash
-marstrace show marstrace.json --select 'gwtrace/1 ...' --stats
+marstrace show marstrace.json --select 'mtrace/1 ...' --stats
 ```
 
 - **Do not rewrite it into `--tid` or `--stime`.** Its lane ids count across the launch
