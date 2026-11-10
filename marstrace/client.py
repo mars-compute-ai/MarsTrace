@@ -87,12 +87,8 @@ class MarsTraceClient:
         "connection",
         "transfer-encoding",
     }
-    # codes of the refusals for credit, which the credit page resolves
-    SET_CREDIT_CODE = {
-        "insufficient_credit",
-        "spending_limit_exceeded",
-        "billing_suspended",
-    }
+    RETRY_AFTER_HEADER = "retry-after"
+    ADD_CREDIT_DETAIL = "add_credit_url"
 
     def __init__(self, credentials: Credentials) -> None:
         self._credentials = credentials
@@ -166,6 +162,7 @@ class MarsTraceClient:
         """The envelope's error read into an exception, or the bare status when it is unreadable."""
         map_error: dict[str, Any] = {}
         request_id = err.headers.get("x-request-id") if err.headers else None
+        retry_after = err.headers.get(MarsTraceClient.RETRY_AFTER_HEADER) if err.headers else None
         if is_service:
             try:
                 map_envelope = json.loads(err.read())
@@ -178,9 +175,15 @@ class MarsTraceClient:
                 map_error = map_envelope["error"] or {}
                 request_id = map_envelope["request_id"]
         code = map_error.get("code")
+        add_credit_url = (map_error.get("details") or {}).get(MarsTraceClient.ADD_CREDIT_DETAIL)
+        retry_after_seconds = int(retry_after) if retry_after and retry_after.isdigit() else None
         message = f"HTTP {err.code} {code or err.reason}"
         if map_error.get("message"):
             message += f": {map_error['message']}"
+        if add_credit_url:
+            message += f" ({add_credit_url})"
+        if retry_after_seconds is not None:
+            message += f"; retry after {retry_after_seconds} s"
         if request_id:
             message += f" (request {request_id})"
         return ServiceError(
@@ -189,6 +192,8 @@ class MarsTraceClient:
             code=code,
             retryable=bool(map_error.get("retryable")),
             request_id=request_id,
+            add_credit_url=add_credit_url,
+            retry_after_seconds=retry_after_seconds,
         )
 
     def _call(
@@ -258,11 +263,12 @@ class MarsTraceClient:
         )
 
     def credit(self) -> dict[str, Any]:
-        """The workspace's available and reserved credit, and where to add more.
+        """The workspace's available balance, against the minimum a job needs to start.
 
         Returns:
-            ``billing_mode``, ``billing_status``, ``available_micro_usd``,
-            ``reserved_micro_usd`` and ``add_credit_url``
+            ``billing_mode``, ``billing_status``, ``available_micro_usd`` (null without a
+            spending limit), ``held_micro_usd``, ``minimum_micro_usd``, ``admissible`` and
+            ``add_credit_url``
         """
         return self._call(
             method="GET",
@@ -408,13 +414,14 @@ class MarsTraceClient:
         return list_receipt
 
     def quote(self, map_request: dict[str, Any]) -> dict[str, Any]:
-        """Price a job request without reserving: the ceilings, the agent budget, the rates.
+        """Price a job request; the service holds and stores nothing.
 
         Args:
             map_request: the job request
 
         Returns:
-            the quote
+            the rates, the bounds of one attempt, the cost at the bounds over every attempt,
+            the minimum balance a job needs, the available balance and ``admissible``
         """
         return self._call(
             method="POST",
@@ -427,7 +434,6 @@ class MarsTraceClient:
         self,
         map_request: dict[str, Any],
         idempotency_key: str,
-        quote_id: str | None = None,
     ) -> dict[str, Any]:
         """Submit a job; the same key with the same body never starts a second job.
 
@@ -436,21 +442,18 @@ class MarsTraceClient:
 
         Args:
             map_request: the job request
-            idempotency_key: the key that makes the submission happen once
-            quote_id: the quote the request was priced by, or None
+            idempotency_key: the key that makes the submission happen once; under one key
+                the service takes only the same body
 
         Returns:
             the job
 
         Raises:
             ServiceError: the key is malformed, or the service refused the job, e.g.
-                ``insufficient_credit`` or ``price_changed``
+                ``insufficient_credit`` when the available balance is below the minimum
         """
         if not MarsTraceClient.IDEMPOTENCY_KEY_PATTERN.match(idempotency_key):
             raise ServiceError("an idempotency key is 1 to 255 characters of A-Z, a-z, 0-9, '.', '_', ':' and '-'")
-        map_body = dict(map_request)
-        if quote_id is not None:
-            map_body["quote_id"] = quote_id
         attempt = 0
         while True:
             attempt += 1
@@ -459,7 +462,7 @@ class MarsTraceClient:
                     method="POST",
                     path="/v1/jobs",
                     shape=ResponseSchema.JOB,
-                    map_body=map_body,
+                    map_body=map_request,
                     map_header={"Idempotency-Key": idempotency_key},
                 )
             except ServiceError as err:

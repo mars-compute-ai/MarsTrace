@@ -107,9 +107,12 @@ class McpServer:
     INSTRUCTIONS = (
         "Trace CUDA kernels with MarsTrace. A job directory holds marstrace.toml with [workspace] "
         "(cubins, and optionally source, a launch manifest, tensors and files), [agent] (the session's "
-        "budget) and [limits] (max_cost_usd, the most the job may cost); an agent on the GPU host traces "
-        "the kernel from them. Estimate the job, show the user its max_cost_usd and get their yes, submit "
-        "with accept_max_cost_usd, wait, fetch, then read marstrace.json with marstrace_show."
+        "caps) and optionally [limits] (max_attempts); an agent on the GPU host traces the kernel from "
+        "them. A job starts only while the workspace's available balance reaches the minimum the "
+        "estimate names, and it is charged its actual usage over every attempt, failed ones included, "
+        "even past the balance. Estimate the job, show the user its rates and cost at the bounds and get "
+        "their yes, submit with accept_cost_at_bounds_usd, wait, fetch, then read marstrace.json with "
+        "marstrace_show."
     )
     # JSON-RPC error codes
     PARSE_ERROR = -32700
@@ -377,8 +380,9 @@ class McpServer:
             ),
             McpTool(
                 name="marstrace_credit",
-                description="The workspace's available and reserved credit, in micro-USD, and the "
-                "page where credit is added.",
+                description="The workspace's available balance, what running jobs hold, the minimum "
+                "balance a job needs to start and whether it is reached (micro-USD; 1000000 is $1), and "
+                "the page where credit is added.",
                 map_input_schema=McpServer._schema(
                     map_property={},
                     list_required=[],
@@ -417,9 +421,11 @@ class McpServer:
             ),
             McpTool(
                 name="marstrace_estimate",
-                description="Upload a job directory's workspace and quote it: the cost cap "
-                "(max_cost_usd), the job fee, the GPU rate and ceiling, the agent's budget and token "
-                "rates. Show max_cost_usd to the user before submitting.",
+                description="Upload a job directory's workspace and price it; nothing is held. Returns "
+                "the rates, the GPU and token bounds of one attempt, the cost at those bounds over every "
+                "attempt (cost_at_bounds.total_usd, the most the job can cost), the minimum balance a job "
+                "needs, the available balance, and whether the job would start now. Show the rates and "
+                "the cost at the bounds to the user before submitting.",
                 map_input_schema=McpServer._schema(
                     map_property={
                         "directory": map_directory,
@@ -434,14 +440,19 @@ class McpServer:
             ),
             McpTool(
                 name="marstrace_submit",
-                description="Quote and submit a job directory. Show the quote's max_cost_usd to the "
-                "user first and submit only with their consent; accept_max_cost_usd is the amount they "
-                "agreed to, and a quote above it is refused. Reuse idempotency_key when retrying a "
-                "submission whose answer was lost.",
+                description="Price and submit a job directory. Show the user the estimate's rates and "
+                "cost_at_bounds.total_usd first, say that the job is charged its actual usage over every "
+                "attempt, failed ones included, even past the available balance, and submit only with "
+                "their consent. accept_cost_at_bounds_usd is the cost at the bounds they agreed to; a "
+                "higher one is refused. Reuse idempotency_key when retrying a submission whose answer "
+                "was lost.",
                 map_input_schema=McpServer._schema(
                     map_property={
                         "directory": map_directory,
-                        "accept_max_cost_usd": {"type": "number"},
+                        "accept_cost_at_bounds_usd": {
+                            "type": "number",
+                            "description": "the cost at the bounds, in dollars, the user agreed to",
+                        },
                         "hardware": map_hardware,
                         "idempotency_key": {
                             "type": "string",
@@ -450,7 +461,7 @@ class McpServer:
                     },
                     list_required=[
                         "directory",
-                        "accept_max_cost_usd",
+                        "accept_cost_at_bounds_usd",
                     ],
                 ),
                 handler=self._submit,
@@ -472,7 +483,9 @@ class McpServer:
             ),
             McpTool(
                 name="marstrace_job",
-                description="One job: its status, attempts, progress, cost and error.",
+                description="One job: its status, attempts with their failures, progress with the "
+                "usage so far, the amount held at admission, the charge and its lines once settled, "
+                "and its error.",
                 map_input_schema=McpServer._schema(
                     map_property={"job_id": map_job_id},
                     list_required=["job_id"],
@@ -500,7 +513,7 @@ class McpServer:
             ),
             McpTool(
                 name="marstrace_cancel",
-                description="Ask a job to stop; a running job is charged for what it used.",
+                description="Ask a job to stop; it is charged what its attempts used up to the stop.",
                 map_input_schema=McpServer._schema(
                     map_property={"job_id": map_job_id},
                     list_required=["job_id"],
@@ -564,21 +577,20 @@ class McpServer:
 
     @staticmethod
     def _check_accepted(
-        cap_micro_usd: Any,
+        cost_micro_usd: Any,
         accepted_usd: Any,
-        what: str,
-        remedy: str,
     ) -> None:
-        """Refuse an amount above what the user accepted."""
-        cap = decimal.Decimal(str(cap_micro_usd))
-        if cap > decimal.Decimal(str(accepted_usd)) * MarsTraceWorkflow.MICRO_PER_UNIT:
+        """Refuse a cost at the bounds above what the user accepted."""
+        cost = decimal.Decimal(str(cost_micro_usd))
+        if cost > decimal.Decimal(str(accepted_usd)) * MarsTraceWorkflow.MICRO_PER_UNIT:
             raise MarsTraceError(
-                f"the quote's {what} is {MarsTraceWorkflow.usd(cap)}, above the accepted ${accepted_usd}; {remedy}"
+                f"the cost at the bounds is {MarsTraceWorkflow.usd(cost)}, above the accepted ${accepted_usd}; "
+                "ask the user, or lower [agent] or [limits] max_attempts"
             )
 
     def _submit(self, map_arguments: dict[str, Any]) -> dict[str, Any]:
-        """Quote, check the cap against what the user accepted, and submit; a key the job
-        directory already submitted under is submitted again as recorded."""
+        """Price, check the cost at the bounds against what the user accepted, and submit; a
+        key the job directory already submitted under is submitted again as recorded."""
         idempotency_key = map_arguments.get("idempotency_key")
         if idempotency_key is not None:
             map_job = self._workflow.resubmit(
@@ -587,21 +599,20 @@ class McpServer:
             )
             if map_job is not None:
                 return {
-                    "quote": None,
+                    "estimate": None,
                     "job": map_job,
                 }
         quoted = self._workflow.quote(
             directory=map_arguments["directory"],
             hardware=map_arguments.get("hardware"),
         )
+        self._workflow.check_admissible(quoted)
         McpServer._check_accepted(
-            cap_micro_usd=quoted.map_quote["max_cost_micro_usd"],
-            accepted_usd=map_arguments["accept_max_cost_usd"],
-            what="cost cap",
-            remedy="ask the user, or lower [limits] max_cost_usd",
+            cost_micro_usd=quoted.map_quote["cost_at_bounds_micro_usd"]["total"],
+            accepted_usd=map_arguments["accept_cost_at_bounds_usd"],
         )
         return {
-            "quote": quoted.summary(),
+            "estimate": quoted.summary(),
             "job": self._workflow.submit(
                 quoted=quoted,
                 idempotency_key=idempotency_key,

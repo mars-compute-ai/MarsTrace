@@ -91,6 +91,10 @@ class McpStdioTest(unittest.TestCase):
         )
         for tool in list_tool:
             self.assertEqual(tool["inputSchema"]["type"], "object")
+        submit = next(tool for tool in list_tool if tool["name"] == "marstrace_submit")
+        self.assertEqual(submit["inputSchema"]["required"], ["directory", "accept_cost_at_bounds_usd"])
+        self.assertIn("failed ones included", submit["description"])
+        self.assertIn("minimum", result["instructions"])
 
     def test_protocol_errors(self) -> None:
         self.initialize()
@@ -109,14 +113,16 @@ class McpStdioTest(unittest.TestCase):
         binary = os.path.join(self.directory, "matmul.cubin")
         self.assertEqual(self.call("marstrace_cubin_show", binary=binary)["structuredContent"]["kernels"], ["square_matrix_mul"])
         quote = self.call("marstrace_estimate", directory=self.directory)["structuredContent"]
-        self.assertEqual((quote["max_cost_usd"], quote["job_fee_usd"]), ("$20.000000", "$0.500000"))
-        refused = self.call("marstrace_submit", directory=self.directory, accept_max_cost_usd=19.5)
+        self.assertEqual((quote["cost_at_bounds"]["total_usd"], quote["rates"]["job_fee_usd"]), ("$302.468000", "$0.500000"))
+        self.assertEqual((quote["minimum_usd"], quote["available_usd"], quote["admissible"]), ("$100.000000", "$118.250000", True))
+        refused = self.call("marstrace_submit", directory=self.directory, accept_cost_at_bounds_usd=300)
         self.assertTrue(refused["isError"])
-        self.assertIn("above the accepted $19.5", refused["structuredContent"]["error"]["message"])
+        self.assertIn("is $302.468000, above the accepted $300", refused["structuredContent"]["error"]["message"])
         self.assertEqual(self.fake.state.map_job, {})
-        submitted = self.call("marstrace_submit", directory=self.directory, accept_max_cost_usd=20, idempotency_key="k-1")
+        submitted = self.call("marstrace_submit", directory=self.directory, accept_cost_at_bounds_usd=302.468, idempotency_key="k-1")
+        self.assertEqual(submitted["structuredContent"]["estimate"]["cost_at_bounds"]["total_usd"], "$302.468000")
         job_id = submitted["structuredContent"]["job"]["job_id"]
-        again = self.call("marstrace_submit", directory=self.directory, accept_max_cost_usd=20, idempotency_key="k-1")
+        again = self.call("marstrace_submit", directory=self.directory, accept_cost_at_bounds_usd=302.468, idempotency_key="k-1")
         self.assertEqual(again["structuredContent"]["job"]["job_id"], job_id)
         self.assertEqual(len(self.fake.state.map_job), 1)
         self.assertEqual(self.call("marstrace_wait", job_id=job_id, timeout_seconds=30)["structuredContent"]["status"], "succeeded")
@@ -136,8 +142,8 @@ class McpStdioTest(unittest.TestCase):
         agent_job(directory)
         self.assertEqual(self.call("marstrace_hardware")["structuredContent"]["agent"]["model"], "claude-opus-5-5")
         quote = self.call("marstrace_estimate", directory=directory)["structuredContent"]
-        self.assertEqual((quote["hardware"], quote["job_fee_usd"]), ("h200", "$0.500000"))
-        submitted = self.call("marstrace_submit", directory=directory, accept_max_cost_usd=30)
+        self.assertEqual((quote["hardware"], quote["max_attempts"]), ("h200", 1))
+        submitted = self.call("marstrace_submit", directory=directory, accept_cost_at_bounds_usd=float(quote["cost_at_bounds"]["total_usd"].lstrip("$")))
         self.assertFalse(submitted["isError"])
         self.assertEqual(submitted["structuredContent"]["job"]["status"], "queued")
         self.assertEqual(self.call("marstrace_cancel", job_id=submitted["structuredContent"]["job"]["job_id"])["structuredContent"]["status"], "cancelled")
@@ -145,7 +151,14 @@ class McpStdioTest(unittest.TestCase):
     def test_service_refusal_is_a_tool_error(self) -> None:
         self.initialize()
         self.fake.state.available_micro_usd = 0
-        result = self.call("marstrace_submit", directory=self.directory, accept_max_cost_usd=25)
+        result = self.call("marstrace_submit", directory=self.directory, accept_cost_at_bounds_usd=400)
+        self.assertTrue(result["isError"])
+        self.assertIn("needed to start", result["structuredContent"]["error"]["message"])
+        self.assertIn(ADD_CREDIT_URL, result["structuredContent"]["error"]["message"])
+        self.assertEqual(self.fake.state.requests_to("POST", r"^/v1/jobs$"), [])
+        self.fake.state.available_micro_usd = 118_250_000
+        self.fake.state.do_refuse_admission = True
+        result = self.call("marstrace_submit", directory=self.directory, accept_cost_at_bounds_usd=400)
         self.assertTrue(result["isError"])
         self.assertEqual(result["structuredContent"]["error"]["code"], "insufficient_credit")
         self.assertEqual(result["structuredContent"]["error"]["add_credit_url"], ADD_CREDIT_URL)

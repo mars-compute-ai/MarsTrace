@@ -42,7 +42,13 @@ class ServiceTest(unittest.TestCase):
 
     def test_hardware_and_credit(self) -> None:
         self.assertEqual([entry["id"] for entry in self.workflow.hardware()["hardware"]], ["h200", "b200", "b300"])
-        self.assertEqual(self.workflow.credit()["add_credit_url"], ADD_CREDIT_URL)
+        credit = self.workflow.credit()
+        self.assertEqual(
+            {key: credit[key] for key in ("available_micro_usd", "held_micro_usd", "minimum_micro_usd", "admissible", "add_credit_url")},
+            {"available_micro_usd": "118250000", "held_micro_usd": "0", "minimum_micro_usd": "100000000", "admissible": True, "add_credit_url": ADD_CREDIT_URL},
+        )
+        self.fake.state.available_micro_usd = -2_500_000
+        self.assertEqual(self.workflow.credit()["available_micro_usd"], "-2500000")
         for request in self.fake.state.list_request:
             self.assertEqual(request["authorization"], f"Bearer {API_KEY}")
             self.assertEqual(request["headers"]["user-agent"], "mars-trace")
@@ -67,31 +73,47 @@ class ServiceTest(unittest.TestCase):
         self.fake.state.multipart_threshold = 9
         self.fake.state.part_bytes = 4
         data = bytes(range(10))
-        self.client.upload(data=data, role="tensor", name="t.safetensors")
+        self.assertEqual(self.client.upload(data=data, role="tensor", name="t.safetensors")["size_bytes"], 10)
         list_put = self.fake.state.requests_to("PUT", r"^/r2/.*/part/")
         self.assertEqual([put["body"] for put in list_put], [data[0:4], data[4:8], data[8:10]])
         complete = json.loads(self.fake.state.requests_to("POST", r".*/complete$")[0]["body"])
         self.assertEqual(complete["parts"], [{"part_number": number, "etag": f'"etag-{number}"'} for number in (1, 2, 3)])
 
-    def test_estimate_uploads_the_example_and_quotes_it(self) -> None:
+    def test_estimate_uploads_the_example_and_prices_it(self) -> None:
         quoted = self.workflow.quote(self.directory)
         request = quoted.map_request
         self.assertEqual(set(request), {"hardware", "prompt", "inputs", "agent", "limits"})
         self.assertEqual(request["hardware"], "h200")
         self.assertEqual(set(request["inputs"]), {"cubins", "source_archive", "tensors", "files"})
-        self.assertEqual(request["limits"], {"max_cost_micro_usd": "20000000", "max_attempts": 2})
+        self.assertEqual(request["limits"], {"max_attempts": 2})
         with tarfile.open(fileobj=io.BytesIO(self.fake.state.map_upload[request["inputs"]["source_archive"]]["data"]), mode="r:gz") as tar:
             self.assertEqual(tar.getnames(), ["matmul.cu"])
         summary = quoted.summary()
+        self.assertEqual(summary["rates"]["gpu_usd_per_hour"], "$4.320000")
+        self.assertEqual(summary["rates"]["job_fee_usd"], "$0.500000")
+        self.assertEqual(summary["rates"]["agent_usd_per_million_tokens"]["cache_write_1h"], "$36.000000")
+        self.assertEqual(summary["bounds_per_attempt"], {"gpu_seconds": 1320, "agent_input_tokens": 4000000, "agent_output_tokens": 60000})
         self.assertEqual(
-            {key: summary[key] for key in ("max_cost_usd", "job_fee_usd", "gpu_usd_per_hour", "gpu_ceiling_seconds", "gpu_ceiling_usd", "agent_budget_usd", "agent_model")},
-            {
-                "max_cost_usd": "$20.000000", "job_fee_usd": "$0.500000", "gpu_usd_per_hour": "$4.320000", "gpu_ceiling_seconds": 1320,
-                "gpu_ceiling_usd": "$1.584000", "agent_budget_usd": "$17.916000", "agent_model": "claude-opus-5-5",
-            },
+            summary["cost_at_bounds"],
+            {"job_fee_usd": "$0.500000", "gpu_per_attempt_usd": "$1.584000", "agent_tokens_per_attempt_usd": "$149.400000", "total_usd": "$302.468000"},
         )
-        self.assertEqual(summary["agent_usd_per_million_tokens"]["cache_write_1h"], "$36.000000")
+        self.assertEqual((summary["max_attempts"], summary["minimum_usd"], summary["available_usd"]), (2, "$100.000000", "$118.250000"))
         self.assertTrue(summary["admissible"])
+        self.assertEqual(self.fake.state.map_job, {})
+
+    def test_estimate_without_limits_and_without_a_fee(self) -> None:
+        with open(os.path.join(self.directory, "marstrace.toml")) as manifest_file:
+            text = manifest_file.read().replace("[limits]\nmax_attempts = 2\n", "")
+        with open(os.path.join(self.directory, "marstrace.toml"), "w") as manifest_file:
+            manifest_file.write(text)
+        del self.fake.state.map_hardware["hardware"][0]["rates"]["job_fee_micro_usd"]
+        quoted = self.workflow.quote(self.directory)
+        self.assertNotIn("limits", quoted.map_request)
+        summary = quoted.summary()
+        self.assertEqual((summary["max_attempts"], summary["rates"]["job_fee_usd"], summary["cost_at_bounds"]["job_fee_usd"]), (2, "-", "-"))
+        self.assertEqual(summary["cost_at_bounds"]["total_usd"], "$301.968000")
+        job = self.workflow.submit(quoted)
+        self.assertEqual(job["limits"], {"max_attempts": 2})
 
     def test_workspace_uploads_by_role(self) -> None:
         directory = tempfile.mkdtemp()
@@ -107,15 +129,17 @@ class ServiceTest(unittest.TestCase):
         job = self.workflow.submit(quoted=quoted, idempotency_key="agent-1")
         self.assertEqual(self.workflow.wait(job["job_id"])["status"], "succeeded")
 
-    def test_inadmissible_quote_is_not_submitted(self) -> None:
-        with open(os.path.join(self.directory, "marstrace.toml")) as manifest_file:
-            text = manifest_file.read().replace("max_cost_usd = 20.0", "max_cost_usd = 2.5")
-        with open(os.path.join(self.directory, "marstrace.toml"), "w") as manifest_file:
-            manifest_file.write(text)
+    def test_a_balance_below_the_minimum_is_refused(self) -> None:
+        self.fake.state.available_micro_usd = 99_999_999
         quoted = self.workflow.quote(self.directory)
-        self.assertFalse(quoted.summary()["admissible"])
-        with self.assertRaisesRegex(MarsTraceError, "does not admit"):
+        summary = quoted.summary()
+        self.assertFalse(summary["admissible"])
+        self.assertIn("at least 100000000 micro-USD", summary["message"])
+        with self.assertRaisesRegex(MarsTraceError, rf"does not admit this job now \(\$99.999999 available, \$100.000000 needed to start\): .*; add credit at {ADD_CREDIT_URL}"):
+            self.workflow.check_admissible(quoted)
+        with self.assertRaises(ServiceError) as context:
             self.workflow.submit(quoted)
+        self.assertEqual(context.exception.code, "insufficient_credit")
         self.assertEqual(self.fake.state.map_job, {})
 
     def test_submit_is_idempotent(self) -> None:
@@ -126,7 +150,7 @@ class ServiceTest(unittest.TestCase):
         list_submission = self.fake.state.requests_to("POST", r"^/v1/jobs$")
         for request in list_submission:
             self.assertEqual(request["idempotency"], "key-1")
-            self.assertEqual(json.loads(request["body"])["quote_id"], quoted.map_quote["quote_id"])
+            self.assertEqual(json.loads(request["body"]), quoted.map_request)
         self.assertEqual(len(self.fake.state.map_job), 1)
 
     def test_a_lost_answer_is_retried_under_the_same_key(self) -> None:
@@ -157,22 +181,60 @@ class ServiceTest(unittest.TestCase):
             self.workflow.submit(quoted=quoted, idempotency_key="has space")
 
     def test_insufficient_credit_names_the_credit_page(self) -> None:
-        self.fake.state.available_micro_usd = 1
         quoted = self.workflow.quote(self.directory)
+        self.fake.state.available_micro_usd = 1
         with self.assertRaises(ServiceError) as context:
             self.workflow.submit(quoted)
         self.assertEqual((context.exception.status, context.exception.code), (402, "insufficient_credit"))
         self.assertFalse(context.exception.retryable)
         self.assertEqual(context.exception.add_credit_url, ADD_CREDIT_URL)
-        self.assertIn(ADD_CREDIT_URL, str(context.exception))
-        self.assertIn("(request req_", str(context.exception))
+        self.assertIn(f"minimum balance a job needs; add credit ({ADD_CREDIT_URL})", str(context.exception))
+        self.assertIn("(request ", str(context.exception))
+        self.assertEqual(self.fake.state.requests_to("GET", r"^/v1/credit$"), [])
+        self.assertEqual({upload["status"] for upload in self.fake.state.map_upload.values()}, {"verified"})
+
+    def test_a_postpaid_limit_and_suspended_billing_are_refusals_for_credit(self) -> None:
+        quoted = self.workflow.quote(self.directory)
+        self.fake.state.billing_mode = "postpaid"
+        self.fake.state.available_micro_usd = 0
+        with self.assertRaises(ServiceError) as context:
+            self.workflow.submit(quoted=quoted, idempotency_key="limit-1")
+        self.assertEqual((context.exception.code, context.exception.add_credit_url), ("spending_limit_exceeded", ADD_CREDIT_URL))
+        self.fake.state.available_micro_usd = None
+        self.fake.state.billing_status = "suspended"
+        with self.assertRaises(ServiceError) as context:
+            self.workflow.submit(quoted=quoted, idempotency_key="limit-2")
+        self.assertEqual((context.exception.status, context.exception.code), (402, "billing_suspended"))
+
+    def test_too_many_jobs_names_the_wait(self) -> None:
+        self.fake.state.available_micro_usd = None
+        self.fake.state.max_queued = 1
+        self.workflow.submit(self.workflow.quote(self.directory))
+        with self.assertRaises(ServiceError) as context:
+            self.workflow.submit(self.workflow.quote(self.directory))
+        self.assertEqual((context.exception.status, context.exception.code), (429, "too_many_jobs"))
+        self.assertTrue(context.exception.retryable)
+        self.assertEqual(context.exception.retry_after_seconds, 30)
+        self.assertIn("retry after 30 s", str(context.exception))
+
+    def test_a_job_is_charged_every_attempt(self) -> None:
+        self.fake.state.do_preempt_first_attempt = True
+        job = self.workflow.submit(self.workflow.quote(self.directory))
+        self.assertEqual(job["cost"], {"held_micro_usd": "100000000", "charged_micro_usd": None, "lines": []})
+        finished = self.workflow.wait(job["job_id"])
+        self.assertEqual([(attempt["status"], attempt["failure"]) for attempt in finished["attempts"]], [("failed", "supplier"), ("succeeded", None)])
+        self.assertEqual(finished["attempts"][0]["error"]["code"], "vm_preempted")
+        self.assertEqual(finished["cost"]["charged_micro_usd"], "5453300")
+        self.assertEqual(sum(int(line["amount_micro_usd"]) for line in finished["cost"]["lines"]), 5453300)
+        self.assertEqual(finished["result"]["name"], "marstrace.json")
 
     def test_wait_then_fetch(self) -> None:
         job = self.workflow.submit(self.workflow.quote(self.directory))
         self.assertEqual(job["status"], "queued")
         finished = self.workflow.wait(job["job_id"])
         self.assertEqual(finished["status"], "succeeded")
-        self.assertEqual(finished["cost"]["charged_micro_usd"], "14128100")
+        self.assertEqual(finished["cost"]["charged_micro_usd"], "5078900")
+        self.assertEqual(finished["progress"]["usage_micro_usd"], "6120000")
         list_wait = self.fake.state.requests_to("GET", r"^/v1/jobs/[^/]+/wait$")
         self.assertEqual(len(list_wait), 4)
         self.assertEqual(list_wait[0]["query"]["timeout_seconds"], ["60"])
@@ -197,6 +259,7 @@ class ServiceTest(unittest.TestCase):
         self.assertEqual(context.exception.code, "result_unavailable")
 
     def test_list_pages_by_cursor(self) -> None:
+        self.fake.state.available_micro_usd = None
         list_id = [self.workflow.submit(self.workflow.quote(self.directory))["job_id"] for _ in range(3)]
         first = self.workflow.jobs(limit=2)
         second = self.workflow.jobs(limit=2, cursor=first["next_cursor"])
@@ -205,12 +268,21 @@ class ServiceTest(unittest.TestCase):
 
     def test_cancel_sends_an_empty_object(self) -> None:
         job = self.workflow.submit(self.workflow.quote(self.directory))
-        self.assertEqual(self.workflow.cancel(job["job_id"])["status"], "cancelled")
+        cancelled = self.workflow.cancel(job["job_id"])
+        self.assertEqual((cancelled["status"], cancelled["error"]["code"]), ("cancelled", "cancelled"))
         cancel = self.fake.state.requests_to("POST", r".*/cancel$")[0]
         self.assertEqual((json.loads(cancel["body"]), cancel["content_type"]), ({}, "application/json"))
         with self.assertRaises(ServiceError) as context:
             self.workflow.cancel(job["job_id"])
         self.assertEqual(context.exception.code, "job_not_cancellable")
+
+    def test_a_running_job_ends_cancelled_once_stopped(self) -> None:
+        self.fake.state.hold_status = "running"
+        job = self.workflow.submit(self.workflow.quote(self.directory))
+        self.assertEqual(self.client.wait_job(job_id=job["job_id"], timeout_seconds=1)["status"], "starting")
+        self.assertEqual(self.client.wait_job(job_id=job["job_id"], timeout_seconds=1)["status"], "running")
+        self.assertEqual(self.workflow.cancel(job["job_id"])["status"], "running")
+        self.assertEqual(self.workflow.wait(job["job_id"])["status"], "cancelled")
 
     def test_unknown_job_is_a_service_error(self) -> None:
         with self.assertRaises(ServiceError) as context:
@@ -228,6 +300,7 @@ class ServiceTest(unittest.TestCase):
             self.client.download(url=f"{self.fake.origin}/r2/results/x", sha256="0" * 64, size_bytes=3)
 
     def test_a_malformed_answer_is_refused(self) -> None:
+        self.assertIsNone(self.workflow.hardware()["hardware"][2]["rates"])
         self.fake.state.map_hardware["hardware"][0]["rates"]["job_fee_micro_usd"] = 500000
         with self.assertRaisesRegex(ServiceError, r"GET /v1/hardware answered with an unexpected body: the answer.hardware\[0\].rates.job_fee_micro_usd"):
             self.workflow.hardware()
@@ -237,9 +310,14 @@ class ServiceTest(unittest.TestCase):
             self.workflow.hardware()
 
     def test_shapes_accept_added_fields_and_check_ids(self) -> None:
-        self.assertIsNone(ResponseSchema.matches({"upload_id": "upl_" + "a" * 26, "status": "verified", "extra": 1}, ResponseSchema.UPLOAD))
-        self.assertIn("is not a string", ResponseSchema.matches({"upload_id": "upl_" + "i" * 26, "status": "verified"}, ResponseSchema.UPLOAD))
-        self.assertIn("is not one of", ResponseSchema.matches({"upload_id": "upl_" + "a" * 26, "status": "pending"}, ResponseSchema.UPLOAD))
+        upload = {
+            "upload_id": "upl_" + "a" * 26, "role": "cubin", "name": "k.cubin", "size_bytes": 3, "sha256": "0" * 64,
+            "content_type": "application/octet-stream", "status": "verified", "expires_at": "2026-11-10T12:00:00.000Z",
+        }
+        self.assertIsNone(ResponseSchema.matches(dict(upload, extra=1), ResponseSchema.UPLOAD))
+        self.assertIn("is not a string", ResponseSchema.matches(dict(upload, upload_id="upl_" + "i" * 26), ResponseSchema.UPLOAD))
+        self.assertIn("is not one of", ResponseSchema.matches(dict(upload, status="granted"), ResponseSchema.UPLOAD))
+        self.assertIn("is not a string of the form", ResponseSchema.matches(dict(upload, expires_at="today"), ResponseSchema.UPLOAD))
 
 
 if __name__ == "__main__":

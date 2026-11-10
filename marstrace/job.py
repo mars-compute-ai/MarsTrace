@@ -1,4 +1,3 @@
-import decimal
 import gzip
 import io
 import json
@@ -14,19 +13,18 @@ from marstrace.tensors import TensorFile
 
 @dataclass
 class JobLimits:
-    """The ``[limits]`` table: the most a job may cost, and how many attempts it may take.
+    """The optional ``[limits]`` table: how many attempts a job may take. A job is charged its
+    actual usage over every attempt, so ``max_attempts`` and ``[agent]`` bound what it can cost.
 
     Args:
-        max_cost_micro_usd: the cost cap, the job's reservation
         max_attempts: the most attempts, or None for the service's default
     """
 
-    MICRO_PER_UNIT = 1_000_000
-    COST_KEY = "max_cost_usd"
     ATTEMPTS_KEY = "max_attempts"
     ATTEMPTS_MAX = 3
+    # attempts the service gives a request that leaves max_attempts out
+    ATTEMPTS_DEFAULT = 2
 
-    max_cost_micro_usd: str
     max_attempts: int | None = None
 
     @classmethod
@@ -40,18 +38,13 @@ class JobLimits:
             the limits
 
         Raises:
-            ManifestError: the cost cap is missing, or a key is unknown or out of range
+            ManifestError: a key is unknown or out of range
         """
         JobManifest.check_table(
             value=map_limits,
-            set_key={
-                JobLimits.COST_KEY,
-                JobLimits.ATTEMPTS_KEY,
-            },
+            set_key={JobLimits.ATTEMPTS_KEY},
             where="[limits]",
         )
-        if JobLimits.COST_KEY not in map_limits:
-            raise ManifestError("[limits] needs max_cost_usd, the most the job may cost in dollars")
         if JobLimits.ATTEMPTS_KEY in map_limits:
             JobManifest.check_integer(
                 value=map_limits[JobLimits.ATTEMPTS_KEY],
@@ -59,52 +52,25 @@ class JobLimits:
                 low=1,
                 high=JobLimits.ATTEMPTS_MAX,
             )
-        return cls(
-            max_cost_micro_usd=JobLimits.micro_usd(map_limits[JobLimits.COST_KEY]),
-            max_attempts=map_limits.get(JobLimits.ATTEMPTS_KEY),
-        )
+        return cls(max_attempts=map_limits.get(JobLimits.ATTEMPTS_KEY))
 
-    @staticmethod
-    def micro_usd(usd: Any) -> str:
-        """A dollar amount as the API's micro-USD money string, converted exactly.
-
-        Args:
-            usd: the amount in dollars
+    def attempts(self) -> int:
+        """The most attempts the job takes.
 
         Returns:
-            the decimal string of whole micro-USD
-
-        Raises:
-            ManifestError: the amount is not a positive number of whole micro-USD
+            ``max_attempts``, or the service's default when the manifest leaves it out
         """
-        if (
-            isinstance(
-                usd,   # obj
-                bool,  # class_or_tuple
-            )
-            or not isinstance(
-                usd,           # obj
-                (int, float),  # class_or_tuple
-            )
-        ):
-            raise ManifestError("[limits] max_cost_usd must be a number of dollars")
-        micro = decimal.Decimal(str(usd)) * JobLimits.MICRO_PER_UNIT
-        if micro != micro.to_integral_value():
-            raise ManifestError(f"[limits] max_cost_usd {usd} has more than 6 decimals; give whole micro-USD")
-        if micro <= 0:
-            raise ManifestError("[limits] max_cost_usd must be positive")
-        return str(int(micro))
+        return JobLimits.ATTEMPTS_DEFAULT if self.max_attempts is None else self.max_attempts
 
-    def to_api(self) -> dict[str, Any]:
+    def to_api(self) -> dict[str, Any] | None:
         """The limits the job request takes.
 
         Returns:
-            ``max_cost_micro_usd``, and ``max_attempts`` when the manifest sets it
+            ``{"max_attempts": n}``, or None when the manifest leaves it to the service
         """
-        map_api: dict[str, Any] = {"max_cost_micro_usd": self.max_cost_micro_usd}
-        if self.max_attempts is not None:
-            map_api["max_attempts"] = self.max_attempts
-        return map_api
+        if self.max_attempts is None:
+            return None
+        return {JobLimits.ATTEMPTS_KEY: self.max_attempts}
 
 
 @dataclass
@@ -509,7 +475,7 @@ class JobManifest:
         intent: what the trace should answer, the job's prompt
         workspace: the files the agent works with
         agent: the session's budget
-        limits: the cost cap and the attempts
+        limits: the attempts
         list_binary: the workspace's cubins
     """
 
@@ -526,7 +492,6 @@ class JobManifest:
     # the manifest's required tables
     SET_REQUIRED_TABLE = {
         "workspace",
-        "limits",
     }
     SET_KEY = {
         "hardware",
@@ -557,7 +522,7 @@ class JobManifest:
     intent: str
     workspace: WorkspaceSpec
     agent: AgentOptions
-    limits: JobLimits
+    limits: JobLimits = field(default_factory=JobLimits)
     list_binary: list[KernelBinary] = field(default_factory=list)
 
     @staticmethod
@@ -622,8 +587,6 @@ class JobManifest:
             raise ManifestError(f"{where} must be an integer {bound}, not {value!r}")
 
     @classmethod
-
-    @classmethod
     def load(cls, directory: str) -> "JobManifest":
         """Read and check the manifest of a job directory.
 
@@ -672,7 +635,7 @@ class JobManifest:
             raise ManifestError(f"{path}: 'intent' may not hold a NUL character")
         for key in sorted(JobManifest.SET_REQUIRED_TABLE):
             if key not in map_manifest:
-                raise ManifestError(f"{path}: [{key}] is required; a job needs [workspace] and [limits]")
+                raise ManifestError(f"{path}: [{key}] is required: the files the agent works with")
         workspace = WorkspaceSpec.from_table(map_manifest["workspace"])
         return cls(
             directory=directory,
@@ -685,7 +648,12 @@ class JobManifest:
                     {},
                 )
             ),
-            limits=JobLimits.from_table(map_manifest["limits"]),
+            limits=JobLimits.from_table(
+                map_manifest.get(
+                    "limits",
+                    {},
+                )
+            ),
             list_binary=workspace.validate(directory),
         )
 
@@ -840,12 +808,16 @@ class JobManifest:
             map_upload_ids: upload role to the ids of the verified uploads of that role
 
         Returns:
-            ``hardware``, ``prompt``, ``inputs``, ``agent`` and ``limits``
+            ``hardware``, ``prompt``, ``inputs``, ``agent``, and ``limits`` when the manifest
+            sets ``max_attempts``
         """
-        return {
+        map_request = {
             "hardware": self.select_hardware(map_hardware)["id"],
             "prompt": self.intent,
             "inputs": JobManifest.inputs(map_upload_ids),
             "agent": self.agent.to_api(map_hardware["agent"]),
-            "limits": self.limits.to_api(),
         }
+        map_limits = self.limits.to_api()
+        if map_limits is not None:
+            map_request["limits"] = map_limits
+        return map_request

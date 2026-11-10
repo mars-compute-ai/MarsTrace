@@ -17,5 +17,4 @@ max_output_tokens = 60000
 max_wall_seconds = 1200
 
 [limits]
-max_cost_usd = 20.0
 max_attempts = 2

@@ -42,26 +42,42 @@ class JobCommands:
 
     @staticmethod
     def print_job(map_job: dict[str, Any]) -> None:
-        """One job's status, hardware, progress and cost.
+        """One job's status, hardware, attempts, progress and cost.
 
         Args:
             map_job: the job
         """
         map_cost = map_job["cost"]
-        map_progress = map_job.get("progress") or {}
+        map_progress = map_job["progress"]
         print(f"job       {map_job['job_id']}")
         print(f"status    {map_job['status']}")
         print(f"hardware  {map_job['hardware']}")
         print(f"created   {map_job['created_at']}")
+        if map_job["ended_at"]:
+            print(f"ended     {map_job['ended_at']}")
         if map_progress:
             print(
-                f"progress  agent turn {map_progress.get('agent_turn', '-')}, "
-                f"{map_progress.get('gpu_seconds', '-')} GPU seconds"
+                f"progress  agent turn {map_progress['agent_turn']}, "
+                f"{map_progress['gpu_seconds']} GPU seconds, "
+                f"{MarsTraceWorkflow.usd(map_progress['usage_micro_usd'])} used so far"
             )
-        print(f"attempts  {len(map_job['attempts'])}")
-        print(f"reserved  {MarsTraceWorkflow.usd(map_cost['reserved_micro_usd'])}")
+        for map_attempt in map_job["attempts"]:
+            line = f"attempt   {map_attempt['number']} {map_attempt['status']}"
+            if map_attempt["failure"]:
+                line += f" ({map_attempt['failure']})"
+            if map_attempt["error"]:
+                line += f": {map_attempt['error']['code']}: {map_attempt['error']['message']}"
+            print(line)
+        print(f"held      {MarsTraceWorkflow.usd(map_cost['held_micro_usd'])}")
         print(f"charged   {MarsTraceWorkflow.usd(map_cost['charged_micro_usd'])}")
-        map_error = map_job.get("error")
+        for map_line in map_cost["lines"]:
+            if map_line["quantity"] == 0:
+                continue
+            print(
+                f"          {map_line['dimension']} {map_line['quantity']}: "
+                f"{MarsTraceWorkflow.usd(map_line['amount_micro_usd'])}"
+            )
+        map_error = map_job["error"]
         if map_error:
             print(f"error     {map_error['code']}: {map_error['message']}")
 
@@ -74,11 +90,17 @@ class JobCommands:
             return
         for map_entry in map_hardware["hardware"]:
             map_rates = map_entry["rates"]
+            if map_rates is None:
+                price = "no published price"
+            else:
+                fee = map_rates.get("job_fee_micro_usd")
+                price = (
+                    f"{MarsTraceWorkflow.usd(map_rates['gpu_micro_usd_per_hour'])}/GPU-hour  "
+                    f"{'no job fee' if fee is None else 'fee ' + MarsTraceWorkflow.usd(fee)}"
+                )
             print(
                 f"{map_entry['id']:<8} {map_entry['gpu']:<8} {map_entry['architecture']:<8} "
-                f"{MarsTraceWorkflow.usd(map_rates['gpu_micro_usd_per_hour'])}/GPU-hour  "
-                f"fee {MarsTraceWorkflow.usd(map_rates['job_fee_micro_usd'])}  "
-                f"{'available' if map_entry['available'] else 'not available now'}"
+                f"{price}  {'available' if map_entry['available'] else 'not available now'}"
             )
         map_agent = map_hardware["agent"]
         print(f"agent model: {map_agent['model']}")
@@ -89,14 +111,16 @@ class JobCommands:
 
     @staticmethod
     def credit(args: argparse.Namespace) -> None:
-        """Print the workspace's credit."""
+        """Print the workspace's balance against the minimum a job needs."""
         map_credit = JobCommands._workflow().credit()
         if args.json:
             JobCommands._print_json(map_credit)
             return
         available = map_credit["available_micro_usd"]
         print(f"available {'no limit' if available is None else MarsTraceWorkflow.usd(available)}")
-        print(f"reserved  {MarsTraceWorkflow.usd(map_credit['reserved_micro_usd'])}")
+        print(f"held      {MarsTraceWorkflow.usd(map_credit['held_micro_usd'])} by running jobs")
+        print(f"minimum   {MarsTraceWorkflow.usd(map_credit['minimum_micro_usd'])} to start a job")
+        print(f"jobs      {'can start' if map_credit['admissible'] else 'cannot start; add credit'}")
         print(f"add more  {map_credit['add_credit_url']}")
 
     @staticmethod
@@ -114,29 +138,37 @@ class JobCommands:
 
     @staticmethod
     def _print_quote(quoted: QuotedJob) -> None:
-        """What a quote commits to."""
+        """What a job would cost, and whether it can start."""
         map_summary = quoted.summary()
-        map_token = map_summary["agent_usd_per_million_tokens"]
-        print(f"quote     {map_summary['quote_id']} (expires {map_summary['expires_at']})")
+        map_rates = map_summary["rates"]
+        map_token = map_rates["agent_usd_per_million_tokens"]
+        map_bounds = map_summary["bounds_per_attempt"]
+        map_cost = map_summary["cost_at_bounds"]
         print(f"hardware  {map_summary['hardware']}, {map_summary['gpu']} ({map_summary['architecture']})")
-        print(f"job fee   {map_summary['job_fee_usd']}")
+        print(f"rates     {map_rates['gpu_usd_per_hour']} per GPU-hour, job fee {map_rates['job_fee_usd']}")
         print(
-            f"GPU       {map_summary['gpu_usd_per_hour']} per GPU-hour, at most "
-            f"{map_summary['gpu_ceiling_seconds']} s: {map_summary['gpu_ceiling_usd']}"
-        )
-        print(
-            f"tokens    {map_summary['agent_model']}: {map_token['input']} input, "
+            f"tokens    {map_rates['agent_model']}: {map_token['input']} input, "
             f"{map_token['cache_read']} cache read, {map_token['cache_write_5m']} 5-minute cache write, "
             f"{map_token['cache_write_1h']} 1-hour cache write, {map_token['output']} output per million"
         )
-        print(f"agent     at most {map_summary['agent_budget_usd']} of tokens")
-        print(f"cost cap  {map_summary['max_cost_usd']} at most")
+        print(
+            f"bounds    per attempt {map_bounds['gpu_seconds']} GPU seconds, "
+            f"{map_bounds['agent_input_tokens']} input and {map_bounds['agent_output_tokens']} output tokens; "
+            f"{map_summary['max_attempts']} attempt(s)"
+        )
+        print(
+            f"at most   {map_cost['total_usd']}: fee {map_cost['job_fee_usd']}, plus per attempt "
+            f"{map_cost['gpu_per_attempt_usd']} GPU and {map_cost['agent_tokens_per_attempt_usd']} tokens"
+        )
+        print("charged   actual usage of every attempt, failed ones included, plus the fee")
+        print(f"balance   {map_summary['available_usd']} available, {map_summary['minimum_usd']} needed to start")
         if not map_summary["admissible"]:
-            print(f"refused   {map_summary['message'] or 'the agent budget is below the minimum'}")
+            print(f"refused   {map_summary['message'] or 'the available balance is below the minimum'}")
 
     @staticmethod
     def estimate(args: argparse.Namespace) -> None:
-        """Upload and quote a job directory, then print the cost cap and the rates."""
+        """Upload and price a job directory, then print the rates, the cost at the bounds and
+        the balance."""
         quoted = JobCommands._workflow().quote(
             directory=args.directory,
             hardware=args.hardware,
@@ -148,7 +180,7 @@ class JobCommands:
 
     @staticmethod
     def submit(args: argparse.Namespace) -> None:
-        """Upload, quote, confirm the cost and submit a job directory; a key the directory
+        """Upload, price, confirm the cost and submit a job directory; a key the directory
         already submitted under is submitted again as recorded."""
         workflow = JobCommands._workflow()
         map_job = None
@@ -163,6 +195,7 @@ class JobCommands:
                 hardware=args.hardware,
             )
             JobCommands._print_quote(quoted)
+            workflow.check_admissible(quoted)
             JobCommands._confirm(
                 args=args,
                 prompt="submit?",
@@ -326,14 +359,14 @@ class CommandLine:
 
         credit = subparsers.add_parser(
             name="credit",
-            help="show the credit available to jobs, and where to add more",
+            help="show the available balance, the minimum a job needs to start, and where to add credit",
         )
         CommandLine._add_json(credit)
         credit.set_defaults(func=JobCommands.credit)
 
         estimate = subparsers.add_parser(
             name="estimate",
-            help="upload and quote a job directory; print the cost cap, the rates and the job fee",
+            help="upload and price a job directory; print the rates, the cost at the bounds and the balance",
         )
         CommandLine._add_job_directory(estimate)
         CommandLine._add_json(estimate)
@@ -341,13 +374,13 @@ class CommandLine:
 
         submit = subparsers.add_parser(
             name="submit",
-            help="upload, quote, confirm the cost and submit a job directory",
+            help="upload, price, confirm the cost and submit a job directory",
         )
         CommandLine._add_job_directory(submit)
         submit.add_argument(
             "--yes",
             action="store_true",
-            help="accept the quoted cost cap without asking",
+            help="accept the estimated cost without asking",
         )
         submit.add_argument(
             "--wait",
@@ -380,7 +413,7 @@ class CommandLine:
 
         job = subparsers.add_parser(
             name="job",
-            help="show a job's status, progress and cost",
+            help="show a job's status, attempts, usage so far and charge",
         )
         job.add_argument("job")
         job.add_argument(
@@ -393,7 +426,7 @@ class CommandLine:
 
         cancel = subparsers.add_parser(
             name="cancel",
-            help="ask a job to stop",
+            help="ask a job to stop; it is charged what it used",
         )
         cancel.add_argument("job")
         cancel.set_defaults(func=JobCommands.cancel)

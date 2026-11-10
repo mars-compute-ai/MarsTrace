@@ -20,10 +20,14 @@ EXAMPLE_DIRECTORY = os.path.join(
     "matmul",
 )
 API_KEY = "mt_live_test"
-TIMESTAMP = "2026-11-10T12:00:00Z"
+ACCOUNT_ID = "acc_test"
+TIMESTAMP = "2026-11-10T12:00:00.000Z"
 ADD_CREDIT_URL = "https://console.marscompute.ai/tenant/billing/credits"
 AGENT_MODEL = "claude-opus-5-5"
 CROCKFORD = "0123456789abcdefghjkmnpqrstvwxyz"
+MIB = 1 << 20
+MILLION = 1_000_000
+MILLISECONDS_PER_HOUR = 3_600_000
 RATES_H200 = {
     "gpu_micro_usd_per_hour": "4320000",
     "job_fee_micro_usd": "500000",
@@ -33,6 +37,12 @@ RATES_H200 = {
     "agent_cache_write_1h_micro_usd_per_million": "36000000",
     "agent_output_micro_usd_per_million": "90000000",
 }
+LIST_INPUT_RATE = [
+    "agent_input_micro_usd_per_million",
+    "agent_cache_read_micro_usd_per_million",
+    "agent_cache_write_5m_micro_usd_per_million",
+    "agent_cache_write_1h_micro_usd_per_million",
+]
 AGENT_DEFAULTS = {"max_turns": 60, "max_input_tokens": 4000000, "max_output_tokens": 60000, "max_wall_seconds": 1200}
 AGENT_MAXIMUMS = {"max_turns": 500, "max_input_tokens": 50000000, "max_output_tokens": 1000000, "max_wall_seconds": 2580}
 HARDWARE = {
@@ -42,21 +52,39 @@ HARDWARE = {
             "id": "b200", "gpu": "B200", "architecture": "sm_100a", "available": True, "service_model": "marstrace-b200",
             "rates": dict(RATES_H200, gpu_micro_usd_per_hour="6480000"),
         },
-        {
-            "id": "b300", "gpu": "B300", "architecture": "sm_103a", "available": False, "service_model": "marstrace-b300",
-            "rates": dict(RATES_H200, gpu_micro_usd_per_hour="8640000"),
-        },
+        {"id": "b300", "gpu": "B300", "architecture": "sm_103a", "available": False, "service_model": "marstrace-b300", "rates": None},
     ],
     "agent": {"model": AGENT_MODEL, "defaults": AGENT_DEFAULTS, "maximums": AGENT_MAXIMUMS},
 }
 # the order a job's status moves in, one step per long poll
 LIST_JOB_STEP = ["queued", "starting", "running", "finishing", "succeeded"]
 SET_FINAL = {"succeeded", "failed", "cancelled"}
-SET_ROLE = {"cubin", "source_archive", "launch_manifest", "tensor", "file"}
 IDEMPOTENCY_KEY_PATTERN = re.compile(r"^[A-Za-z0-9._:-]{1,255}$")
 FINALIZE_MARGIN_SECONDS = 120
-MILLISECONDS_PER_HOUR = 3_600_000
-AGENT_BUDGET_MIN = 1_000_000
+MAX_ATTEMPTS_DEFAULT = 2
+# HTTP status and retryability of each error code, as errors.ts maps them
+MAP_ERROR_STATUS = {
+    "invalid_request": 400,
+    "authentication_required": 401,
+    "insufficient_credit": 402,
+    "spending_limit_exceeded": 402,
+    "billing_suspended": 402,
+    "forbidden": 403,
+    "not_found": 404,
+    "idempotency_conflict": 409,
+    "upload_not_ready": 409,
+    "job_not_cancellable": 409,
+    "result_unavailable": 409,
+    "limit_exceeded": 413,
+    "hardware_unavailable": 422,
+    "rate_limited": 429,
+    "too_many_jobs": 429,
+    "service_unavailable": 503,
+}
+SET_RETRYABLE = {"rate_limited", "too_many_jobs", "service_unavailable"}
+MAP_ROLE_MAX_BYTES = {"cubin": 64 * MIB, "source_archive": 256 * MIB, "launch_manifest": MIB, "tensor": 128 * MIB, "file": 16 * MIB}
+MAX_TOTAL_BYTES = 256 * MIB
+MAP_FAILURE_MESSAGE = {"vm_preempted": "The GPU machine was reclaimed by the supplier.", "cancelled": "The job was cancelled."}
 
 
 def new_id(prefix: str) -> str:
@@ -81,44 +109,148 @@ def agent_job(directory: str) -> None:
             'hardware = "h200"\nintent = "find the longest bubble of the mainloop"\n'
             '[workspace]\ncubins = ["matmul.cubin"]\nsource = "src"\nfiles = ["run.py"]\n'
             "[agent]\nmax_turns = 50\nmax_input_tokens = 2000000\nmax_output_tokens = 100000\nmax_wall_seconds = 1800\n"
-            "[limits]\nmax_cost_usd = 30.0\nmax_attempts = 1\n"
+            "[limits]\nmax_attempts = 1\n"
         )
 
 
-class RequestShape:
-    """The request bodies of section 3 of the MarsTrace contract; a key not named is refused."""
+def ceil_rate(quantity: int, unit_micro_usd: int, denominator: int) -> int:
+    """A quantity at a price, rounded up to whole micro-USD."""
+    return -(-quantity * unit_micro_usd // denominator)
 
-    UPLOAD = {"role": str, "name": str, "size_bytes": int, "sha256": str, "content_type": str}
-    COMPLETE = {"sha256": str, "size_bytes": int, "parts?": list}
-    AGENT = {"max_turns": int, "max_input_tokens": int, "max_output_tokens": int, "max_wall_seconds": int}
-    INPUTS = {"cubins": list, "source_archive?": str, "launch_manifest?": str, "tensors?": list, "files?": list}
-    LIMITS = {"max_attempts?": int, "max_cost_micro_usd": str}
-    JOB = {"hardware": str, "prompt": str, "inputs": INPUTS, "agent?": AGENT, "limits": LIMITS}
-    SUBMIT = dict(JOB, **{"quote_id?": str})
+
+class ServiceError(Exception):
+    """A refusal the fake answers with an error envelope, as ApiError of errors.ts."""
+
+    def __init__(self, code: str, message: str, details: dict[str, str] | None = None, retry_after_seconds: int | None = None) -> None:
+        super().__init__(message)
+        self.code = code
+        self.status = MAP_ERROR_STATUS[code]
+        self.retryable = code in SET_RETRYABLE
+        self.details = details
+        self.retry_after_seconds = retry_after_seconds
+
+    def to_body(self) -> dict[str, Any]:
+        body: dict[str, Any] = {"code": self.code, "message": str(self), "retryable": self.retryable}
+        if self.details is not None:
+            body["details"] = self.details
+        return body
+
+
+class Field:
+    """One field of a strict request schema: its type, bounds, and whether it may be absent."""
+
+    def __init__(self, kind: Any, low: int | None = None, high: int | None = None, pattern: str | None = None, is_optional: bool = False, default: Any = None) -> None:
+        self.kind = kind
+        self.low = low
+        self.high = high
+        self.pattern = re.compile(pattern) if pattern else None
+        self.is_optional = is_optional
+        self.default = default
+
+
+class RequestSchema:
+    """The request schemas of job-request.ts and customer-api.ts: unknown fields are refused,
+    defaults are applied, and a refusal names the field as CustomerApi.parse does."""
+
+    UPLOAD_ID = r"^upl_[0-9a-z]{26}$"
+    AGENT = {
+        name: Field(int, low=60 if name == "max_wall_seconds" else 1, high=AGENT_MAXIMUMS[name], is_optional=True, default=AGENT_DEFAULTS[name])
+        for name in AGENT_DEFAULTS
+    }
+    INPUTS = {
+        "cubins": Field([Field(str, pattern=UPLOAD_ID)], low=1, high=8),
+        "source_archive": Field(str, pattern=UPLOAD_ID, is_optional=True),
+        "launch_manifest": Field(str, pattern=UPLOAD_ID, is_optional=True),
+        "tensors": Field([Field(str, pattern=UPLOAD_ID)], high=8, is_optional=True, default=[]),
+        "files": Field([Field(str, pattern=UPLOAD_ID)], high=8, is_optional=True, default=[]),
+    }
+    LIMITS = {"max_attempts": Field(int, low=1, high=3, is_optional=True, default=MAX_ATTEMPTS_DEFAULT)}
+    JOB = {
+        "hardware": Field(str, low=1, high=32),
+        "prompt": Field(str, low=1, high=32000, pattern=r"^[^\x00]*$"),
+        "inputs": Field(INPUTS),
+        "agent": Field(AGENT, is_optional=True, default={}),
+        "limits": Field(LIMITS, is_optional=True, default={}),
+    }
+    UPLOAD = {
+        "role": Field({"cubin", "source_archive", "launch_manifest", "tensor", "file"}),
+        "name": Field(str, pattern=r"^[A-Za-z0-9._-]{1,255}$"),
+        "size_bytes": Field(int, low=1),
+        "sha256": Field(str, pattern=r"^[a-f0-9]{64}$"),
+        "content_type": Field(str, low=1, high=255, is_optional=True, default="application/octet-stream"),
+    }
+    COMPLETE = {
+        "sha256": Field(str, pattern=r"^[a-f0-9]{64}$"),
+        "size_bytes": Field(int, low=1),
+        "parts": Field([Field({"part_number": Field(int, low=1, high=10000), "etag": Field(str, low=1, high=256)})], high=10000, is_optional=True),
+    }
+    CANCEL: dict[str, Field] = {}
+    WAIT = {"timeout_seconds": Field("int_text", low=1, high=60, is_optional=True, default=30)}
+    LIST = {
+        "limit": Field("int_text", low=1, high=100, is_optional=True, default=20),
+        "cursor": Field(str, low=1, high=200, is_optional=True),
+        "status": Field({"queued", "starting", "running", "finishing", "succeeded", "failed", "cancelled"}, is_optional=True),
+        "account_id": Field(str, low=1, high=64, is_optional=True),
+    }
 
     @staticmethod
-    def departure(value: Any, shape: Any, where: str = "body") -> str | None:
-        """The first way a request departs from its shape, or None."""
-        if isinstance(shape, dict):
-            if not isinstance(value, dict):
-                return f"{where} is not an object"
-            set_known = {key.rstrip("?") for key in shape}
-            set_unknown = set(value) - set_known
-            if set_unknown:
-                return f"{where} has unknown field(s) {', '.join(sorted(set_unknown))}"
-            for key, item_shape in shape.items():
-                name = key.rstrip("?")
-                if name not in value:
-                    if key.endswith("?"):
-                        continue
-                    return f"{where}.{name} is required"
-                departure = RequestShape.departure(value[name], item_shape, f"{where}.{name}")
-                if departure:
-                    return departure
-            return None
-        if shape is int and isinstance(value, bool):
-            return f"{where} is not an integer"
-        return None if isinstance(value, shape) else f"{where} is not of type {shape.__name__}"
+    def parse(value: Any, schema: dict[str, Field], path: str = "") -> dict[str, Any]:
+        """The value with defaults applied; raises invalid_request naming the first bad field."""
+        where = path or "body"
+        if not isinstance(value, dict):
+            raise ServiceError("invalid_request", f"Invalid {where}: expected object")
+        set_unknown = set(value) - set(schema)
+        if set_unknown:
+            raise ServiceError("invalid_request", f"Invalid {where}: unknown field {', '.join(sorted(set_unknown))}")
+        map_parsed: dict[str, Any] = {}
+        for name, field in schema.items():
+            field_path = f"{path}.{name}" if path else name
+            if name not in value:
+                if not field.is_optional:
+                    raise ServiceError("invalid_request", f"Invalid {field_path}: required")
+                if field.default is not None:
+                    map_parsed[name] = RequestSchema.parse(field.default, field.kind, field_path) if isinstance(field.kind, dict) else json.loads(json.dumps(field.default))
+                continue
+            map_parsed[name] = RequestSchema.value(value[name], field, field_path)
+        return map_parsed
+
+    @staticmethod
+    def value(value: Any, field: Field, path: str) -> Any:
+        kind = field.kind
+        if isinstance(kind, dict):
+            return RequestSchema.parse(value, kind, path)
+        if isinstance(kind, set):
+            if value not in kind:
+                raise ServiceError("invalid_request", f"Invalid {path}: expected one of {', '.join(sorted(kind))}")
+            return value
+        if isinstance(kind, list):
+            if not isinstance(value, list):
+                raise ServiceError("invalid_request", f"Invalid {path}: expected array")
+            RequestSchema.bounds(len(value), field, path, "items")
+            return [RequestSchema.value(item, kind[0], f"{path}.{index}") for index, item in enumerate(value)]
+        if kind == "int_text":
+            if not re.match(r"^-?\d+$", str(value)):
+                raise ServiceError("invalid_request", f"Invalid {path}: expected number")
+            value = int(value)
+            kind = int
+        if kind is int:
+            if isinstance(value, bool) or not isinstance(value, int):
+                raise ServiceError("invalid_request", f"Invalid {path}: expected int")
+            RequestSchema.bounds(value, field, path, "")
+            return value
+        if not isinstance(value, str):
+            raise ServiceError("invalid_request", f"Invalid {path}: expected string")
+        RequestSchema.bounds(len(value), field, path, "characters")
+        if field.pattern is not None and not field.pattern.match(value):
+            raise ServiceError("invalid_request", f"Invalid {path}: invalid string")
+        return value
+
+    @staticmethod
+    def bounds(size: int, field: Field, path: str, unit: str) -> None:
+        if field.low is not None and size < field.low:
+            raise ServiceError("invalid_request", f"Invalid {path}: too small, expected at least {field.low} {unit}".rstrip())
+        if field.high is not None and size > field.high:
+            raise ServiceError("invalid_request", f"Invalid {path}: too big, expected at most {field.high} {unit}".rstrip())
 
 
 class FakeState:
@@ -130,20 +262,30 @@ class FakeState:
         self.list_contract_error: list[str] = []
         self.map_upload: dict[str, dict[str, Any]] = {}
         self.map_object: dict[str, bytes] = {}
-        self.map_quote: dict[str, dict[str, Any]] = {}
         self.map_job: dict[str, dict[str, Any]] = {}
-        # idempotency key -> (digest of the canonical body, job id)
+        # idempotency key -> (digest of the canonical raw body, job id)
         self.map_idempotency: dict[str, tuple[str, str]] = {}
         self.list_job_order: list[str] = []
-        self.available_micro_usd: int | None = 100_000_000
+        # running jobs asked to stop, which end cancelled at their next step
+        self.set_cancel_requested: set[str] = set()
+        # the workspace's headroom: available balance (None without a limit) and the admission minimum
+        self.billing_mode = "prepaid"
+        self.billing_status = "billable_active"
+        self.available_micro_usd: int | None = 118_250_000
+        self.minimum_micro_usd = 100_000_000
+        self.max_queued = 10
         self.map_hardware = json.loads(json.dumps(HARDWARE))
         # files larger than this are granted as multipart uploads of part_bytes parts
-        self.multipart_threshold = 1 << 20
-        self.part_bytes = 4096
+        self.multipart_threshold = 64 * MIB
+        self.part_bytes = 32 * MIB
         # whether a long poll moves a job a step; False keeps it where it is
         self.do_advance = True
         # the job status a job stops at, before succeeding
         self.hold_status: str | None = None
+        # whether a job's first attempt is preempted while it runs, and retried
+        self.do_preempt_first_attempt = False
+        # whether admission refuses although the estimate said admissible, as when another job took the balance
+        self.do_refuse_admission = False
         # submissions to drop without an answer, to exercise the retry under one key
         self.drop_submissions = 0
 
@@ -151,19 +293,15 @@ class FakeState:
         regex = re.compile(pattern)
         return [request for request in self.list_request if request["method"] == method and regex.match(request["path"])]
 
+    def is_admissible(self) -> bool:
+        return self.billing_status == "billable_active" and (self.available_micro_usd is None or self.available_micro_usd >= self.minimum_micro_usd)
 
-class ServiceError(Exception):
-    """A refusal the fake answers with an error envelope."""
-
-    def __init__(self, status: int, code: str, message: str, retryable: bool = False) -> None:
-        super().__init__(message)
-        self.status = status
-        self.code = code
-        self.retryable = retryable
+    def held_micro_usd(self) -> int:
+        return sum(int(job["cost"]["held_micro_usd"] or 0) for job in self.map_job.values() if job["cost"]["charged_micro_usd"] is None and job["status"] not in SET_FINAL)
 
 
 class FakeService(http.server.BaseHTTPRequestHandler):
-    """A stand-in for the MarsTrace service's customer API and for R2's presigned URLs."""
+    """A stand-in for the routes of http/app.ts and for R2's presigned URLs."""
 
     state = FakeState()
 
@@ -178,10 +316,10 @@ class FakeService(http.server.BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
-    def _envelope(self, status: int, data: Any, error: dict[str, Any] | None) -> None:
-        request_id = "req_" + uuid.uuid4().hex[:12]
+    def _envelope(self, status: int, data: Any, error: dict[str, Any] | None, map_header: dict[str, str] | None = None) -> None:
+        request_id = str(uuid.uuid4())
         body = json.dumps({"request_id": request_id, "data": data, "error": error}).encode()
-        self._send(status, body, {"Content-Type": "application/json", "x-request-id": request_id})
+        self._send(status, body, {"Content-Type": "application/json", "x-request-id": request_id, **(map_header or {})})
 
     def _record(self) -> bytes:
         body = self.rfile.read(int(self.headers.get("Content-Length") or 0))
@@ -202,29 +340,34 @@ class FakeService(http.server.BaseHTTPRequestHandler):
 
     def _dispatch(self, handler: Any, *args: Any) -> None:
         try:
-            status, data = handler(*args)
+            if self.headers.get("Origin") is not None:
+                raise ServiceError("forbidden", "Browser requests are not accepted here; use the console")
+            data = handler(*args)
         except ServiceError as err:
-            if err.status == 400:
+            if err.code == "invalid_request":
                 FakeService.state.list_contract_error.append(f"{self.command} {self.path}: {err}")
-            self._envelope(err.status, None, {"code": err.code, "message": str(err), "retryable": err.retryable})
+            map_header = {} if err.retry_after_seconds is None else {"retry-after": str(err.retry_after_seconds)}
+            self._envelope(err.status, None, err.to_body(), map_header)
             return
-        self._envelope(status, data, None)
+        self._envelope(200, data, None)
 
     def _authorize(self) -> None:
         if self.headers.get("Authorization") != f"Bearer {API_KEY}":
-            raise ServiceError(401, "authentication_required", "Missing or unknown MarsTrace API key")
+            raise ServiceError("authentication_required", "A MarsTrace API key is required")
 
-    def _body(self, body: bytes, shape: dict[str, Any]) -> dict[str, Any]:
-        if self.headers.get("Content-Type") != "application/json":
-            raise ServiceError(400, "invalid_request", "the body must be JSON")
+    def _json(self, body: bytes, is_empty_allowed: bool = False) -> Any:
+        text = body.decode("utf-8")
+        if not text.strip():
+            if is_empty_allowed:
+                return {}
+            raise ServiceError("invalid_request", "Invalid body: a JSON object is required")
         try:
-            map_body = json.loads(body)
+            return json.loads(text)
         except ValueError as err:
-            raise ServiceError(400, "invalid_request", "the body is not JSON") from err
-        departure = RequestShape.departure(map_body, shape)
-        if departure:
-            raise ServiceError(400, "invalid_request", departure)
-        return map_body
+            raise ServiceError("invalid_request", "Invalid body: not JSON") from err
+
+    def _query(self) -> dict[str, str]:
+        return {name: list_value[-1] for name, list_value in urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query).items()}
 
     # presigned storage
 
@@ -266,250 +409,348 @@ class FakeService(http.server.BaseHTTPRequestHandler):
             return
         self._dispatch(self._post, path, body)
 
-    def _get(self, path: str) -> tuple[int, Any]:
+    def _get(self, path: str) -> Any:
+        if path == "/healthz":
+            return {"status": "ok", "release": "test"}
         self._authorize()
         state = FakeService.state
-        query = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
         if path == "/v1/hardware":
-            return 200, state.map_hardware
+            return state.map_hardware
         if path == "/v1/credit":
-            return 200, {
-                "billing_mode": "prepaid",
-                "billing_status": "billable_active",
+            return {
+                "billing_mode": state.billing_mode,
+                "billing_status": state.billing_status,
                 "available_micro_usd": None if state.available_micro_usd is None else str(state.available_micro_usd),
-                "reserved_micro_usd": str(sum(int(job["cost"]["reserved_micro_usd"] or 0) for job in state.map_job.values() if job["status"] not in SET_FINAL)),
+                "held_micro_usd": str(state.held_micro_usd()),
+                "minimum_micro_usd": str(state.minimum_micro_usd),
+                "admissible": state.is_admissible(),
                 "add_credit_url": ADD_CREDIT_URL,
             }
         if path == "/v1/jobs":
-            limit = int(query.get("limit", ["20"])[0])
-            if not 1 <= limit <= 100:
-                raise ServiceError(400, "invalid_request", "limit is 1 to 100")
-            start = int(query.get("cursor", ["0"])[0])
-            list_id = list(reversed(state.list_job_order))[start:start + limit]
-            return 200, {
-                "items": [state.map_job[job_id] for job_id in list_id],
-                "next_cursor": str(start + limit) if start + limit < len(state.list_job_order) else None,
+            parameters = RequestSchema.parse(self._query(), RequestSchema.LIST)
+            list_id = [job_id for job_id in reversed(state.list_job_order) if parameters.get("status") in (None, state.map_job[job_id]["status"])]
+            start = int(parameters.get("cursor", "0"))
+            limit = parameters["limit"]
+            return {
+                "items": [state.map_job[job_id] for job_id in list_id[start:start + limit]],
+                "next_cursor": str(start + limit) if start + limit < len(list_id) else None,
             }
         if match := re.match(r"^/v1/jobs/([^/]+)/wait$", path):
-            timeout_seconds = int(query.get("timeout_seconds", ["30"])[0])
-            if not 1 <= timeout_seconds <= 60:
-                raise ServiceError(400, "invalid_request", "timeout_seconds is 1 to 60")
+            RequestSchema.parse(self._query(), RequestSchema.WAIT)
             job = self._job(match.group(1))
             self._advance(job)
-            return 200, job
+            return job
         if match := re.match(r"^/v1/jobs/([^/]+)/result$", path):
             job = self._job(match.group(1))
             if job["status"] != "succeeded":
-                raise ServiceError(409, "result_unavailable", "The job has no result")
-            return 200, self._result(job)
+                raise ServiceError("result_unavailable", "This job has no result, or its result has expired")
+            return self._result(job)
         if match := re.match(r"^/v1/jobs/([^/]+)$", path):
-            return 200, self._job(match.group(1))
-        raise ServiceError(404, "not_found", "No such route")
+            return self._job(match.group(1))
+        raise ServiceError("not_found", "No such route")
 
     def _job(self, job_id: str) -> dict[str, Any]:
         job = FakeService.state.map_job.get(job_id)
         if job is None:
-            raise ServiceError(404, "not_found", "No such job for this account")
+            raise ServiceError("not_found", "No such job")
         return job
+
+    def _attempt(self, number: int) -> dict[str, Any]:
+        return {"number": number, "status": "starting", "failure": None, "error": None, "started_at": TIMESTAMP, "ended_at": None}
 
     def _advance(self, job: dict[str, Any]) -> None:
         state = FakeService.state
+        if job["job_id"] in state.set_cancel_requested:
+            FakeService._end_cancelled(job)
+            return
         if not state.do_advance or job["status"] in SET_FINAL or job["status"] == state.hold_status:
+            return
+        if job["status"] == "running" and state.do_preempt_first_attempt and len(job["attempts"]) == 1 and job["limits"]["max_attempts"] > 1:
+            job["attempts"][0].update(
+                status="failed", failure="supplier", ended_at=TIMESTAMP,
+                error={"code": "vm_preempted", "message": MAP_FAILURE_MESSAGE["vm_preempted"]},
+            )
+            job["attempts"].append(self._attempt(2))
+            job["status"] = "starting"
             return
         job["status"] = LIST_JOB_STEP[LIST_JOB_STEP.index(job["status"]) + 1]
         if job["status"] == "starting":
-            job["attempts"].append({"number": 1, "status": "running", "started_at": TIMESTAMP})
-        if job["status"] == "running":
-            job["progress"] = {"agent_turn": 14, "gpu_seconds": 312}
+            job["started_at"] = TIMESTAMP
+            job["attempts"].append(self._attempt(1))
+        if job["status"] in ("running", "finishing"):
+            job["attempts"][-1]["status"] = job["status"]
+            job["progress"] = {"agent_turn": 14, "gpu_seconds": 312, "usage_micro_usd": "6120000"}
         if job["status"] == "succeeded":
             with open(os.path.join(FIXTURE_DIRECTORY, "trace_sass_regions.json"), "rb") as trace_file:
                 trace = trace_file.read()
             state.map_object[job["job_id"]] = trace
             job["attempts"][-1].update(status="succeeded", ended_at=TIMESTAMP)
-            job["cost"] = {
-                "reserved_micro_usd": job["cost"]["reserved_micro_usd"],
-                "charged_micro_usd": "14128100",
-                "lines": [
-                    {"dimension": "service_job_fee", "quantity": 1, "amount": "500000"},
-                    {"dimension": "service_gpu_milliseconds", "quantity": 905000, "amount": "1086000"},
-                    {"dimension": "service_agent_output_tokens", "quantity": 38810, "amount": "12542100"},
-                ],
-            }
+            job["ended_at"] = TIMESTAMP
+            list_line = [
+                {"dimension": "service_job_fee", "quantity": 1, "amount_micro_usd": "500000"},
+                {"dimension": "service_gpu_milliseconds", "quantity": 905000, "amount_micro_usd": "1086000"},
+                *(
+                    {"dimension": dimension, "quantity": 0, "amount_micro_usd": "0"}
+                    for dimension in ("service_agent_input_tokens", "service_agent_cache_read_tokens", "service_agent_cache_write_5m_tokens", "service_agent_cache_write_1h_tokens")
+                ),
+                {"dimension": "service_agent_output_tokens", "quantity": 38810, "amount_micro_usd": "3492900"},
+            ]
+            if len(job["attempts"]) > 1:
+                list_line[1] = {"dimension": "service_gpu_milliseconds", "quantity": 1217000, "amount_micro_usd": "1460400"}
+            job["cost"]["charged_micro_usd"] = str(sum(int(line["amount_micro_usd"]) for line in list_line))
+            job["cost"]["lines"] = list_line
+            job["result"] = self._result_summary(job)
+            if state.available_micro_usd is not None:
+                state.available_micro_usd -= int(job["cost"]["charged_micro_usd"])
+
+    def _result_summary(self, job: dict[str, Any]) -> dict[str, Any]:
+        data = FakeService.state.map_object[job["job_id"]]
+        return {
+            "name": "marstrace.json",
+            "sha256": hashlib.sha256(data).hexdigest(),
+            "size_bytes": len(data),
+            "download_url": f"{FakeService.state.origin}/r2/results/{job['job_id']}",
+            "expires_at": TIMESTAMP,
+        }
 
     def _result(self, job: dict[str, Any]) -> dict[str, Any]:
-        data = FakeService.state.map_object[job["job_id"]]
+        summary = self._result_summary(job)
         return {
             "manifest": {
                 "quality": "usable",
                 "reason_codes": [],
-                "file": {"name": "marstrace.json", "size_bytes": len(data), "sha256": hashlib.sha256(data).hexdigest()},
+                "file": {"name": "marstrace.json", "size_bytes": summary["size_bytes"], "sha256": summary["sha256"]},
                 "device": {"gpu_name": "H200", "compute_capability": "90a", "cuda_driver_version": "575.57.08", "cuda_toolkit_version": "12.9"},
                 "clock_type": "gpu",
                 "granularity": "warp",
             },
-            "download_url": f"{FakeService.state.origin}/r2/results/{job['job_id']}",
+            "download_url": summary["download_url"],
             "download_expires_at": TIMESTAMP,
             "result_expires_at": TIMESTAMP,
         }
 
-    def _post(self, path: str, body: bytes) -> tuple[int, Any]:
+    def _post(self, path: str, body: bytes) -> Any:
         self._authorize()
         if path == "/v1/uploads":
-            return self._grant(self._body(body, RequestShape.UPLOAD))
+            return self._grant(RequestSchema.parse(self._json(body), RequestSchema.UPLOAD))
         if match := re.match(r"^/v1/uploads/([^/]+)/complete$", path):
-            return self._complete(match.group(1), self._body(body, RequestShape.COMPLETE))
+            return self._complete(match.group(1), RequestSchema.parse(self._json(body), RequestSchema.COMPLETE))
         if path == "/v1/quotes":
-            return 200, self._quote(self._body(body, RequestShape.JOB))
+            return self._quote(RequestSchema.parse(self._json(body), RequestSchema.JOB))
         if path == "/v1/jobs":
-            return self._submit(self._body(body, RequestShape.SUBMIT), body)
+            return self._submit(self._json(body))
         if match := re.match(r"^/v1/jobs/([^/]+)/cancel$", path):
-            if self._body(body, {}) != {}:
-                raise ServiceError(400, "invalid_request", "cancel takes no fields")
-            job = self._job(match.group(1))
-            if job["status"] in SET_FINAL:
-                raise ServiceError(409, "job_not_cancellable", "The job has ended")
-            job["status"] = "cancelled"
-            return 200, job
-        raise ServiceError(404, "not_found", "No such route")
+            RequestSchema.parse(self._json(body, is_empty_allowed=True), RequestSchema.CANCEL)
+            return self._cancel(self._job(match.group(1)))
+        raise ServiceError("not_found", "No such route")
 
-    def _grant(self, map_body: dict[str, Any]) -> tuple[int, Any]:
+    def _grant(self, request: dict[str, Any]) -> dict[str, Any]:
         state = FakeService.state
-        if map_body["role"] not in SET_ROLE:
-            raise ServiceError(400, "invalid_request", f"role must be one of {', '.join(sorted(SET_ROLE))}")
-        if not re.match(r"^[0-9a-f]{64}$", map_body["sha256"]):
-            raise ServiceError(400, "invalid_request", "sha256 must be 64 lowercase hex characters")
+        max_bytes = MAP_ROLE_MAX_BYTES[request["role"]]
+        if request["size_bytes"] > max_bytes:
+            raise ServiceError("limit_exceeded", f"A {request['role']} file may be at most {max_bytes} bytes")
         upload_id = new_id("upl_")
-        upload = {**map_body, "status": "pending", "data": b"", "parts": {}, "job_id": None}
+        upload = {**request, "upload_id": upload_id, "status": "granted", "data": b"", "parts": {}, "job_id": None}
         state.map_upload[upload_id] = upload
         grant: dict[str, Any] = {"upload_id": upload_id, "expires_at": TIMESTAMP}
-        if map_body["size_bytes"] > state.multipart_threshold:
+        if request["size_bytes"] > state.multipart_threshold:
             grant["parts"] = [
                 {
                     "part_number": number + 1,
                     "offset": offset,
-                    "size_bytes": min(state.part_bytes, map_body["size_bytes"] - offset),
+                    "size_bytes": min(state.part_bytes, request["size_bytes"] - offset),
                     "upload_url": f"{state.origin}/r2/{upload_id}/part/{number + 1}",
                 }
-                for number, offset in enumerate(range(0, map_body["size_bytes"], state.part_bytes))
+                for number, offset in enumerate(range(0, request["size_bytes"], state.part_bytes))
             ]
-            grant["headers"] = {"content-type": map_body["content_type"]}
         else:
             grant["upload_url"] = f"{state.origin}/r2/{upload_id}"
             grant["headers"] = {
-                "x-amz-checksum-sha256": base64.b64encode(bytes.fromhex(map_body["sha256"])).decode(),
-                "content-type": map_body["content_type"],
+                "x-amz-checksum-sha256": base64.b64encode(bytes.fromhex(request["sha256"])).decode(),
+                "content-type": request["content_type"],
             }
         upload["multipart"] = "parts" in grant
-        return 200, grant
+        return grant
 
-    def _complete(self, upload_id: str, map_body: dict[str, Any]) -> tuple[int, Any]:
+    @staticmethod
+    def _upload_view(upload: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "upload_id": upload["upload_id"],
+            "role": upload["role"],
+            "name": upload["name"],
+            "size_bytes": upload["size_bytes"],
+            "sha256": upload["sha256"],
+            "content_type": upload["content_type"],
+            "status": upload["status"],
+            "expires_at": TIMESTAMP,
+        }
+
+    def _complete(self, upload_id: str, request: dict[str, Any]) -> dict[str, Any]:
         upload = FakeService.state.map_upload.get(upload_id)
         if upload is None:
-            raise ServiceError(404, "not_found", "No such upload for this account")
+            raise ServiceError("not_found", "No such upload")
+        if upload["sha256"] != request["sha256"] or upload["size_bytes"] != request["size_bytes"]:
+            raise ServiceError("invalid_request", "Invalid sha256 or size_bytes: they differ from the upload grant")
+        if upload["status"] != "granted":
+            return FakeService._upload_view(upload)
         if upload["multipart"]:
-            list_receipt = map_body.get("parts", [])
-            if list_receipt != [{"part_number": number, "etag": f'"etag-{number}"'} for number in sorted(upload["parts"])]:
-                raise ServiceError(400, "invalid_request", "parts must list every part's number and ETag in order")
+            expected_parts = -(-upload["size_bytes"] // FakeService.state.part_bytes)
+            list_part = sorted(request.get("parts") or [], key=lambda part: part["part_number"])
+            if [part["part_number"] for part in list_part] != list(range(1, expected_parts + 1)) or any(
+                part["etag"] != f'"etag-{part["part_number"]}"' for part in list_part
+            ):
+                raise ServiceError("invalid_request", f"Invalid parts: expected parts 1 to {expected_parts} with their ETags")
             upload["data"] = b"".join(upload["parts"][number] for number in sorted(upload["parts"]))
-        elif "parts" in map_body:
-            raise ServiceError(400, "invalid_request", "parts is for a multipart upload")
-        data = upload["data"]
-        if len(data) != map_body["size_bytes"] or len(data) != upload["size_bytes"] or map_body["sha256"] != upload["sha256"]:
-            raise ServiceError(400, "invalid_request", "size_bytes or sha256 differs from the stored object")
+        if not upload["data"]:
+            raise ServiceError("upload_not_ready", "The file has not been uploaded yet")
+        if len(upload["data"]) != upload["size_bytes"]:
+            raise ServiceError("upload_not_ready", "The uploaded file's size differs from size_bytes")
         upload["status"] = "verified"
-        return 200, {"upload_id": upload_id, "status": "verified", "role": upload["role"], "sha256": upload["sha256"], "size_bytes": upload["size_bytes"]}
+        return FakeService._upload_view(upload)
 
-    def _quote(self, map_request: dict[str, Any]) -> dict[str, Any]:
+    def _hardware(self, request: dict[str, Any]) -> dict[str, Any]:
+        entry = next((entry for entry in FakeService.state.map_hardware["hardware"] if entry["id"] == request["hardware"]), None)
+        if entry is None:
+            raise ServiceError("hardware_unavailable", f"Unknown hardware {request['hardware']}; see GET /v1/hardware")
+        if entry["rates"] is None:
+            raise ServiceError("hardware_unavailable", "This hardware has no published price now")
+        return entry
+
+    def _quote(self, request: dict[str, Any]) -> dict[str, Any]:
         state = FakeService.state
-        entry = next((entry for entry in state.map_hardware["hardware"] if entry["id"] == map_request["hardware"]), None)
-        if entry is None or not entry["available"]:
-            raise ServiceError(422, "hardware_unavailable", f"Hardware {map_request['hardware']} is not offered now")
-        self._check_inputs(map_request["inputs"])
-        map_agent = dict(AGENT_DEFAULTS, **map_request.get("agent", {}))
+        entry = self._hardware(request)
         rates = entry["rates"]
+        map_agent = request["agent"]
+        attempts = request["limits"]["max_attempts"]
         gpu_milliseconds = (map_agent["max_wall_seconds"] + FINALIZE_MARGIN_SECONDS) * 1000
-        gpu_micro = gpu_milliseconds * int(rates["gpu_micro_usd_per_hour"]) // MILLISECONDS_PER_HOUR
-        input_rate = max(int(rates[key]) for key in rates if key.startswith("agent_") and key != "agent_output_micro_usd_per_million")
-        tokens_micro = (map_agent["max_input_tokens"] * input_rate + map_agent["max_output_tokens"] * int(rates["agent_output_micro_usd_per_million"])) // 1_000_000
-        fee = int(rates["job_fee_micro_usd"])
-        max_cost = int(map_request["limits"]["max_cost_micro_usd"])
-        budget = max_cost - fee - gpu_micro
-        quote_id = new_id("quo_")
+        gpu_per_attempt = ceil_rate(gpu_milliseconds, int(rates["gpu_micro_usd_per_hour"]), MILLISECONDS_PER_HOUR)
+        input_per_attempt = max(ceil_rate(map_agent["max_input_tokens"], int(rates[key]), MILLION) for key in LIST_INPUT_RATE)
+        tokens_per_attempt = input_per_attempt + ceil_rate(map_agent["max_output_tokens"], int(rates["agent_output_micro_usd_per_million"]), MILLION)
+        fee = int(rates.get("job_fee_micro_usd", "0"))
+        map_cost = {
+            "gpu_per_attempt": str(gpu_per_attempt),
+            "agent_tokens_per_attempt": str(tokens_per_attempt),
+            "total": str(fee + attempts * (gpu_per_attempt + tokens_per_attempt)),
+        }
+        if "job_fee_micro_usd" in rates:
+            map_cost = {"job_fee": str(fee), **map_cost}
         quote = {
-            "quote_id": quote_id,
-            "expires_at": TIMESTAMP,
             "service_model": entry["service_model"],
             "rate_card_version_id": "rcv_1",
             "rates": rates,
-            "ceilings": {
-                "job_fee_micro_usd": str(fee),
+            "bounds_per_attempt": {
                 "gpu_milliseconds": gpu_milliseconds,
-                "gpu_micro_usd": str(gpu_micro),
-                "agent_tokens_micro_usd": str(tokens_micro),
+                "agent_input_tokens": map_agent["max_input_tokens"],
+                "agent_output_tokens": map_agent["max_output_tokens"],
             },
-            "max_cost_micro_usd": str(max_cost),
-            "agent_budget_micro_usd": str(budget),
-            "admissible": budget >= AGENT_BUDGET_MIN,
+            "cost_at_bounds_micro_usd": map_cost,
+            "minimum_micro_usd": str(state.minimum_micro_usd),
+            "available_micro_usd": None if state.available_micro_usd is None else str(state.available_micro_usd),
+            "admissible": state.is_admissible(),
         }
-        if budget < AGENT_BUDGET_MIN:
-            quote["message"] = "max_cost_micro_usd leaves less than $1 of agent budget after the fee and the GPU ceiling"
-        state.map_quote[quote_id] = quote
+        if not quote["admissible"]:
+            quote["message"] = (
+                f"A job starts only while the workspace's available balance is at least {state.minimum_micro_usd} micro-USD; add credit"
+            )
         return quote
 
-    def _check_inputs(self, map_inputs: dict[str, Any], job_id: str | None = None) -> None:
+    def _claim_uploads(self, inputs: dict[str, Any], job_id: str) -> None:
         state = FakeService.state
-        for key, role in (("cubins", "cubin"), ("source_archive", "source_archive"), ("launch_manifest", "launch_manifest"), ("tensors", "tensor"), ("files", "file")):
-            value = map_inputs.get(key)
-            list_id = value if isinstance(value, list) else [] if value is None else [value]
-            for upload_id in list_id:
-                upload = state.map_upload.get(upload_id)
-                if upload is None or upload["status"] != "verified" or upload["role"] != role or upload["job_id"] not in (None, job_id):
-                    raise ServiceError(409, "upload_not_ready", f"inputs.{key}: {upload_id} is not a verified, unused {role} upload")
-        if not 1 <= len(map_inputs["cubins"]) <= 8:
-            raise ServiceError(413, "limit_exceeded", "inputs.cubins holds 1 to 8 cubins")
+        list_slot = [
+            *((upload_id, "cubin", f"inputs.cubins.{index}") for index, upload_id in enumerate(inputs["cubins"])),
+            *(((inputs["source_archive"], "source_archive", "inputs.source_archive"),) if "source_archive" in inputs else ()),
+            *(((inputs["launch_manifest"], "launch_manifest", "inputs.launch_manifest"),) if "launch_manifest" in inputs else ()),
+            *((upload_id, "tensor", f"inputs.tensors.{index}") for index, upload_id in enumerate(inputs["tensors"])),
+            *((upload_id, "file", f"inputs.files.{index}") for index, upload_id in enumerate(inputs["files"])),
+        ]
+        set_seen: set[str] = set()
+        total_bytes = 0
+        for upload_id, role, field in list_slot:
+            if upload_id in set_seen:
+                raise ServiceError("invalid_request", f"Invalid {field}: an upload is named twice")
+            set_seen.add(upload_id)
+            upload = state.map_upload.get(upload_id)
+            if upload is None:
+                raise ServiceError("not_found", f"No such upload in {field}")
+            if upload["status"] != "verified" or upload["job_id"] is not None:
+                raise ServiceError("upload_not_ready", f"The upload in {field} is not verified or belongs to another job")
+            if upload["role"] != role:
+                raise ServiceError("invalid_request", f"Invalid {field}: the upload's role is {upload['role']}")
+            total_bytes += upload["size_bytes"]
+        if total_bytes > MAX_TOTAL_BYTES:
+            raise ServiceError("limit_exceeded", f"All inputs of a job may be at most {MAX_TOTAL_BYTES} bytes")
+        for upload_id in set_seen:
+            state.map_upload[upload_id].update(status="used", job_id=job_id)
 
-    def _submit(self, map_body: dict[str, Any], body: bytes) -> tuple[int, Any]:
+    def _submit(self, raw_body: Any) -> dict[str, Any]:
         state = FakeService.state
-        key = self.headers.get("Idempotency-Key") or ""
-        if not IDEMPOTENCY_KEY_PATTERN.match(key):
-            raise ServiceError(400, "invalid_request", "Idempotency-Key is required: 1 to 255 characters of [A-Za-z0-9._:-]")
-        digest = hashlib.sha256(json.dumps(map_body, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        key = self.headers.get("Idempotency-Key")
+        if key is None or not IDEMPOTENCY_KEY_PATTERN.match(key):
+            raise ServiceError("invalid_request", "Invalid Idempotency-Key header: 1 to 255 characters of A-Z a-z 0-9 . _ : -")
+        request = RequestSchema.parse(raw_body, RequestSchema.JOB)
+        digest = hashlib.sha256(json.dumps(raw_body, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()).hexdigest()
         if key in state.map_idempotency:
             known_digest, job_id = state.map_idempotency[key]
             if known_digest != digest:
-                raise ServiceError(409, "idempotency_conflict", "The Idempotency-Key was used with a different body")
-            return 200, state.map_job[job_id]
-        quote_id = map_body.get("quote_id")
-        request = {name: value for name, value in map_body.items() if name != "quote_id"}
-        if quote_id is not None and quote_id not in state.map_quote:
-            raise ServiceError(404, "not_found", "No such quote for this account")
-        quote = self._quote(request)
-        if not quote["admissible"]:
-            raise ServiceError(400, "invalid_request", quote["message"])
+                raise ServiceError("idempotency_conflict", "This Idempotency-Key was used with a different request")
+            return state.map_job[job_id]
+        entry = self._hardware(request)
+        if sum(1 for job in state.map_job.values() if job["status"] == "queued") >= state.max_queued:
+            raise ServiceError("too_many_jobs", f"The workspace has {state.max_queued} queued jobs; wait for one to start", retry_after_seconds=30)
         job_id = new_id("job_")
-        self._check_inputs(request["inputs"])
-        reservation = min(int(request["limits"]["max_cost_micro_usd"]), int(quote["ceilings"]["job_fee_micro_usd"]) + int(quote["ceilings"]["gpu_micro_usd"]) + int(quote["ceilings"]["agent_tokens_micro_usd"]))
-        if state.available_micro_usd is not None and reservation > state.available_micro_usd:
-            raise ServiceError(402, "insufficient_credit", "Prepaid credit does not cover the job's reservation; add credit in the console")
-        for value in request["inputs"].values():
-            for upload_id in value if isinstance(value, list) else [value]:
-                state.map_upload[upload_id]["job_id"] = job_id
+        self._claim_uploads(request["inputs"], job_id)
+        if state.do_refuse_admission or not state.is_admissible():
+            for upload in state.map_upload.values():
+                if upload["job_id"] == job_id:
+                    upload.update(status="verified", job_id=None)
+            if state.billing_status != "billable_active":
+                raise ServiceError("billing_suspended", "Billing is not active for this workspace", details={"add_credit_url": ADD_CREDIT_URL})
+            code = "insufficient_credit" if state.billing_mode == "prepaid" else "spending_limit_exceeded"
+            message = (
+                "The workspace's available credit is below the minimum balance a job needs; add credit"
+                if code == "insufficient_credit"
+                else "The workspace's remaining spending limit is below the minimum balance a job needs"
+            )
+            raise ServiceError(code, message, details={"add_credit_url": ADD_CREDIT_URL})
+        if state.available_micro_usd is not None:
+            state.available_micro_usd -= state.minimum_micro_usd
         state.map_job[job_id] = {
             "job_id": job_id,
+            "account_id": ACCOUNT_ID,
             "status": "queued",
             "created_at": TIMESTAMP,
-            "hardware": request["hardware"],
-            "agent": dict(AGENT_DEFAULTS, **request.get("agent", {})),
-            "limits": dict({"max_attempts": 2}, **request["limits"]),
+            "started_at": None,
+            "ended_at": None,
+            "hardware": entry["id"],
+            "agent": request["agent"],
+            "limits": request["limits"],
             "progress": None,
             "attempts": [],
-            "cost": {"reserved_micro_usd": str(reservation), "charged_micro_usd": None, "lines": []},
+            "cost": {"held_micro_usd": str(state.minimum_micro_usd), "charged_micro_usd": None, "lines": []},
             "result": None,
             "error": None,
         }
         state.map_idempotency[key] = (digest, job_id)
         state.list_job_order.append(job_id)
-        return 200, state.map_job[job_id]
+        return state.map_job[job_id]
+
+    def _cancel(self, job: dict[str, Any]) -> dict[str, Any]:
+        if job["status"] in SET_FINAL:
+            raise ServiceError("job_not_cancellable", "The job has already ended")
+        if job["status"] != "queued":
+            FakeService.state.set_cancel_requested.add(job["job_id"])
+            return job
+        FakeService._end_cancelled(job)
+        return job
+
+    @staticmethod
+    def _end_cancelled(job: dict[str, Any]) -> None:
+        FakeService.state.set_cancel_requested.discard(job["job_id"])
+        job["status"] = "cancelled"
+        job["ended_at"] = TIMESTAMP
+        job["error"] = {"code": "cancelled", "message": MAP_FAILURE_MESSAGE["cancelled"]}
+        if job["attempts"]:
+            job["attempts"][-1].update(status="cancelled", ended_at=TIMESTAMP)
 
 
 class FakeServer:

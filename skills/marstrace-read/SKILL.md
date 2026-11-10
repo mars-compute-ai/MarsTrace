@@ -55,8 +55,8 @@ paired-region tables; read those from `--stats`.
 
 Read `quality` and `reason_codes` in `result-manifest.json` before any number of the
 report. A job that ended without a trace is `unusable`: tell the user, and look at the
-intent, the workspace and the budget before submitting again. `clock_type` and
-`granularity` say what a tick is (`gpu`, `sm` or `anchor`) and whether a row is a thread
+intent, the workspace and the caps of `[agent]` before submitting again; the job was
+charged its usage all the same. `clock_type` and `granularity` say what a tick is (`gpu`, `sm` or `anchor`) and whether a row is a thread
 or a warp.
 
 `quality` is `usable`, `partial` or `unusable`. `reason_codes` says why it is not

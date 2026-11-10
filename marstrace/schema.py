@@ -21,11 +21,11 @@ class ResponseSchema:
     }
     MONEY = re.compile(r"^(0|[1-9][0-9]*)$")
     SIGNED_MONEY = re.compile(r"^(0|-?[1-9][0-9]*)$")
+    TIME = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$")
     SHA256 = re.compile(r"^[0-9a-f]{64}$")
     # prefixed ids: the prefix, then 26 lowercase Crockford base32 characters
     ID_BODY = "[0-9abcdefghjkmnpqrstvwxyz]{26}"
     UPLOAD_ID = re.compile(rf"^upl_{ID_BODY}$")
-    QUOTE_ID = re.compile(rf"^quo_{ID_BODY}$")
     JOB_ID = re.compile(rf"^job_{ID_BODY}$")
     SET_JOB_STATUS = {
         "queued",
@@ -35,6 +35,27 @@ class ResponseSchema:
         "succeeded",
         "failed",
         "cancelled",
+    }
+    SET_ATTEMPT_STATUS = {
+        "starting",
+        "running",
+        "finishing",
+        "succeeded",
+        "failed",
+        "cancelled",
+    }
+    SET_FAILURE_CLASS = {
+        "supplier",
+        "platform",
+        "workload",
+        "cancel",
+    }
+    SET_UPLOAD_ROLE = {
+        "cubin",
+        "source_archive",
+        "launch_manifest",
+        "tensor",
+        "file",
     }
     SET_QUALITY = {
         "usable",
@@ -54,6 +75,11 @@ class ResponseSchema:
         "code": str,
         "message": str,
         "retryable": bool,
+        "details?": {str: str},
+    }
+    CODE_MESSAGE = {
+        "code": str,
+        "message": str,
     }
     ENVELOPE = {
         "request_id": str,
@@ -62,7 +88,7 @@ class ResponseSchema:
     }
     RATES = {
         "gpu_micro_usd_per_hour": MONEY,
-        "job_fee_micro_usd": MONEY,
+        "job_fee_micro_usd?": MONEY,
         "agent_input_micro_usd_per_million": MONEY,
         "agent_cache_read_micro_usd_per_million": MONEY,
         "agent_cache_write_5m_micro_usd_per_million": MONEY,
@@ -83,7 +109,7 @@ class ResponseSchema:
                 "architecture": str,
                 "available": bool,
                 "service_model": str,
-                "rates": RATES,
+                "rates": (RATES, None),
             }
         ],
         "agent": {
@@ -95,13 +121,15 @@ class ResponseSchema:
     CREDIT = {
         "billing_mode": str,
         "billing_status": str,
-        "available_micro_usd": (MONEY, None),
-        "reserved_micro_usd": MONEY,
+        "available_micro_usd": (SIGNED_MONEY, None),
+        "held_micro_usd": MONEY,
+        "minimum_micro_usd": MONEY,
+        "admissible": bool,
         "add_credit_url": str,
     }
     UPLOAD_GRANT = {
         "upload_id": UPLOAD_ID,
-        "expires_at": str,
+        "expires_at": TIME,
         "upload_url?": str,
         "parts?": [
             {
@@ -115,58 +143,84 @@ class ResponseSchema:
     }
     UPLOAD = {
         "upload_id": UPLOAD_ID,
+        "role": SET_UPLOAD_ROLE,
+        "name": str,
+        "size_bytes": int,
+        "sha256": SHA256,
+        "content_type": str,
         "status": {"verified"},
+        "expires_at": TIME,
     }
     QUOTE = {
-        "quote_id": QUOTE_ID,
-        "expires_at": str,
         "service_model": str,
         "rate_card_version_id": str,
         "rates": RATES,
-        "ceilings": {
-            "job_fee_micro_usd": MONEY,
+        "bounds_per_attempt": {
             "gpu_milliseconds": int,
-            "gpu_micro_usd": MONEY,
-            "agent_tokens_micro_usd": MONEY,
+            "agent_input_tokens": int,
+            "agent_output_tokens": int,
         },
-        "max_cost_micro_usd": MONEY,
-        "agent_budget_micro_usd": SIGNED_MONEY,
+        "cost_at_bounds_micro_usd": {
+            "job_fee?": MONEY,
+            "gpu_per_attempt": MONEY,
+            "agent_tokens_per_attempt": MONEY,
+            "total": MONEY,
+        },
+        "minimum_micro_usd": MONEY,
+        "available_micro_usd": (SIGNED_MONEY, None),
         "admissible": bool,
-        "message?": (str, None),
+        "message?": str,
     }
     JOB = {
         "job_id": JOB_ID,
+        "account_id": str,
         "status": SET_JOB_STATUS,
-        "created_at": str,
+        "created_at": TIME,
+        "started_at": (TIME, None),
+        "ended_at": (TIME, None),
         "hardware": str,
-        "agent": dict,
-        "limits": dict,
-        "progress?": (dict, None),
+        "agent": AGENT_LIMITS,
+        "limits": {"max_attempts": int},
+        "progress": (
+            {
+                "agent_turn": int,
+                "gpu_seconds": int,
+                "usage_micro_usd": MONEY,
+            },
+            None,
+        ),
         "attempts": [
             {
                 "number": int,
-                "status": str,
+                "status": SET_ATTEMPT_STATUS,
+                "failure": (SET_FAILURE_CLASS, None),
+                "error": (CODE_MESSAGE, None),
+                "started_at": TIME,
+                "ended_at": (TIME, None),
             }
         ],
         "cost": {
-            "reserved_micro_usd": (MONEY, None),
+            "held_micro_usd": (MONEY, None),
             "charged_micro_usd": (MONEY, None),
             "lines": [
                 {
                     "dimension": str,
                     "quantity": int,
-                    "amount": MONEY,
+                    "amount_micro_usd": MONEY,
                 }
             ],
         },
-        "result": (dict, None),
-        "error": (
+        "result": (
             {
-                "code": str,
-                "message": str,
+                "name": str,
+                "sha256": SHA256,
+                "size_bytes": int,
+                "download_url": str,
+                "expires_at": TIME,
             },
             None,
         ),
+        "error": (CODE_MESSAGE, None),
     }
     JOB_PAGE = {
         "items": [JOB],
@@ -186,8 +240,8 @@ class ResponseSchema:
             "granularity": SET_GRANULARITY,
         },
         "download_url": str,
-        "download_expires_at": str,
-        "result_expires_at": str,
+        "download_expires_at": TIME,
+        "result_expires_at": TIME,
     }
 
     @staticmethod

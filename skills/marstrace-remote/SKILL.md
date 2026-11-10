@@ -1,6 +1,6 @@
 ---
 name: marstrace-remote
-description: Trace the timeline inside one CUDA kernel on an H200, B200 or B300 with MarsTrace, without a local GPU. Gather the kernel's cubins (from nvcc, Triton, torch.compile, TileLang or CuTeDSL output), and optionally its source, a launch description, input data and a driver script, into a workspace that an agent on the GPU host traces within a budget you set. Then estimate the cost, submit, fetch marstrace.json and read it. Works through the `marstrace` CLI or its stdio MCP server (`marstrace mcp`). Use when the user wants per-phase durations, pipeline bubbles or warp-role scheduling inside a kernel.
+description: Trace the timeline inside one CUDA kernel on an H200, B200 or B300 with MarsTrace, without a local GPU. Gather the kernel's cubins (from nvcc, Triton, torch.compile, TileLang or CuTeDSL output), and optionally its source, a launch description, input data and a driver script, into a workspace that an agent on the GPU host traces within the caps you set. Then estimate the cost, submit, fetch marstrace.json and read it. A job starts once the workspace's balance reaches a minimum and is charged its actual usage, failed attempts included. Works through the `marstrace` CLI or its stdio MCP server (`marstrace mcp`). Use when the user wants per-phase durations, pipeline bubbles or warp-role scheduling inside a kernel.
 ---
 
 # Tracing a kernel with MarsTrace
@@ -8,10 +8,10 @@ description: Trace the timeline inside one CUDA kernel on an H200, B200 or B300 
 MarsTrace records when chosen parts of a compiled kernel execute. A job hands a workspace
 to an agent on the GPU host: the cubins, and optionally the source tree, a launch manifest,
 tensors and a driver script. The agent reads them, reproduces the launch, traces the
-kernel within the budget you set, and returns one `marstrace.json` that `marstrace show`
+kernel within the caps you set, and returns one `marstrace.json` that `marstrace show`
 reads in the terminal (skill `marstrace-read`).
 
-The flow: **settle the request, find the cubin, gather the workspace, set the budget,
+The flow: **settle the request, find the cubin, gather the workspace, set the caps,
 estimate, submit, fetch, show.**
 
 ## 1. Check the setup
@@ -20,7 +20,7 @@ estimate, submit, fetch, show.**
 pip install git+https://github.com/mars-compute-ai/mars-trace
 echo "${MARSTRACE_API_KEY:?create one at console.marscompute.ai, MarsTrace keys: mt_live_...}"
 marstrace hardware      # hardware ids, GPU, architecture, rates, agent model and limits
-marstrace credit        # available credit and the page to add more
+marstrace credit        # available balance, the minimum a job needs to start, the page to add credit
 ```
 
 Every command has an MCP tool of the server `marstrace` (`marstrace mcp`, registered by
@@ -90,9 +90,8 @@ max_input_tokens = 20000000       # 1 to 50,000,000, cache reads and writes incl
 max_output_tokens = 200000        # 1 to 1,000,000
 max_wall_seconds = 2400           # 60 to 2580: how long the agent works
 
-[limits]
-max_cost_usd = 40.0               # required: the most the job may cost
-max_attempts = 2                  # optional, 1 to 3
+[limits]                          # optional
+max_attempts = 2                  # 1 to 3, 2 when absent: how often a failed attempt is retried
 ```
 
 - **Give the agent a way to run the launch.** A driver script with the shapes the user
@@ -105,45 +104,65 @@ max_attempts = 2                  # optional, 1 to 3
   tree and the files. Leave out what the user does not want to share: secrets, data
   beyond the launch, unrelated code. `.git` is never uploaded. All inputs of a job hold
   at most 256 MiB together.
-- **Size the budget.** The agent's turns and tokens cap its session; `max_wall_seconds`
-  bounds it in time, and the GPU is held for at most `max_wall_seconds + 120` seconds.
-  `max_cost_usd` must cover the job fee, that GPU ceiling and at least $1 of agent tokens;
-  what is left after the fee and the GPU ceiling is the agent's token budget.
+- **Size the caps.** The agent's turns and tokens cap its session; `max_wall_seconds`
+  bounds it in time, and the GPU runs for at most `max_wall_seconds + 120` seconds per
+  attempt. These caps and `max_attempts` are the only bounds on what a job costs: there is
+  no dollar cap. The job is charged what it actually uses, usually far less than the caps.
 
 ## 5. Estimate, then submit
 
+How MarsTrace charges, which the user must hear before the first submission:
+
+- **A job starts only while the workspace's available balance is at least the minimum**
+  that `marstrace credit` and the estimate show (set by MarsCompute, e.g. $100). While it
+  runs, the job holds that minimum, so a balance of $150 with a $100 minimum runs one job
+  at a time. The minimum is not the price.
+- **The whole job is charged its actual usage**: the GPU time and agent tokens of every
+  attempt, retried and failed attempts included, plus the job fee once when the rates have
+  one. A failure on MarsCompute's side is charged too, and MarsCompute corrects a charge
+  for its own fault with a credit adjustment; a job whose attempts never started costs
+  nothing. A cancelled job pays for what it used up to the stop.
+- **Usage is charged in full even past the available balance**; the balance can go
+  negative. The cost at the bounds is the most the job can cost.
+
 ```bash
-marstrace estimate my-job         # uploads, checks, quotes: cost cap, job fee, GPU ceiling, agent budget, token rates
+marstrace estimate my-job         # uploads, checks, prices: rates, bounds per attempt, cost at the bounds, balance and minimum
 ```
 
-**Tell the user the cost cap, the job fee, the GPU rate and the token rates, and get a yes
-before the first submission of a session.** After that, keep them informed of the total.
-A quote marked refused leaves the agent less than $1; raise `max_cost_usd` or lower
-`max_wall_seconds`.
+**Tell the user the rates, the cost at the bounds (`at most`), the minimum and the available
+balance, say that the job is charged its actual usage over every attempt, failed ones
+included, and get a yes before the first submission of a session.** After that, keep them
+informed of what each job was charged. An estimate marked refused means the available
+balance is below the minimum or billing is not active: give the user the page where credit
+is added.
 
 ```bash
-marstrace submit my-job --wait    # quotes again, asks, submits, waits, fetches
-marstrace submit my-job --yes     # when the user already agreed to the cap
+marstrace submit my-job --wait    # prices again, asks, submits, waits, fetches
+marstrace submit my-job --yes     # when the user already agreed to the cost
 ```
 
-With MCP: `marstrace_estimate`, then `marstrace_submit` with `accept_max_cost_usd` set to
-the cap the user agreed to (it refuses a higher quote), then `marstrace_wait` until
-`status` is `succeeded`, `failed` or `cancelled`. Pass an `idempotency_key` (CLI:
-`--idempotency-key`); when a submission's answer is lost, submit the same directory again
-with the same key: the client resends the recorded request, and the service answers with
-the job it already started.
+With MCP: `marstrace_estimate`, then `marstrace_submit` with `accept_cost_at_bounds_usd`
+set to the cost at the bounds the user agreed to (it refuses a higher one, since prices are
+read again at submission), then `marstrace_wait` until `status` is `succeeded`, `failed` or
+`cancelled`. Pass an `idempotency_key` (CLI: `--idempotency-key`); when a submission's
+answer is lost, submit the same directory again with the same key: the client resends the
+recorded request, and the service answers with the job it already started.
 
-- **Keep the cap near what the task needs** with `[limits] max_cost_usd` and the budget of
-  `[agent]`, so the reservation on the user's credit stays small.
-- **`insufficient_credit`, `spending_limit_exceeded` and `billing_suspended`** name the
-  console page where credit is added; give it to the user. Do not retry.
-- **`too_many_jobs`** means the workspace already runs its maximum of jobs; wait for one
-  to end.
-- **`marstrace cancel <job>`** stops a job the user no longer wants; once its GPU time
-  started, it is charged for what it used.
+- **Keep the caps near what the task needs** with `[agent]` and `[limits] max_attempts`,
+  so the cost at the bounds the user agrees to stays small. One attempt costs less at its
+  bounds; a second one retries a failure at the price of what both use.
+- **`insufficient_credit`, `spending_limit_exceeded` and `billing_suspended`** mean the
+  balance is below the minimum or billing is not active; they name the console page where
+  credit is added. Give it to the user. Do not retry.
+- **`too_many_jobs`** means the workspace already has its maximum of queued jobs; wait the
+  `retry after` time, or for one to start.
+- **`marstrace cancel <job>`** stops a job the user no longer wants; it is charged what its
+  attempts used up to the stop.
 
-Read the job's `error` when it fails (`marstrace job <id>`): `code` and `message`. A
-failure the service caused is not charged; submit again and tell the user if it repeats.
+Read the job with `marstrace job <id>`: each attempt's status and failure, the usage so
+far, the amount held, and once the job ends the charge with a line per dimension. When it
+fails, read its `error` (`code` and `message`) and each attempt's; tell the user what the
+failed job was charged before submitting again.
 
 ## 6. Fetch and show
 
@@ -155,8 +174,9 @@ marstrace show marstrace-results/<job>/marstrace.json --stats
 The result is `marstrace.json` and its `result-manifest.json`. Gate the trace before
 reading conclusions from it (skill `marstrace-read`, section 2): the quality must be
 `usable`, or each reason code explained. A session that ends without a trace has
-`quality: "unusable"`; before submitting again, revisit the intent, the workspace and the
-budget with the user. Results can be fetched for 30 days after the job ends.
+`quality: "unusable"`; it was still charged its usage. Before submitting again, revisit the
+intent, the workspace and the caps with the user. Results can be fetched for 30 days
+after the job ends.
 
 ## 7. Related skills
 

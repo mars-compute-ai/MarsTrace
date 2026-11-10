@@ -7,18 +7,18 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 from marstrace.client import Credentials, MarsTraceClient
-from marstrace.error import MarsTraceError, ServiceError
+from marstrace.error import MarsTraceError
 from marstrace.job import JobInput, JobManifest
 
 
 @dataclass
 class QuotedJob:
-    """A job directory translated, uploaded and quoted, ready to submit.
+    """A job directory translated, uploaded and priced, ready to submit.
 
     Args:
         manifest: the job directory's manifest
-        map_request: the job request the quote was made for
-        map_quote: the quote: the ceilings, the agent budget and the rates
+        map_request: the job request the estimate was made for
+        map_quote: the service's estimate: rates, bounds, cost at the bounds and admission
         map_hardware_entry: the hardware the job runs on
         agent_model: the model every job's agent runs
     """
@@ -40,33 +40,47 @@ class QuotedJob:
     agent_model: str
 
     def summary(self) -> dict[str, Any]:
-        """What the quote commits to, in dollars.
+        """What the job would cost, in dollars.
+
+        A job is charged its actual usage over every attempt, failed ones included; the cost
+        at the bounds is the most it can reach, and nothing is held against it.
 
         Returns:
-            the quote id and expiry, the hardware, the cost cap, the job fee, the GPU rate and
-            ceiling, the agent's model, budget and token rates, and whether the service admits
-            the request
+            the hardware, the rates, the bounds of one attempt, the attempts, the cost at the
+            bounds, the minimum balance a job needs, the available balance, and whether the
+            service admits the job now
         """
         map_rates = self.map_quote["rates"]
-        map_ceilings = self.map_quote["ceilings"]
+        map_bounds = self.map_quote["bounds_per_attempt"]
+        map_cost = self.map_quote["cost_at_bounds_micro_usd"]
+        available = self.map_quote["available_micro_usd"]
         return {
-            "quote_id": self.map_quote["quote_id"],
-            "expires_at": self.map_quote["expires_at"],
             "hardware": self.map_request["hardware"],
             "gpu": self.map_hardware_entry["gpu"],
             "architecture": self.map_hardware_entry["architecture"],
-            "max_cost_usd": MarsTraceWorkflow.usd(self.map_quote["max_cost_micro_usd"]),
-            "job_fee_usd": MarsTraceWorkflow.usd(map_ceilings["job_fee_micro_usd"]),
-            "gpu_usd_per_hour": MarsTraceWorkflow.usd(map_rates["gpu_micro_usd_per_hour"]),
-            "gpu_ceiling_seconds": map_ceilings["gpu_milliseconds"] // QuotedJob.MILLISECONDS_PER_SECOND,
-            "gpu_ceiling_usd": MarsTraceWorkflow.usd(map_ceilings["gpu_micro_usd"]),
-            "agent_model": self.agent_model,
-            "agent_budget_usd": MarsTraceWorkflow.usd(self.map_quote["agent_budget_micro_usd"]),
-            "agent_tokens_worst_case_usd": MarsTraceWorkflow.usd(map_ceilings["agent_tokens_micro_usd"]),
-            "agent_usd_per_million_tokens": {
-                kind: MarsTraceWorkflow.usd(map_rates[rate_key])
-                for kind, rate_key in QuotedJob.MAP_TOKEN_RATE.items()
+            "rates": {
+                "gpu_usd_per_hour": MarsTraceWorkflow.usd(map_rates["gpu_micro_usd_per_hour"]),
+                "job_fee_usd": MarsTraceWorkflow.usd(map_rates.get("job_fee_micro_usd")),
+                "agent_model": self.agent_model,
+                "agent_usd_per_million_tokens": {
+                    kind: MarsTraceWorkflow.usd(map_rates[rate_key])
+                    for kind, rate_key in QuotedJob.MAP_TOKEN_RATE.items()
+                },
             },
+            "bounds_per_attempt": {
+                "gpu_seconds": map_bounds["gpu_milliseconds"] // QuotedJob.MILLISECONDS_PER_SECOND,
+                "agent_input_tokens": map_bounds["agent_input_tokens"],
+                "agent_output_tokens": map_bounds["agent_output_tokens"],
+            },
+            "max_attempts": self.manifest.limits.attempts(),
+            "cost_at_bounds": {
+                "job_fee_usd": MarsTraceWorkflow.usd(map_cost.get("job_fee")),
+                "gpu_per_attempt_usd": MarsTraceWorkflow.usd(map_cost["gpu_per_attempt"]),
+                "agent_tokens_per_attempt_usd": MarsTraceWorkflow.usd(map_cost["agent_tokens_per_attempt"]),
+                "total_usd": MarsTraceWorkflow.usd(map_cost["total"]),
+            },
+            "minimum_usd": MarsTraceWorkflow.usd(self.map_quote["minimum_micro_usd"]),
+            "available_usd": "no limit" if available is None else MarsTraceWorkflow.usd(available),
             "admissible": self.map_quote["admissible"],
             "message": self.map_quote.get("message"),
         }
@@ -126,7 +140,7 @@ class MarsTraceWorkflow:
             micro_usd: the amount, a decimal string or an integer
 
         Returns:
-            e.g. ``$1.250000``, or ``-`` when the amount is absent
+            e.g. ``$1.250000`` or ``-$0.500000``, or ``-`` when the amount is absent
         """
         if micro_usd is None:
             return "-"
@@ -134,6 +148,8 @@ class MarsTraceWorkflow:
             amount = decimal.Decimal(str(micro_usd)) / MarsTraceWorkflow.MICRO_PER_UNIT
         except decimal.InvalidOperation:
             return "-"
+        if amount < 0:
+            return f"-${-amount:.6f}"
         return f"${amount:.6f}"
 
     def _say(self, line: str) -> None:
@@ -150,10 +166,10 @@ class MarsTraceWorkflow:
         return self._client.hardware()
 
     def credit(self) -> dict[str, Any]:
-        """The workspace's credit.
+        """The workspace's balance against the minimum a job needs.
 
         Returns:
-            the available and reserved credit and ``add_credit_url``
+            the available, held and minimum balance, ``admissible`` and ``add_credit_url``
         """
         return self._client.credit()
 
@@ -173,14 +189,14 @@ class MarsTraceWorkflow:
         directory: str,
         hardware: str | None = None,
     ) -> QuotedJob:
-        """Translate a job directory, upload its workspace and quote it.
+        """Translate a job directory, upload its workspace and price it.
 
         Args:
             directory: the job directory, holding ``marstrace.toml``
             hardware: a hardware id overriding the manifest's ``hardware``
 
         Returns:
-            the quoted job
+            the priced job
 
         Raises:
             MarsTraceError: the manifest is wrong, or the service refused
@@ -208,15 +224,35 @@ class MarsTraceWorkflow:
             agent_model=map_hardware["agent"]["model"],
         )
 
+    def check_admissible(self, quoted: QuotedJob) -> None:
+        """Refuse, before asking the user, a job the estimate says the service would not admit.
+
+        Args:
+            quoted: the priced job
+
+        Raises:
+            MarsTraceError: the available balance is below the minimum a job needs, or the
+                workspace's billing is not active; the message names the page where credit
+                is added
+        """
+        if quoted.map_quote["admissible"]:
+            return
+        raise MarsTraceError(
+            f"the service does not admit this job now ({quoted.summary()['available_usd']} available, "
+            f"{MarsTraceWorkflow.usd(quoted.map_quote['minimum_micro_usd'])} needed to start): "
+            f"{quoted.map_quote.get('message') or 'billing is not active'}; "
+            f"add credit at {self._client.credit()['add_credit_url']}"
+        )
+
     def submit(
         self,
         quoted: QuotedJob,
         idempotency_key: str | None = None,
     ) -> dict[str, Any]:
-        """Submit a quoted job.
+        """Submit a priced job.
 
         Args:
-            quoted: the quoted job
+            quoted: the priced job
             idempotency_key: the key that makes the submission happen once, or None for a
                 fresh one
 
@@ -224,20 +260,11 @@ class MarsTraceWorkflow:
             the job
 
         Raises:
-            MarsTraceError: the quote is not admissible
             ServiceError: the service refused the job; a refusal for credit names the page
                 where credit is added
         """
-        if not quoted.map_quote["admissible"]:
-            raise MarsTraceError(
-                f"the service does not admit this job: {quoted.map_quote.get('message') or 'see the quote'}; "
-                "raise [limits] max_cost_usd or lower [agent] max_wall_seconds"
-            )
         idempotency_key = idempotency_key or uuid.uuid4().hex
-        map_submission = {
-            "request": quoted.map_request,
-            "quote_id": quoted.map_quote["quote_id"],
-        }
+        map_submission = {"request": quoted.map_request}
         submission_path = MarsTraceWorkflow._submission_path(
             directory=quoted.manifest.directory,
             idempotency_key=idempotency_key,
@@ -314,34 +341,11 @@ class MarsTraceWorkflow:
         map_submission: dict[str, Any],
         idempotency_key: str,
     ) -> dict[str, Any]:
-        """Submit a recorded request; a refusal for credit names the page where credit is added."""
-        try:
-            return self._client.submit(
-                map_request=map_submission["request"],
-                idempotency_key=idempotency_key,
-                quote_id=map_submission["quote_id"],
-            )
-        except ServiceError as err:
-            if err.code not in MarsTraceClient.SET_CREDIT_CODE:
-                raise
-            add_credit_url = self._credit_page()
-            if add_credit_url is None:
-                raise
-            raise ServiceError(
-                message=f"{err}; add credit at {add_credit_url}",
-                status=err.status,
-                code=err.code,
-                retryable=err.retryable,
-                request_id=err.request_id,
-                add_credit_url=add_credit_url,
-            ) from err
-
-    def _credit_page(self) -> str | None:
-        """The console page where credit is added, or None when the service cannot say."""
-        try:
-            return self._client.credit()["add_credit_url"]
-        except ServiceError:
-            return None
+        """Submit a recorded request under its key."""
+        return self._client.submit(
+            map_request=map_submission["request"],
+            idempotency_key=idempotency_key,
+        )
 
     def jobs(
         self,

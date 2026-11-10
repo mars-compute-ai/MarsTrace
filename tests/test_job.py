@@ -7,18 +7,18 @@ import struct
 import tarfile
 import tempfile
 import unittest
-from fake_service import EXAMPLE_DIRECTORY, HARDWARE, RequestShape
+from fake_service import EXAMPLE_DIRECTORY, HARDWARE, RequestSchema, ServiceError
 from marstrace.binary import KernelBinary
 from marstrace.error import ManifestError, MarsTraceError
 from marstrace.job import JobManifest
 from marstrace.tensors import TensorFile
 
 UPLOAD_IDS = {
-    "cubin": ["upl_cubin"],
-    "source_archive": ["upl_source"],
-    "launch_manifest": ["upl_manifest"],
-    "tensor": ["upl_tensor"],
-    "file": ["upl_file"],
+    "cubin": ["upl_" + "c" * 26],
+    "source_archive": ["upl_" + "s" * 26],
+    "launch_manifest": ["upl_" + "m" * 26],
+    "tensor": ["upl_" + "t" * 26],
+    "file": ["upl_" + "f" * 26],
 }
 
 
@@ -41,7 +41,7 @@ AGENT = (
     "[agent]\nmax_turns = 200\nmax_input_tokens = 20000000\n"
     "max_output_tokens = 200000\nmax_wall_seconds = 2400\n"
 )
-LIMITS = "[limits]\nmax_cost_usd = 40.0\n"
+LIMITS = "[limits]\nmax_attempts = 3\n"
 
 
 class TranslationTest(unittest.TestCase):
@@ -74,12 +74,15 @@ class TranslationTest(unittest.TestCase):
         return JobManifest.load(self.directory(manifest))
 
     def request(self, manifest: JobManifest) -> dict:
-        """The job request, checked against the request shape of the contract."""
+        """The job request, checked against the service's request schema."""
         request = manifest.request(
             map_hardware=HARDWARE,
             map_upload_ids=dict(UPLOAD_IDS),
         )
-        self.assertIsNone(RequestShape.departure(request, RequestShape.JOB))
+        try:
+            RequestSchema.parse(request, RequestSchema.JOB)
+        except ServiceError as err:
+            self.fail(f"the service refuses the request: {err}")
         return request
 
     def test_example_translates(self) -> None:
@@ -88,7 +91,7 @@ class TranslationTest(unittest.TestCase):
         request = self.request(manifest)
         self.assertEqual(request["hardware"], "h200")
         self.assertIn("square_matrix_mul", request["prompt"])
-        self.assertEqual(request["limits"], {"max_cost_micro_usd": "20000000", "max_attempts": 2})
+        self.assertEqual(request["limits"], {"max_attempts": 2})
 
     def test_workspace_and_agent_are_the_inputs_and_agent(self) -> None:
         manifest = self.load()
@@ -103,20 +106,20 @@ class TranslationTest(unittest.TestCase):
         self.assertEqual(
             request["inputs"],
             {
-                "cubins": ["upl_cubin"], "source_archive": "upl_source", "launch_manifest": "upl_manifest",
-                "tensors": ["upl_tensor"], "files": ["upl_file"],
+                "cubins": UPLOAD_IDS["cubin"], "source_archive": UPLOAD_IDS["source_archive"][0],
+                "launch_manifest": UPLOAD_IDS["launch_manifest"][0], "tensors": UPLOAD_IDS["tensor"], "files": UPLOAD_IDS["file"],
             },
         )
         self.assertEqual(
             request["agent"],
             {"max_turns": 200, "max_input_tokens": 20000000, "max_output_tokens": 200000, "max_wall_seconds": 2400},
         )
-        self.assertEqual((request["prompt"], request["limits"]), ("find the longest bubble of the mainloop", {"max_cost_micro_usd": "40000000"}))
+        self.assertEqual((request["prompt"], request["limits"]), ("find the longest bubble of the mainloop", {"max_attempts": 3}))
 
     def test_optional_parts_stay_out_of_the_inputs(self) -> None:
         manifest = self.load(AGENT_TOP + '[workspace]\ncubins = ["matmul.cubin"]\n' + LIMITS)
         self.assertEqual([job_input.role for job_input in manifest.list_input()], ["cubin"])
-        self.assertEqual(JobManifest.inputs({"cubin": ["upl_cubin"]}), {"cubins": ["upl_cubin"], "tensors": [], "files": []})
+        self.assertEqual(JobManifest.inputs({"cubin": UPLOAD_IDS["cubin"]}), {"cubins": UPLOAD_IDS["cubin"], "tensors": [], "files": []})
         self.assertEqual(self.request(manifest)["agent"], HARDWARE["agent"]["defaults"])
 
     def test_source_is_archived_without_git_and_reproducibly(self) -> None:
@@ -156,21 +159,17 @@ class TranslationTest(unittest.TestCase):
         with self.assertRaisesRegex(ManifestError, r"unknown key\(s\) model"):
             self.load(AGENT_TOP + WORKSPACE + AGENT + 'model = "claude-opus-5-5"\n' + LIMITS)
 
-    def test_limits_convert_dollars_exactly(self) -> None:
-        limits = "[limits]\nmax_cost_usd = 1.25\nmax_attempts = 3\n"
-        self.assertEqual(
-            self.request(self.load(AGENT_TOP + WORKSPACE + AGENT + limits))["limits"],
-            {"max_cost_micro_usd": "1250000", "max_attempts": 3},
-        )
-        self.assertEqual(self.request(self.load(AGENT_TOP + WORKSPACE + AGENT + "[limits]\nmax_cost_usd = 7\n"))["limits"], {"max_cost_micro_usd": "7000000"})
+    def test_limits_hold_only_the_attempts(self) -> None:
+        manifest = self.load(AGENT_TOP + WORKSPACE + AGENT)
+        self.assertNotIn("limits", self.request(manifest))
+        self.assertEqual(manifest.limits.attempts(), 2)
+        self.assertNotIn("limits", self.request(self.load(AGENT_TOP + WORKSPACE + AGENT + "[limits]\n")))
+        self.assertEqual(self.request(self.load(AGENT_TOP + WORKSPACE + AGENT + "[limits]\nmax_attempts = 1\n"))["limits"], {"max_attempts": 1})
         for limits, message in (
-            ("", r"\[limits\] is required"),
-            ("[limits]\nmax_attempts = 2\n", "needs max_cost_usd"),
-            ("[limits]\nmax_cost_usd = 0\n", "must be positive"),
-            ("[limits]\nmax_cost_usd = 1.0000001\n", "more than 6 decimals"),
-            ("[limits]\nmax_cost_usd = \"20\"\n", "must be a number of dollars"),
-            ("[limits]\nmax_cost_usd = 20.0\nmax_attempts = 4\n", r"max_attempts must be an integer in \[1, 3\]"),
-            ("[limits]\nmax_cost_usd = 20.0\nmax_gpu_seconds = 60\n", r"unknown key\(s\) max_gpu_seconds"),
+            ("[limits]\nmax_attempts = 4\n", r"max_attempts must be an integer in \[1, 3\]"),
+            ("[limits]\nmax_attempts = 0\n", r"max_attempts must be an integer in \[1, 3\]"),
+            ("[limits]\nmax_usd = 20.0\n", r"unknown key\(s\) max_usd"),
+            ("[limits]\nmax_gpu_seconds = 60\n", r"unknown key\(s\) max_gpu_seconds"),
         ):
             with self.subTest(limits=limits), self.assertRaisesRegex(ManifestError, message):
                 self.load(AGENT_TOP + WORKSPACE + AGENT + limits)

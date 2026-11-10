@@ -41,25 +41,34 @@ class CommandLineTest(unittest.TestCase):
         status, output, _ = self.run_cli("hardware")
         self.assertEqual(status, 0)
         self.assertRegex(output, r"h200\s+H200\s+sm_90a\s+\$4.320000/GPU-hour  fee \$0.500000  available")
-        self.assertRegex(output, r"b300\s+B300\s+sm_103a .* not available now")
+        self.assertRegex(output, r"b300\s+B300\s+sm_103a\s+no published price  not available now")
         self.assertIn("agent model: claude-opus-5-5", output)
         self.assertIn("max_wall_seconds 1200", output)
 
     def test_credit(self) -> None:
         status, output, _ = self.run_cli("credit")
         self.assertEqual(status, 0)
-        self.assertIn("available $100.000000", output)
+        self.assertIn("available $118.250000", output)
+        self.assertIn("minimum   $100.000000 to start a job", output)
+        self.assertIn("jobs      can start", output)
         self.assertIn(ADD_CREDIT_URL, output)
+        self.fake.state.available_micro_usd = -500000
+        output = self.run_cli("credit")[1]
+        self.assertIn("available -$0.500000", output)
+        self.assertIn("cannot start; add credit", output)
         self.fake.state.available_micro_usd = None
         self.assertIn("available no limit", self.run_cli("credit")[1])
 
-    def test_estimate_prints_the_cap_and_rates(self) -> None:
+    def test_estimate_prints_the_cost_at_the_bounds_and_the_balance(self) -> None:
         status, output, _ = self.run_cli("estimate", self.directory)
         self.assertEqual(status, 0)
         self.assertIn("hardware  h200, H200 (sm_90a)", output)
-        self.assertIn("cost cap  $20.000000 at most", output)
-        self.assertIn("GPU       $4.320000 per GPU-hour, at most 1320 s: $1.584000", output)
-        self.assertIn("agent     at most $17.916000 of tokens", output)
+        self.assertIn("rates     $4.320000 per GPU-hour, job fee $0.500000", output)
+        self.assertIn("bounds    per attempt 1320 GPU seconds, 4000000 input and 60000 output tokens; 2 attempt(s)", output)
+        self.assertIn("at most   $302.468000: fee $0.500000, plus per attempt $1.584000 GPU and $149.400000 tokens", output)
+        self.assertIn("failed ones included", output)
+        self.assertIn("balance   $118.250000 available, $100.000000 needed to start", output)
+        self.assertNotIn("refused", output)
         self.assertEqual(self.fake.state.requests_to("POST", r"^/v1/jobs$"), [])
 
     def test_estimate_prints_the_job_fee_and_token_rates(self) -> None:
@@ -68,15 +77,23 @@ class CommandLineTest(unittest.TestCase):
         agent_job(directory)
         status, output, error = self.run_cli("estimate", directory, "--hardware", "h200")
         self.assertEqual(status, 0, error)
-        self.assertIn("job fee   $0.500000", output)
         self.assertIn(
             "tokens    claude-opus-5-5: $18.000000 input, $1.800000 cache read, $22.500000 5-minute cache write, "
             "$36.000000 1-hour cache write, $90.000000 output per million",
             output,
         )
-        self.assertIn("cost cap  $30.000000 at most", output)
+        self.assertIn("1920 GPU seconds, 2000000 input and 100000 output tokens; 1 attempt(s)", output)
         self.assertIn("upload    source_archive", error)
         self.assertIn("upload    file", error)
+
+    def test_submit_refuses_below_the_minimum_before_asking(self) -> None:
+        self.fake.state.available_micro_usd = 50_000_000
+        status, output, error = self.run_cli("submit", self.directory, is_tty=True, answer="y")
+        self.assertEqual(status, 1)
+        self.assertIn("refused   A job starts only while", output)
+        self.assertIn("($50.000000 available, $100.000000 needed to start)", error)
+        self.assertIn(ADD_CREDIT_URL, error)
+        self.assertEqual(self.fake.state.requests_to("POST", r"^/v1/jobs$"), [])
 
     def test_submit_asks_before_spending(self) -> None:
         status, _, error = self.run_cli("submit", self.directory)
@@ -94,7 +111,11 @@ class CommandLineTest(unittest.TestCase):
         status, output, _ = self.run_cli("submit", self.directory, "--yes", "--wait")
         self.assertEqual(status, 0, output)
         self.assertIn("quality   usable", output)
-        self.assertIn("charged   $14.128100", output)
+        self.assertIn("held      $100.000000", output)
+        self.assertIn("charged   $5.078900", output)
+        self.assertIn("          service_agent_output_tokens 38810: $3.492900", output)
+        self.assertNotIn("service_agent_input_tokens", output)
+        self.assertIn("attempt   1 succeeded", output)
         job_id = next(iter(self.fake.state.map_job))
         results = os.path.join(self.directory, "marstrace-results", job_id)
         self.assertTrue(os.path.isfile(os.path.join(results, "marstrace.json")))
@@ -102,11 +123,15 @@ class CommandLineTest(unittest.TestCase):
         self.assertEqual(status, 0)
         self.assertIn("mainloop", output)
 
-    def test_insufficient_credit_exits_with_the_credit_page(self) -> None:
-        self.fake.state.available_micro_usd = 0
-        status, _, error = self.run_cli("submit", self.directory, "--yes")
+    def test_every_attempt_is_charged_and_the_balance_gates_the_next_job(self) -> None:
+        self.fake.state.do_preempt_first_attempt = True
+        status, output, error = self.run_cli("submit", self.directory, "--yes", "--wait")
+        self.assertEqual(status, 0, error)
+        self.assertIn("attempt   1 failed (supplier): vm_preempted: The GPU machine was reclaimed by the supplier.", output)
+        self.assertIn("charged   $5.453300", output)
+        status, output, error = self.run_cli("submit", self.directory, "--yes")
         self.assertEqual(status, 1)
-        self.assertIn("insufficient_credit", error)
+        self.assertIn("balance   $12.796700 available, $100.000000 needed to start", output)
         self.assertIn(ADD_CREDIT_URL, error)
 
     def test_a_recorded_key_is_resubmitted(self) -> None:
