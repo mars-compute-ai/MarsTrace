@@ -6,7 +6,7 @@ import sys
 import tempfile
 import unittest
 from typing import Any
-from fake_control_plane import EXAMPLE_DIRECTORY, TOP_UP_URL, FakeServer, agent_job
+from fake_service import ADD_CREDIT_URL, API_KEY, EXAMPLE_DIRECTORY, FakeServer, agent_job
 
 REPOSITORY = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -24,18 +24,17 @@ class McpStdioTest(unittest.TestCase):
 
     def setUp(self) -> None:
         self.fake.reset()
-        self.fake.state.job_polls = 0
         self.directory = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, self.directory)
         shutil.copytree(EXAMPLE_DIRECTORY, self.directory, dirs_exist_ok=True)
         environment = dict(
             os.environ,
-            MARSCOMPUTE_API_KEY="mc_live_v1_test",
-            MARSCOMPUTE_API_URL=self.fake.origin,
+            MARSTRACE_API_KEY=API_KEY,
+            MARSTRACE_API_URL=self.fake.origin,
             PYTHONPATH=REPOSITORY,
         )
         self.process = subprocess.Popen(
-            [sys.executable, "-m", "xtrace_harness.cli", "mcp"],
+            [sys.executable, "-m", "marstrace.cli", "mcp"],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             text=True,
@@ -79,15 +78,15 @@ class McpStdioTest(unittest.TestCase):
     def test_handshake_and_tool_list(self) -> None:
         result = self.initialize()["result"]
         self.assertEqual(result["protocolVersion"], "2025-06-18")
-        self.assertEqual(result["serverInfo"]["name"], "xtrace-harness")
+        self.assertEqual(result["serverInfo"]["name"], "marstrace")
         self.assertEqual(self.send("ping")["result"], {})
         list_tool = self.send("tools/list")["result"]["tools"]
         self.assertEqual(
             [tool["name"] for tool in list_tool],
             [
-                "xtrace_hardware", "xtrace_credit", "xtrace_cubin_find", "xtrace_cubin_show",
-                "xtrace_estimate", "xtrace_submit", "xtrace_jobs", "xtrace_job", "xtrace_wait",
-                "xtrace_cancel", "xtrace_fetch", "xtrace_show",
+                "marstrace_hardware", "marstrace_credit", "marstrace_cubin_find", "marstrace_cubin_show",
+                "marstrace_estimate", "marstrace_submit", "marstrace_jobs", "marstrace_job", "marstrace_wait",
+                "marstrace_cancel", "marstrace_result", "marstrace_fetch", "marstrace_show",
             ],
         )
         for tool in list_tool:
@@ -97,7 +96,7 @@ class McpStdioTest(unittest.TestCase):
         self.initialize()
         self.assertEqual(self.send("resources/list")["error"]["code"], -32601)
         self.assertEqual(self.send("tools/call", {"name": "missing"})["error"]["code"], -32602)
-        error = self.send("tools/call", {"name": "xtrace_job", "arguments": {"job": "x"}})["error"]
+        error = self.send("tools/call", {"name": "marstrace_job", "arguments": {"job": "x"}})["error"]
         self.assertEqual(error["code"], -32602)
         self.assertIn("needs 'job_id'", error["message"])
         self.process.stdin.write("not json\n")
@@ -106,46 +105,51 @@ class McpStdioTest(unittest.TestCase):
 
     def test_trace_through_mcp_alone(self) -> None:
         self.initialize()
-        self.assertEqual(self.call("xtrace_credit")["structuredContent"]["top_up_url"], TOP_UP_URL)
+        self.assertEqual(self.call("marstrace_credit")["structuredContent"]["add_credit_url"], ADD_CREDIT_URL)
         binary = os.path.join(self.directory, "matmul.cubin")
-        self.assertEqual(self.call("xtrace_cubin_show", binary=binary)["structuredContent"]["kernels"], ["square_matrix_mul"])
-        quote = self.call("xtrace_estimate", directory=self.directory)["structuredContent"]
+        self.assertEqual(self.call("marstrace_cubin_show", binary=binary)["structuredContent"]["kernels"], ["square_matrix_mul"])
+        quote = self.call("marstrace_estimate", directory=self.directory)["structuredContent"]
         self.assertEqual((quote["max_cost_usd"], quote["job_fee_usd"]), ("$20.000000", "$0.500000"))
-        refused = self.call("xtrace_submit", directory=self.directory, accept_max_cost_usd=19.5)
+        refused = self.call("marstrace_submit", directory=self.directory, accept_max_cost_usd=19.5)
         self.assertTrue(refused["isError"])
         self.assertIn("above the accepted $19.5", refused["structuredContent"]["error"]["message"])
         self.assertEqual(self.fake.state.map_job, {})
-        submitted = self.call("xtrace_submit", directory=self.directory, accept_max_cost_usd=20, idempotency_key="k-1")
+        submitted = self.call("marstrace_submit", directory=self.directory, accept_max_cost_usd=20, idempotency_key="k-1")
         job_id = submitted["structuredContent"]["job"]["job_id"]
-        self.assertEqual(self.call("xtrace_wait", job_id=job_id, timeout_seconds=30)["structuredContent"]["job"]["state"], "succeeded")
-        files = self.call("xtrace_fetch", job_id=job_id)["structuredContent"]["files"]
-        trace = next(path for path in files if path.endswith("xtrace.json"))
+        again = self.call("marstrace_submit", directory=self.directory, accept_max_cost_usd=20, idempotency_key="k-1")
+        self.assertEqual(again["structuredContent"]["job"]["job_id"], job_id)
+        self.assertEqual(len(self.fake.state.map_job), 1)
+        self.assertEqual(self.call("marstrace_wait", job_id=job_id, timeout_seconds=30)["structuredContent"]["status"], "succeeded")
+        self.assertEqual(self.call("marstrace_result", job_id=job_id)["structuredContent"]["manifest"]["file"]["name"], "marstrace.json")
+        files = self.call("marstrace_fetch", job_id=job_id)["structuredContent"]["files"]
+        trace = next(path for path in files if path.endswith("marstrace.json"))
         self.assertTrue(os.path.isfile(os.path.join(self.directory, trace)))
-        shown = self.call("xtrace_show", trace=trace, options=["--stats"])
+        shown = self.call("marstrace_show", trace=trace, options=["--stats"])
         self.assertFalse(shown["isError"])
         self.assertIn("mainloop", shown["content"][0]["text"])
-        self.assertEqual(self.call("xtrace_jobs")["structuredContent"]["items"][0]["job_id"], job_id)
+        self.assertEqual(self.call("marstrace_jobs")["structuredContent"]["items"][0]["job_id"], job_id)
 
     def test_workspace_with_files_through_mcp(self) -> None:
         self.initialize()
         directory = os.path.join(self.directory, "agent")
         os.makedirs(directory)
         agent_job(directory)
-        self.assertEqual(self.call("xtrace_hardware")["structuredContent"]["agent_models"], ["claude-opus-5-5"])
-        quote = self.call("xtrace_estimate", directory=directory)["structuredContent"]
-        self.assertEqual((quote["hardware"], quote["job_fee_usd"]), ("h200-cuda12.9", "$0.500000"))
-        submitted = self.call("xtrace_submit", directory=directory, accept_max_cost_usd=30)
+        self.assertEqual(self.call("marstrace_hardware")["structuredContent"]["agent"]["model"], "claude-opus-5-5")
+        quote = self.call("marstrace_estimate", directory=directory)["structuredContent"]
+        self.assertEqual((quote["hardware"], quote["job_fee_usd"]), ("h200", "$0.500000"))
+        submitted = self.call("marstrace_submit", directory=directory, accept_max_cost_usd=30)
         self.assertFalse(submitted["isError"])
-        self.assertEqual(submitted["structuredContent"]["job"]["state"], "queued")
+        self.assertEqual(submitted["structuredContent"]["job"]["status"], "queued")
+        self.assertEqual(self.call("marstrace_cancel", job_id=submitted["structuredContent"]["job"]["job_id"])["structuredContent"]["status"], "cancelled")
 
-    def test_platform_refusal_is_a_tool_error(self) -> None:
+    def test_service_refusal_is_a_tool_error(self) -> None:
         self.initialize()
         self.fake.state.available_micro_usd = 0
-        result = self.call("xtrace_submit", directory=self.directory, accept_max_cost_usd=25)
+        result = self.call("marstrace_submit", directory=self.directory, accept_max_cost_usd=25)
         self.assertTrue(result["isError"])
         self.assertEqual(result["structuredContent"]["error"]["code"], "insufficient_credit")
-        self.assertEqual(result["structuredContent"]["error"]["top_up_url"], TOP_UP_URL)
-        missing = self.call("xtrace_cubin_show", binary=os.path.join(self.directory, "absent.cubin"))
+        self.assertEqual(result["structuredContent"]["error"]["add_credit_url"], ADD_CREDIT_URL)
+        missing = self.call("marstrace_cubin_show", binary=os.path.join(self.directory, "absent.cubin"))
         self.assertTrue(missing["isError"])
 
 

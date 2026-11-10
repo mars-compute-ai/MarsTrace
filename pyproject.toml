@@ -5,28 +5,23 @@ requires = [
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "xtrace-harness"
+name = "mars-trace"
 version = "0.1.0"
-description = "Trace CUDA kernels on MarsCompute GPUs with Xtrace and read the traces in the terminal"
+description = "Trace CUDA kernels on cloud GPUs with MarsTrace and read the traces in the terminal"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "prettytable>=3",
 ]
 
-[project.optional-dependencies]
-test = [
-    "jsonschema>=4.18",
-]
-
 [project.urls]
 Homepage = "https://marscompute.ai"
-Source = "https://github.com/mars-compute-ai/xtrace-harness"
+Source = "https://github.com/mars-compute-ai/mars-trace"
 
 [project.scripts]
-xtrace = "xtrace_harness.cli:main"
+marstrace = "marstrace.cli:main"
 
 [tool.setuptools.packages.find]
 include = [
-    "xtrace_harness*",
+    "marstrace*",
 ]

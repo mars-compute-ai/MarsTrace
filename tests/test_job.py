@@ -7,19 +7,18 @@ import struct
 import tarfile
 import tempfile
 import unittest
-from fake_control_plane import CAPABILITIES, EXAMPLE_DIRECTORY
-from schema_check import SchemaCheck
-from xtrace_harness.binary import KernelBinary
-from xtrace_harness.error import HarnessError, ManifestError
-from xtrace_harness.job import JobManifest
-from xtrace_harness.tensors import TensorFile
+from fake_service import EXAMPLE_DIRECTORY, HARDWARE, RequestShape
+from marstrace.binary import KernelBinary
+from marstrace.error import ManifestError, MarsTraceError
+from marstrace.job import JobManifest
+from marstrace.tensors import TensorFile
 
-ARTIFACT_IDS = {
-    "cubin": ["cubin-1"],
-    "source": ["source-1"],
-    "launch_manifest": ["manifest-1"],
-    "safetensors": ["tensors-1"],
-    "workspace_file": ["file-1"],
+UPLOAD_IDS = {
+    "cubin": ["upl_cubin"],
+    "source_archive": ["upl_source"],
+    "launch_manifest": ["upl_manifest"],
+    "tensor": ["upl_tensor"],
+    "file": ["upl_file"],
 }
 
 
@@ -33,19 +32,20 @@ def write_safetensors(path: str, map_header: dict) -> None:
         tensor_file.write(bytes(data_bytes))
 
 
-AGENT_TOP = 'hardware = "h200-cuda12.9"\nintent = "find the longest bubble of the mainloop"\n'
+AGENT_TOP = 'hardware = "h200"\nintent = "find the longest bubble of the mainloop"\n'
 WORKSPACE = (
     '[workspace]\ncubins = ["matmul.cubin"]\nsource = "src"\nmanifest = "launch.json"\n'
     'tensors = ["inputs.safetensors"]\nfiles = ["run.py"]\n'
 )
 AGENT = (
-    '[agent]\nmodel = "claude-opus-5-5"\nmax_turns = 200\nmax_input_tokens = 20000000\n'
+    "[agent]\nmax_turns = 200\nmax_input_tokens = 20000000\n"
     "max_output_tokens = 200000\nmax_wall_seconds = 2400\n"
 )
+LIMITS = "[limits]\nmax_cost_usd = 40.0\n"
 
 
 class TranslationTest(unittest.TestCase):
-    """The mapping of xtrace.toml onto an agent_workspace bundle and an agent analysis."""
+    """The mapping of marstrace.toml onto a MarsTrace job request."""
 
     def directory(self, manifest: str) -> str:
         directory = tempfile.mkdtemp()
@@ -66,64 +66,58 @@ class TranslationTest(unittest.TestCase):
         with open(os.path.join(directory, "launch.json"), "w") as launch_file:
             json.dump({"schema_version": "marscompute.kernel-launch"}, launch_file)
         write_safetensors(os.path.join(directory, "inputs.safetensors"), {"a": {"dtype": "F32", "shape": [4], "data_offsets": [0, 16]}})
-        with open(os.path.join(directory, "xtrace.toml"), "w") as manifest_file:
+        with open(os.path.join(directory, "marstrace.toml"), "w") as manifest_file:
             manifest_file.write(manifest)
         return directory
 
-    def load(self, manifest: str = AGENT_TOP + WORKSPACE + AGENT) -> JobManifest:
+    def load(self, manifest: str = AGENT_TOP + WORKSPACE + AGENT + LIMITS) -> JobManifest:
         return JobManifest.load(self.directory(manifest))
 
     def request(self, manifest: JobManifest) -> dict:
-        """The estimate input, checked against the vendored schema."""
-        request = manifest.estimate_input(
-            map_capabilities=CAPABILITIES,
-            map_artifact_ids=dict(ARTIFACT_IDS),
+        """The job request, checked against the request shape of the contract."""
+        request = manifest.request(
+            map_hardware=HARDWARE,
+            map_upload_ids=dict(UPLOAD_IDS),
         )
-        SchemaCheck.validate("estimate-input", request)
+        self.assertIsNone(RequestShape.departure(request, RequestShape.JOB))
         return request
 
     def test_example_translates(self) -> None:
         manifest = JobManifest.load(EXAMPLE_DIRECTORY)
-        self.assertEqual([artifact.kind for artifact in manifest.list_artifact()], ["cubin", "source"])
+        self.assertEqual([job_input.role for job_input in manifest.list_input()], ["cubin", "source_archive"])
         request = self.request(manifest)
-        self.assertEqual(request["compute"]["gpu_type"], "H200")
+        self.assertEqual(request["hardware"], "h200")
         self.assertIn("square_matrix_mul", request["prompt"])
-        self.assertEqual(request["analysis"]["mode"], "agent")
+        self.assertEqual(request["limits"], {"max_cost_micro_usd": "20000000", "max_attempts": 2})
 
-    def test_workspace_and_agent_are_the_bundle_and_analysis(self) -> None:
+    def test_workspace_and_agent_are_the_inputs_and_agent(self) -> None:
         manifest = self.load()
-        list_artifact = manifest.list_artifact()
         self.assertEqual(
-            [(artifact.kind, os.path.basename(artifact.path)) for artifact in list_artifact],
+            [(job_input.role, os.path.basename(job_input.path)) for job_input in manifest.list_input()],
             [
-                ("cubin", "matmul.cubin"), ("source", "source.tar.gz"), ("launch_manifest", "launch.json"),
-                ("safetensors", "inputs.safetensors"), ("workspace_file", "run.py"),
+                ("cubin", "matmul.cubin"), ("source_archive", "source.tar.gz"), ("launch_manifest", "launch.json"),
+                ("tensor", "inputs.safetensors"), ("file", "run.py"),
             ],
         )
         request = self.request(manifest)
         self.assertEqual(
-            request["bundle"],
+            request["inputs"],
             {
-                "kind": "agent_workspace", "cubin_artifact_ids": ["cubin-1"], "source_archive_artifact_id": "source-1",
-                "launch_manifest_artifact_id": "manifest-1", "tensor_artifact_ids": ["tensors-1"], "file_artifact_ids": ["file-1"],
+                "cubins": ["upl_cubin"], "source_archive": "upl_source", "launch_manifest": "upl_manifest",
+                "tensors": ["upl_tensor"], "files": ["upl_file"],
             },
         )
         self.assertEqual(
-            request["analysis"],
-            {
-                "mode": "agent", "model": "claude-opus-5-5", "max_turns": 200, "max_input_tokens_total": 20000000,
-                "max_output_tokens_total": 200000, "max_wall_seconds": 2400,
-            },
+            request["agent"],
+            {"max_turns": 200, "max_input_tokens": 20000000, "max_output_tokens": 200000, "max_wall_seconds": 2400},
         )
-        self.assertEqual((request["prompt"], request["compute"]["gpu_type"]), ("find the longest bubble of the mainloop", "H200"))
+        self.assertEqual((request["prompt"], request["limits"]), ("find the longest bubble of the mainloop", {"max_cost_micro_usd": "40000000"}))
 
-    def test_optional_parts_stay_out_of_the_bundle(self) -> None:
-        manifest = self.load(AGENT_TOP + '[workspace]\ncubins = ["matmul.cubin"]\n' + AGENT)
-        self.assertEqual([artifact.kind for artifact in manifest.list_artifact()], ["cubin"])
-        self.assertEqual(
-            manifest.bundle({"cubin": ["cubin-1"]}),
-            {"kind": "agent_workspace", "cubin_artifact_ids": ["cubin-1"], "tensor_artifact_ids": [], "file_artifact_ids": []},
-        )
+    def test_optional_parts_stay_out_of_the_inputs(self) -> None:
+        manifest = self.load(AGENT_TOP + '[workspace]\ncubins = ["matmul.cubin"]\n' + LIMITS)
+        self.assertEqual([job_input.role for job_input in manifest.list_input()], ["cubin"])
+        self.assertEqual(JobManifest.inputs({"cubin": ["upl_cubin"]}), {"cubins": ["upl_cubin"], "tensors": [], "files": []})
+        self.assertEqual(self.request(manifest)["agent"], HARDWARE["agent"]["defaults"])
 
     def test_source_is_archived_without_git_and_reproducibly(self) -> None:
         manifest = self.load()
@@ -135,17 +129,15 @@ class TranslationTest(unittest.TestCase):
         self.assertEqual((map_member["build.sh"].mode, map_member["matmul.cu"].mode), (0o755, 0o644))
         self.assertEqual({(member.uid, member.mtime) for member in map_member.values()}, {(0, 0)})
 
-    def test_hardware_must_run_every_cubin_and_offer_the_model(self) -> None:
+    def test_hardware_must_be_offered_and_run_every_cubin(self) -> None:
         manifest = self.load()
-        self.assertEqual(manifest.select_compute(CAPABILITIES)["environment_id"], "h200-cuda12.9")
-        with self.assertRaisesRegex(ManifestError, "no hardware 'a100'; .* h200-cuda12.9, b200-cuda12.9, b300-cuda13.0"):
-            self.load(AGENT_TOP.replace("h200-cuda12.9", "a100") + WORKSPACE + AGENT).select_compute(CAPABILITIES)
-        with self.assertRaisesRegex(ManifestError, "not enabled"):
-            manifest.select_compute(dict(CAPABILITIES, enabled=False))
-        with self.assertRaisesRegex(ManifestError, "matmul.cubin targets sm_90, but b300-cuda13.0 is sm_103a"):
-            self.load(AGENT_TOP.replace("h200-cuda12.9", "b300-cuda13.0") + WORKSPACE + AGENT).select_compute(CAPABILITIES)
-        with self.assertRaisesRegex(ManifestError, "agent model 'other-model' is not offered; .* claude-opus-5-5"):
-            self.load(AGENT_TOP + WORKSPACE + AGENT.replace("claude-opus-5-5", "other-model")).select_compute(CAPABILITIES)
+        self.assertEqual(manifest.select_hardware(HARDWARE)["architecture"], "sm_90a")
+        with self.assertRaisesRegex(ManifestError, "no hardware 'a100'; .* h200, b200, b300"):
+            self.load(AGENT_TOP.replace("h200", "a100") + WORKSPACE + AGENT + LIMITS).select_hardware(HARDWARE)
+        with self.assertRaisesRegex(ManifestError, "b300 is not offered now"):
+            self.load(AGENT_TOP.replace("h200", "b300") + WORKSPACE + AGENT + LIMITS).select_hardware(HARDWARE)
+        with self.assertRaisesRegex(ManifestError, "matmul.cubin targets sm_90, but b200 is sm_100a"):
+            self.load(AGENT_TOP.replace("h200", "b200") + WORKSPACE + AGENT + LIMITS).select_hardware(HARDWARE)
 
     def test_agent_budgets_are_bounded(self) -> None:
         for key, value, message in (
@@ -155,28 +147,46 @@ class TranslationTest(unittest.TestCase):
             ("max_wall_seconds", 2700, r"max_wall_seconds must be an integer in \[60, 2580\]"),
         ):
             with self.subTest(key=key), self.assertRaisesRegex(ManifestError, message):
-                self.load(AGENT_TOP + WORKSPACE + re.sub(f"{key} = \\d+", f"{key} = {value}", AGENT))
+                self.load(AGENT_TOP + WORKSPACE + re.sub(f"{key} = \\d+", f"{key} = {value}", AGENT) + LIMITS)
+        with self.assertRaisesRegex(ManifestError, r"max_turns 400 exceeds the service's maximum 300"):
+            self.load(AGENT_TOP + WORKSPACE + AGENT.replace("200\n", "400\n", 1) + LIMITS).request(
+                map_hardware={**HARDWARE, "agent": {**HARDWARE["agent"], "maximums": {**HARDWARE["agent"]["maximums"], "max_turns": 300}}},
+                map_upload_ids=dict(UPLOAD_IDS),
+            )
+        with self.assertRaisesRegex(ManifestError, r"unknown key\(s\) model"):
+            self.load(AGENT_TOP + WORKSPACE + AGENT + 'model = "claude-opus-5-5"\n' + LIMITS)
 
-    def test_limits_default_to_the_capabilities(self) -> None:
-        self.assertEqual(self.request(self.load())["limits"], CAPABILITIES["limits"])
-        limits = "[limits]\nmax_cost_usd = 1.25\nmax_gpu_seconds = 60\nmax_wall_seconds = 600\nmax_attempts = 1\nmax_trace_bytes = 4096\n"
+    def test_limits_convert_dollars_exactly(self) -> None:
+        limits = "[limits]\nmax_cost_usd = 1.25\nmax_attempts = 3\n"
         self.assertEqual(
             self.request(self.load(AGENT_TOP + WORKSPACE + AGENT + limits))["limits"],
-            {
-                "max_total_cost_micro_usd": "1250000", "max_active_gpu_seconds": 60, "max_wall_seconds": 600,
-                "max_attempts": 1, "max_trace_bytes": 4096,
-            },
+            {"max_cost_micro_usd": "1250000", "max_attempts": 3},
         )
-        with self.assertRaisesRegex(ManifestError, "exceeds max_wall_seconds"):
-            self.request(self.load(AGENT_TOP + WORKSPACE + AGENT + "[limits]\nmax_gpu_seconds = 4000\n"))
-        with self.assertRaisesRegex(ManifestError, "at least \\$0.000001"):
-            self.load(AGENT_TOP + WORKSPACE + AGENT + "[limits]\nmax_cost_usd = 0\n")
+        self.assertEqual(self.request(self.load(AGENT_TOP + WORKSPACE + AGENT + "[limits]\nmax_cost_usd = 7\n"))["limits"], {"max_cost_micro_usd": "7000000"})
+        for limits, message in (
+            ("", r"\[limits\] is required"),
+            ("[limits]\nmax_attempts = 2\n", "needs max_cost_usd"),
+            ("[limits]\nmax_cost_usd = 0\n", "must be positive"),
+            ("[limits]\nmax_cost_usd = 1.0000001\n", "more than 6 decimals"),
+            ("[limits]\nmax_cost_usd = \"20\"\n", "must be a number of dollars"),
+            ("[limits]\nmax_cost_usd = 20.0\nmax_attempts = 4\n", r"max_attempts must be an integer in \[1, 3\]"),
+            ("[limits]\nmax_cost_usd = 20.0\nmax_gpu_seconds = 60\n", r"unknown key\(s\) max_gpu_seconds"),
+        ):
+            with self.subTest(limits=limits), self.assertRaisesRegex(ManifestError, message):
+                self.load(AGENT_TOP + WORKSPACE + AGENT + limits)
+
+    def test_inputs_are_held_to_the_size_limits(self) -> None:
+        manifest = self.load()
+        with open(os.path.join(manifest.directory, "run.py"), "wb") as script_file:
+            script_file.truncate(16 * (1 << 20) + 1)
+        with self.assertRaisesRegex(ManifestError, "a file holds at most 16 MiB"):
+            manifest.list_input()
 
     def test_ptx_is_refused(self) -> None:
         with tempfile.NamedTemporaryFile("w", suffix=".ptx", delete=False) as ptx_file:
             ptx_file.write(".version 8.5\n.target sm_90a\n.visible .entry k(\n)\n{}\n")
         self.addCleanup(os.unlink, ptx_file.name)
-        with self.assertRaisesRegex(HarnessError, "PTX"):
+        with self.assertRaisesRegex(MarsTraceError, "PTX"):
             KernelBinary.load(ptx_file.name)
 
     def test_tensors_are_read_by_their_header(self) -> None:
@@ -189,23 +199,24 @@ class TranslationTest(unittest.TestCase):
 
     def test_workspace_errors_are_precise(self) -> None:
         for manifest, message in (
-            (AGENT_TOP + WORKSPACE, r"\[agent\] is required"),
-            (AGENT_TOP + AGENT, r"\[workspace\] is required"),
-            (AGENT_TOP + WORKSPACE + AGENT + '[kernel]\nbinary = "matmul.cubin"\n', r"unknown key\(s\) kernel"),
-            ('timeout_seconds = 120\n' + AGENT_TOP + WORKSPACE + AGENT, r"unknown key\(s\) timeout_seconds"),
-            (AGENT_TOP.replace("intent", "purpose") + WORKSPACE + AGENT, "unknown key"),
-            ('hardware = "h200-cuda12.9"\n' + WORKSPACE + AGENT, "'intent' is required"),
-            ('hardware = "h200-cuda12.9"\nintent = "' + "x" * 32001 + '"\n' + WORKSPACE + AGENT, "at most 32000 characters"),
-            (AGENT_TOP + WORKSPACE.replace('cubins = ["matmul.cubin"]', "cubins = []") + AGENT, "cubins lists 1 to 8 paths"),
-            (AGENT_TOP + WORKSPACE.replace('files = ["run.py"]', 'files = ["run.py", "./run.py"]') + AGENT, "names ./run.py twice"),
-            (AGENT_TOP + WORKSPACE.replace('source = "src"', 'source = "../src"') + AGENT, "must lie inside the job directory"),
-            (AGENT_TOP + WORKSPACE.replace('source = "src"', 'source = "run.py"') + AGENT, "run.py is not a directory"),
-            (AGENT_TOP + WORKSPACE.replace('manifest = "launch.json"', 'manifest = "src/matmul.cu"') + AGENT, "is not JSON"),
-            (AGENT_TOP + WORKSPACE.replace('tensors = ["inputs.safetensors"]', 'tensors = ["src/build.sh"]') + AGENT, "is not a safetensors file"),
+            (AGENT_TOP + AGENT + LIMITS, r"\[workspace\] is required"),
+            (AGENT_TOP + WORKSPACE + AGENT + LIMITS + '[kernel]\nbinary = "matmul.cubin"\n', r"unknown key\(s\) kernel"),
+            ('timeout_seconds = 120\n' + AGENT_TOP + WORKSPACE + AGENT + LIMITS, r"unknown key\(s\) timeout_seconds"),
+            (AGENT_TOP + WORKSPACE + AGENT + LIMITS + "[compute]\ngpu = 1\n", r"unknown key\(s\) compute"),
+            (AGENT_TOP.replace("intent", "purpose") + WORKSPACE + AGENT + LIMITS, "unknown key"),
+            ('hardware = "h200"\n' + WORKSPACE + AGENT + LIMITS, "'intent' is required"),
+            ('hardware = "h200"\nintent = "' + "x" * 32001 + '"\n' + WORKSPACE + AGENT + LIMITS, "at most 32000 characters"),
+            ('hardware = "h200"\nintent = "a\\u0000b"\n' + WORKSPACE + AGENT + LIMITS, "NUL"),
+            (AGENT_TOP + WORKSPACE.replace('cubins = ["matmul.cubin"]', "cubins = []") + AGENT + LIMITS, "cubins lists 1 to 8 paths"),
+            (AGENT_TOP + WORKSPACE.replace('files = ["run.py"]', 'files = ["run.py", "./run.py"]') + AGENT + LIMITS, "names ./run.py twice"),
+            (AGENT_TOP + WORKSPACE.replace('source = "src"', 'source = "../src"') + AGENT + LIMITS, "must lie inside the job directory"),
+            (AGENT_TOP + WORKSPACE.replace('source = "src"', 'source = "run.py"') + AGENT + LIMITS, "run.py is not a directory"),
+            (AGENT_TOP + WORKSPACE.replace('manifest = "launch.json"', 'manifest = "src/matmul.cu"') + AGENT + LIMITS, "is not JSON"),
+            (AGENT_TOP + WORKSPACE.replace('tensors = ["inputs.safetensors"]', 'tensors = ["src/build.sh"]') + AGENT + LIMITS, "is not a safetensors file"),
         ):
             with self.subTest(message=message), self.assertRaisesRegex(ManifestError, message):
                 self.load(manifest)
-        directory = self.directory(AGENT_TOP + WORKSPACE + AGENT)
+        directory = self.directory(AGENT_TOP + WORKSPACE + AGENT + LIMITS)
         with open(os.path.join(directory, "launch.json"), "w") as launch_file:
             json.dump({"schema_version": "marscompute.kernel-launch.v1"}, launch_file)
         with self.assertRaisesRegex(ManifestError, "launch.json is not a marscompute.kernel-launch manifest"):

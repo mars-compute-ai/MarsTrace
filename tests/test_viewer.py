@@ -3,7 +3,7 @@ import io
 import json
 import os
 import unittest
-from xtrace_harness.cli import CommandLine
+from marstrace.cli import CommandLine
 
 FIXTURE = os.path.join(
     os.path.dirname(os.path.abspath(__file__)),
@@ -13,12 +13,12 @@ FIXTURE = os.path.join(
 
 
 def run_show(*list_option: str) -> str:
-    """The output of ``xtrace show`` on the fixture with the given options."""
+    """The output of ``marstrace show`` on the fixture with the given options."""
     output = io.StringIO()
     with contextlib.redirect_stdout(output):
         status = CommandLine.run(["show", FIXTURE, *list_option])
     if status != 0:
-        raise AssertionError(f"xtrace show exited with {status}")
+        raise AssertionError(f"marstrace show exited with {status}")
     return output.getvalue()
 
 

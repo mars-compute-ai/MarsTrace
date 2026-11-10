@@ -1,13 +1,13 @@
 {
   "mcpServers": {
-    "xtrace": {
+    "marstrace": {
       "type": "stdio",
-      "command": "xtrace",
+      "command": "marstrace",
       "args": [
         "mcp"
       ],
       "env": {
-        "MARSCOMPUTE_API_KEY": "${MARSCOMPUTE_API_KEY}"
+        "MARSTRACE_API_KEY": "${MARSTRACE_API_KEY}"
       }
     }
   }

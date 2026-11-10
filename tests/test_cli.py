@@ -5,9 +5,8 @@ import shutil
 import tempfile
 import unittest
 from unittest import mock
-from fake_control_plane import EXAMPLE_DIRECTORY, TOP_UP_URL, FakeServer, agent_job
-from xtrace_harness.cli import CommandLine
-from xtrace_harness.workflow import XtraceWorkflow
+from fake_service import ADD_CREDIT_URL, API_KEY, EXAMPLE_DIRECTORY, FakeServer, agent_job
+from marstrace.cli import CommandLine
 
 
 class CommandLineTest(unittest.TestCase):
@@ -29,10 +28,9 @@ class CommandLineTest(unittest.TestCase):
         stdout = io.StringIO()
         stderr = io.StringIO()
         with (
-            mock.patch.dict(os.environ, {"MARSCOMPUTE_API_KEY": "mc_live_v1_test", "MARSCOMPUTE_API_URL": self.fake.origin}),
+            mock.patch.dict(os.environ, {"MARSTRACE_API_KEY": API_KEY, "MARSTRACE_API_URL": self.fake.origin}),
             mock.patch("sys.stdin.isatty", return_value=is_tty),
             mock.patch("builtins.input", return_value=answer),
-            mock.patch.object(XtraceWorkflow.__init__, "__defaults__", (None, 0)),
             contextlib.redirect_stdout(stdout),
             contextlib.redirect_stderr(stderr),
         ):
@@ -42,35 +40,43 @@ class CommandLineTest(unittest.TestCase):
     def test_hardware_lists_rates_and_architectures(self) -> None:
         status, output, _ = self.run_cli("hardware")
         self.assertEqual(status, 0)
-        self.assertRegex(output, r"h200-cuda12.9\s+H200\s+x1 sm_90a\s+\$4.000000/GPU-hour  spot eu-north1")
-        self.assertRegex(output, r"b300-cuda13.0\s+B300\s+x1 sm_103a")
-        self.assertIn("agent models: claude-opus-5-5", output)
+        self.assertRegex(output, r"h200\s+H200\s+sm_90a\s+\$4.320000/GPU-hour  fee \$0.500000  available")
+        self.assertRegex(output, r"b300\s+B300\s+sm_103a .* not available now")
+        self.assertIn("agent model: claude-opus-5-5", output)
+        self.assertIn("max_wall_seconds 1200", output)
 
     def test_credit(self) -> None:
         status, output, _ = self.run_cli("credit")
         self.assertEqual(status, 0)
         self.assertIn("available $100.000000", output)
-        self.assertIn(TOP_UP_URL, output)
+        self.assertIn(ADD_CREDIT_URL, output)
+        self.fake.state.available_micro_usd = None
+        self.assertIn("available no limit", self.run_cli("credit")[1])
 
-    def test_estimate_prints_the_cap_and_rate(self) -> None:
+    def test_estimate_prints_the_cap_and_rates(self) -> None:
         status, output, _ = self.run_cli("estimate", self.directory)
         self.assertEqual(status, 0)
-        self.assertIn("hardware  h200-cuda12.9 (sm_90a)", output)
+        self.assertIn("hardware  h200, H200 (sm_90a)", output)
         self.assertIn("cost cap  $20.000000 at most", output)
-        self.assertIn("rate      $4.000000 per GPU-hour", output)
-        self.assertEqual(self.fake.state.requests_to("POST", r"^/v1/xtrace/jobs$"), [])
+        self.assertIn("GPU       $4.320000 per GPU-hour, at most 1320 s: $1.584000", output)
+        self.assertIn("agent     at most $17.916000 of tokens", output)
+        self.assertEqual(self.fake.state.requests_to("POST", r"^/v1/jobs$"), [])
 
     def test_estimate_prints_the_job_fee_and_token_rates(self) -> None:
         directory = os.path.join(self.directory, "agent")
         os.makedirs(directory)
         agent_job(directory)
-        status, output, error = self.run_cli("estimate", directory, "--hardware", "h200-cuda12.9")
+        status, output, error = self.run_cli("estimate", directory, "--hardware", "h200")
         self.assertEqual(status, 0, error)
         self.assertIn("job fee   $0.500000", output)
-        self.assertIn("tokens    claude-opus-5-5: $18.000000 input, $1.800000 cached input, $90.000000 output per million", output)
+        self.assertIn(
+            "tokens    claude-opus-5-5: $18.000000 input, $1.800000 cache read, $22.500000 5-minute cache write, "
+            "$36.000000 1-hour cache write, $90.000000 output per million",
+            output,
+        )
         self.assertIn("cost cap  $30.000000 at most", output)
-        self.assertIn("upload    source", error)
-        self.assertIn("upload    workspace_file", error)
+        self.assertIn("upload    source_archive", error)
+        self.assertIn("upload    file", error)
 
     def test_submit_asks_before_spending(self) -> None:
         status, _, error = self.run_cli("submit", self.directory)
@@ -88,48 +94,56 @@ class CommandLineTest(unittest.TestCase):
         status, output, _ = self.run_cli("submit", self.directory, "--yes", "--wait")
         self.assertEqual(status, 0, output)
         self.assertIn("quality   usable", output)
+        self.assertIn("charged   $14.128100", output)
         job_id = next(iter(self.fake.state.map_job))
-        results = os.path.join(self.directory, "xtrace-results", job_id)
-        self.assertTrue(os.path.isfile(os.path.join(results, "xtrace.json")))
-        status, output, _ = self.run_cli("show", os.path.join(results, "xtrace.json"), "--stats")
+        results = os.path.join(self.directory, "marstrace-results", job_id)
+        self.assertTrue(os.path.isfile(os.path.join(results, "marstrace.json")))
+        status, output, _ = self.run_cli("show", os.path.join(results, "marstrace.json"), "--stats")
         self.assertEqual(status, 0)
         self.assertIn("mainloop", output)
 
-    def test_insufficient_credit_exits_with_the_top_up_page(self) -> None:
+    def test_insufficient_credit_exits_with_the_credit_page(self) -> None:
         self.fake.state.available_micro_usd = 0
         status, _, error = self.run_cli("submit", self.directory, "--yes")
         self.assertEqual(status, 1)
         self.assertIn("insufficient_credit", error)
-        self.assertIn(TOP_UP_URL, error)
+        self.assertIn(ADD_CREDIT_URL, error)
+
+    def test_a_recorded_key_is_resubmitted(self) -> None:
+        status, _, error = self.run_cli("submit", self.directory, "--yes", "--idempotency-key", "cli-1")
+        self.assertEqual(status, 0, error)
+        status, output, error = self.run_cli("submit", self.directory, "--idempotency-key", "cli-1")
+        self.assertEqual(status, 0, error)
+        self.assertIn("resubmit", error)
+        self.assertEqual(len(self.fake.state.map_job), 1)
 
     def test_jobs_job_cancel_fetch(self) -> None:
-        self.fake.state.job_polls = 1000
+        self.fake.state.hold_status = "running"
         self.run_cli("submit", self.directory, "--yes")
         job_id = next(iter(self.fake.state.map_job))
         status, output, _ = self.run_cli("jobs")
         self.assertEqual(status, 0)
         self.assertIn(job_id, output)
         status, output, _ = self.run_cli("job", job_id)
-        self.assertIn("state     running", output)
+        self.assertIn("status    queued", output)
+        status, output, _ = self.run_cli("fetch", job_id)
+        self.assertEqual(status, 1)
         status, output, _ = self.run_cli("cancel", job_id)
-        self.assertIn("state     cancelled", output)
-        self.fake.state.job_polls = 0
-        self.fake.state.map_job[job_id]["state"] = "queued"
-        self.run_cli("job", job_id)
+        self.assertIn("status    cancelled", output)
+        self.fake.state.hold_status = None
+        self.fake.state.map_job[job_id]["status"] = "queued"
+        self.run_cli("job", job_id, "--wait")
         output_directory = os.path.join(self.directory, "fetched")
         status, output, _ = self.run_cli("fetch", job_id, "-o", output_directory)
         self.assertEqual(status, 0)
-        self.assertEqual(
-            sorted(os.listdir(output_directory)),
-            ["result-manifest.json", "xtrace.json"],
-        )
+        self.assertEqual(sorted(os.listdir(output_directory)), ["marstrace.json", "result-manifest.json"])
 
     def test_cubin_find_copies_into_the_workspace(self) -> None:
         cache = os.path.join(self.directory, "cache")
         os.makedirs(cache)
         shutil.copyfile(os.path.join(self.directory, "matmul.cubin"), os.path.join(cache, "matmul.cubin"))
         job = os.path.join(self.directory, "job")
-        with mock.patch("xtrace_harness.binary.DslCache.default_roots", return_value=[]):
+        with mock.patch("marstrace.binary.DslCache.default_roots", return_value=[]):
             status, output, error = self.run_cli("cubin", "find", "square", "--dir", cache, "--copy-to", job)
         self.assertEqual(status, 0, error)
         self.assertIn("[0] square_matrix_mul", output)
@@ -143,11 +157,11 @@ class CommandLineTest(unittest.TestCase):
         self.assertIn("square_matrix_mul", output)
 
     def test_missing_key_is_reported(self) -> None:
-        with mock.patch.dict(os.environ, {"MARSCOMPUTE_API_KEY": ""}):
+        with mock.patch.dict(os.environ, {"MARSTRACE_API_KEY": ""}):
             stderr = io.StringIO()
             with contextlib.redirect_stderr(stderr):
                 self.assertEqual(CommandLine.run(["credit"]), 1)
-        self.assertIn("MARSCOMPUTE_API_KEY", stderr.getvalue())
+        self.assertIn("marstrace: set MARSTRACE_API_KEY", stderr.getvalue())
 
 
 if __name__ == "__main__":

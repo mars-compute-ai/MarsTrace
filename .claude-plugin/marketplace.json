@@ -5,9 +5,9 @@
   },
   "plugins": [
     {
-      "name": "xtrace",
+      "name": "marstrace",
       "source": "./",
-      "description": "Trace CUDA kernels on MarsCompute GPUs with Xtrace and read the traces in the terminal"
+      "description": "Trace CUDA kernels on cloud GPUs with MarsTrace and read the traces in the terminal"
     }
   ]
 }

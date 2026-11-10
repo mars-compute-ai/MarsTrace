@@ -1,0 +1,21 @@
+hardware = "h200"
+intent = """
+How long each thread spends in the dot-product loop of square_matrix_mul, and how evenly the
+blocks run, at n = 256: int32 matrices a, b and c of 256 x 256, a and b random, launched with
+grid (16, 16) and block (16, 16).
+"""
+
+# built with: nvcc -cubin -arch=sm_90a -lineinfo -o matmul.cubin src/matmul.cu
+[workspace]
+cubins = ["matmul.cubin"]
+source = "src"
+
+[agent]
+max_turns = 60
+max_input_tokens = 4000000
+max_output_tokens = 60000
+max_wall_seconds = 1200
+
+[limits]
+max_cost_usd = 20.0
+max_attempts = 2

@@ -1,34 +1,36 @@
-# xtrace-harness
+# mars-trace
 
-xtrace-harness traces the timeline inside a CUDA kernel on MarsCompute GPUs, and reads the
-trace in your terminal. You hand an agent on the GPU host a workspace of the kernel's
-cubins, and optionally its source and data; it traces the kernel within the budget you
-set and returns a report of per-region durations and pipeline bubbles. It is for kernel
-developers and the coding agents that work with them; no local GPU is needed.
+mars-trace is the client of MarsTrace, which traces the timeline inside a CUDA kernel on an
+H200, B200 or B300 and reads the trace in your terminal. You hand an agent on the GPU host
+a workspace of the kernel's cubins, and optionally its source and data; it traces the
+kernel within the budget you set and returns `marstrace.json`, a report of per-region
+durations and pipeline bubbles. It is for kernel developers and the coding agents that
+work with them; no local GPU is needed.
 
 ## Usage
 
-Create an API key in the [MarsCompute console](https://console.marscompute.ai) and add
-credit, then:
+Create a MarsTrace API key in the [MarsCompute console](https://console.marscompute.ai)
+and add credit, then:
 
 ```bash
-pip install git+https://github.com/mars-compute-ai/xtrace-harness
-export MARSCOMPUTE_API_KEY=mc_live_v1_...
+pip install git+https://github.com/mars-compute-ai/mars-trace
+export MARSTRACE_API_KEY=mt_live_...
 
-xtrace hardware                                        # hardware, rates, agent models
-xtrace cubin find my_triton_kernel --copy-to my-job    # or nvcc -cubin; see the skill
-xtrace estimate examples/matmul                        # the cost cap, the rates, the job fee
-xtrace submit examples/matmul --wait
-xtrace show examples/matmul/xtrace-results/<job>/xtrace.json --stats --bubbles
+marstrace hardware                                        # hardware, rates, agent model
+marstrace cubin find my_triton_kernel --copy-to my-job    # or nvcc -cubin; see the skill
+marstrace estimate examples/matmul                        # the cost cap, the rates, the job fee
+marstrace submit examples/matmul --wait
+marstrace show examples/matmul/marstrace-results/<job>/marstrace.json --stats --bubbles
 ```
 
-For Claude Code, install the plugin, which adds the `xtrace mcp` server and the
-`xtrace-remote` and `xtrace-read` skills:
+For Claude Code, install the plugin, which adds the `marstrace mcp` server and the
+`marstrace-remote` and `marstrace-read` skills:
 
 ```bash
-claude plugin marketplace add mars-compute-ai/xtrace-harness
-claude plugin install xtrace@marscompute
+claude plugin marketplace add mars-compute-ai/mars-trace
+claude plugin install marstrace@marscompute
 ```
 
-Other agents can load the skills from [skills/](skills/) and run `xtrace mcp` as a stdio
-MCP server. [docs/protocol.md](docs/protocol.md) maps `xtrace.toml` onto the platform API.
+Other agents can load the skills from [skills/](skills/) and run `marstrace mcp` as a
+stdio MCP server. [docs/protocol.md](docs/protocol.md) maps `marstrace.toml` onto the
+MarsTrace API.
