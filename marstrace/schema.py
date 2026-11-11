@@ -101,16 +101,15 @@ class ResponseSchema:
         "max_wall_seconds": int,
     }
     HARDWARE = {
+        "rates": (RATES, None),
         "hardware": [
             {
                 "id": str,
                 "gpu": str,
                 "architecture": str,
                 "available": bool,
-                "service_model": str,
                 "cuda_versions": [CUDA_VERSION],
                 "default_cuda_version": CUDA_VERSION,
-                "rates": (RATES, None),
             }
         ],
         "agent": {
@@ -153,7 +152,6 @@ class ResponseSchema:
         "expires_at": TIME,
     }
     QUOTE = {
-        "service_model": str,
         "rate_card_version_id": str,
         "cuda_version": CUDA_VERSION,
         "rates": RATES,

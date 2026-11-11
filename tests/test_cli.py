@@ -38,14 +38,21 @@ class CommandLineTest(unittest.TestCase):
             status = CommandLine.run(list(list_argument))
         return status, stdout.getvalue(), stderr.getvalue()
 
-    def test_hardware_lists_rates_and_architectures(self) -> None:
+    def test_hardware_lists_the_service_rates_once_and_each_architecture(self) -> None:
         status, output, _ = self.run_cli("hardware")
         self.assertEqual(status, 0)
-        self.assertRegex(output, r"h200\s+H200\s+sm_90a\s+\$18.000000 input, \$90.000000 output per million tokens  available")
+        self.assertEqual(output.count("$18.000000 input, $90.000000 output per million, on every hardware"), 1)
+        self.assertRegex(output, r"h200\s+H200\s+sm_90a\s+available")
         self.assertIn("CUDA 12.8, 12.9, 13.0 (default)", output)
         self.assertIn("CUDA 12.9, 13.0 (default)", output)
         self.assertNotIn("GPU-hour", output)
-        self.assertRegex(output, r"b300\s+B300\s+sm_103a\s+no published price  not available now")
+        self.assertRegex(output, r"b300\s+B300\s+sm_103a\s+not available now")
+
+    def test_hardware_says_when_the_service_has_no_price(self) -> None:
+        self.fake.state.map_hardware["rates"] = None
+        status, output, _ = self.run_cli("hardware")
+        self.assertEqual(status, 0)
+        self.assertIn("tokens    no published price", output)
         self.assertIn("agent model: claude-opus-5-5", output)
         self.assertIn("max_wall_seconds 1200", output)
 

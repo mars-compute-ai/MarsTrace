@@ -376,9 +376,9 @@ class McpServer:
         return [
             McpTool(
                 name="marstrace_hardware",
-                description="List the hardware a job can run on: id, GPU, architecture, availability, "
-                "the CUDA versions a job can choose with the default one, and the agent's token rates; "
-                "and the agent model with its default and maximum limits.",
+                description="List the hardware a job can run on: id, GPU, architecture, availability "
+                "and the CUDA versions a job can choose with the default one; the service's agent token "
+                "rates, the same on every hardware; and the agent model with its default and maximum limits.",
                 map_input_schema=McpServer._schema(
                     map_property={},
                     list_required=[],

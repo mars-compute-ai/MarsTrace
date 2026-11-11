@@ -83,29 +83,29 @@ class JobCommands:
 
     @staticmethod
     def hardware(args: argparse.Namespace) -> None:
-        """List the hardware a job can run on, with its architecture, CUDA versions and token
-        rates, and the agent model."""
+        """List the hardware a job can run on, with its architecture and CUDA versions, the
+        service's token rates, and the agent model."""
         map_hardware = JobCommands._workflow().hardware()
         if args.json:
             JobCommands._print_json(map_hardware)
             return
+        map_rates = map_hardware["rates"]
+        if map_rates is None:
+            print("tokens    no published price")
+        else:
+            print(
+                f"tokens    {MarsTraceWorkflow.usd(map_rates['agent_input_micro_usd_per_million'])} input, "
+                f"{MarsTraceWorkflow.usd(map_rates['agent_output_micro_usd_per_million'])} output "
+                "per million, on every hardware"
+            )
         for map_entry in map_hardware["hardware"]:
-            map_rates = map_entry["rates"]
-            if map_rates is None:
-                price = "no published price"
-            else:
-                price = (
-                    f"{MarsTraceWorkflow.usd(map_rates['agent_input_micro_usd_per_million'])} input, "
-                    f"{MarsTraceWorkflow.usd(map_rates['agent_output_micro_usd_per_million'])} output "
-                    "per million tokens"
-                )
             list_version = [
                 f"{version} (default)" if version == map_entry["default_cuda_version"] else version
                 for version in map_entry["cuda_versions"]
             ]
             print(
                 f"{map_entry['id']:<8} {map_entry['gpu']:<8} {map_entry['architecture']:<8} "
-                f"{price}  {'available' if map_entry['available'] else 'not available now'}"
+                f"{'available' if map_entry['available'] else 'not available now'}"
             )
             print(f"{'':<8} CUDA {', '.join(list_version)}")
         map_agent = map_hardware["agent"]

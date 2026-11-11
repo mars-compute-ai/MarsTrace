@@ -27,7 +27,7 @@ AGENT_MODEL = "claude-opus-5-5"
 CROCKFORD = "0123456789abcdefghjkmnpqrstvwxyz"
 MIB = 1 << 20
 MILLION = 1_000_000
-RATES_H200 = {
+RATES = {
     "agent_input_micro_usd_per_million": "18000000",
     "agent_cache_read_micro_usd_per_million": "1800000",
     "agent_cache_write_5m_micro_usd_per_million": "22500000",
@@ -46,19 +46,19 @@ LIST_CUDA_VERSION = ["12.8", "12.9", "13.0"]
 LIST_CUDA_VERSION_B300 = ["12.9", "13.0"]
 CUDA_VERSION_DEFAULT = "13.0"
 HARDWARE = {
+    "rates": RATES,
     "hardware": [
         {
-            "id": "h200", "gpu": "H200", "architecture": "sm_90a", "available": True, "service_model": "marstrace-h200",
-            "cuda_versions": LIST_CUDA_VERSION, "default_cuda_version": CUDA_VERSION_DEFAULT, "rates": RATES_H200,
-        },
-        {
-            "id": "b200", "gpu": "B200", "architecture": "sm_100a", "available": True, "service_model": "marstrace-b200",
+            "id": "h200", "gpu": "H200", "architecture": "sm_90a", "available": True,
             "cuda_versions": LIST_CUDA_VERSION, "default_cuda_version": CUDA_VERSION_DEFAULT,
-            "rates": dict(RATES_H200, agent_output_micro_usd_per_million="95000000"),
         },
         {
-            "id": "b300", "gpu": "B300", "architecture": "sm_103a", "available": False, "service_model": "marstrace-b300",
-            "cuda_versions": LIST_CUDA_VERSION_B300, "default_cuda_version": CUDA_VERSION_DEFAULT, "rates": None,
+            "id": "b200", "gpu": "B200", "architecture": "sm_100a", "available": True,
+            "cuda_versions": LIST_CUDA_VERSION, "default_cuda_version": CUDA_VERSION_DEFAULT,
+        },
+        {
+            "id": "b300", "gpu": "B300", "architecture": "sm_103a", "available": False,
+            "cuda_versions": LIST_CUDA_VERSION_B300, "default_cuda_version": CUDA_VERSION_DEFAULT,
         },
     ],
     "agent": {"model": AGENT_MODEL, "defaults": AGENT_DEFAULTS, "maximums": AGENT_MAXIMUMS},
@@ -634,8 +634,8 @@ class FakeService(http.server.BaseHTTPRequestHandler):
         entry = next((entry for entry in FakeService.state.map_hardware["hardware"] if entry["id"] == request["hardware"]), None)
         if entry is None:
             raise ServiceError("hardware_unavailable", f"Unknown hardware {request['hardware']}; see GET /v1/hardware")
-        if entry["rates"] is None:
-            raise ServiceError("hardware_unavailable", "This hardware has no published price now")
+        if FakeService.state.map_hardware["rates"] is None:
+            raise ServiceError("hardware_unavailable", "MarsTrace has no published price now")
         cuda_version = request.get("cuda_version", entry["default_cuda_version"])
         if cuda_version not in entry["cuda_versions"]:
             raise ServiceError(
@@ -647,7 +647,7 @@ class FakeService(http.server.BaseHTTPRequestHandler):
     def _quote(self, request: dict[str, Any]) -> dict[str, Any]:
         state = FakeService.state
         entry = self._hardware(request)
-        rates = entry["rates"]
+        rates = state.map_hardware["rates"]
         map_agent = request["agent"]
         attempts = request["limits"]["max_attempts"]
         input_per_attempt = max(ceil_rate(map_agent["max_input_tokens"], int(rates[key]), MILLION) for key in LIST_INPUT_RATE)
@@ -657,7 +657,6 @@ class FakeService(http.server.BaseHTTPRequestHandler):
             "total": str(attempts * tokens_per_attempt),
         }
         quote = {
-            "service_model": entry["service_model"],
             "rate_card_version_id": "rcv_1",
             "cuda_version": request.get("cuda_version", entry["default_cuda_version"]),
             "rates": rates,

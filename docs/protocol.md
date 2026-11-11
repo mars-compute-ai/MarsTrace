@@ -89,7 +89,7 @@ set. Each path below is appended to that URL, so `GET /v1/hardware` goes to
 
 | Step | Call | Client |
 | --- | --- | --- |
-| hardware | `GET /v1/hardware` → per hardware its `architecture`, `cuda_versions`, `default_cuda_version` and token `rates` | `marstrace hardware` |
+| hardware | `GET /v1/hardware` → the service's token `rates`, the same on every hardware, and per hardware its `architecture`, `cuda_versions` and `default_cuda_version` | `marstrace hardware` |
 | credit | `GET /v1/credit` | `marstrace credit` |
 | upload | `POST /v1/uploads` `{role, name, size_bytes, sha256, content_type}` → grant; `PUT` the bytes to `upload_url` with the grant's `headers`, or each 32 MiB range to its `parts[].upload_url` keeping each part's `ETag`; `POST /v1/uploads/{id}/complete` `{sha256, size_bytes, parts?}`, `parts` being `[{part_number, etag}]` | `marstrace estimate`, `marstrace submit` |
 | estimate | `POST /v1/quotes` with the job request; the service stores and holds nothing | `marstrace estimate` |
@@ -145,7 +145,7 @@ contract:
 | `idempotency_conflict` | 409 | the key was used with another request; submit with a fresh key |
 | `upload_not_ready`, `job_not_cancellable`, `result_unavailable` | 409 | an upload is not verified or belongs to another job; the job has ended; the job has no result |
 | `limit_exceeded` | 413 | a size or count limit |
-| `hardware_unavailable` | 422 | the hardware is unknown or has no published price |
+| `hardware_unavailable` | 422 | the hardware is unknown, or MarsTrace has no published price |
 | `rate_limited`, `too_many_jobs` | 429 | retryable after `retry-after` seconds |
 | `service_unavailable` | 503 | retryable; a submission is retried under the same key |
 
@@ -156,7 +156,7 @@ A failed job carries `error` with `code` and `message`, and each failed attempt 
 
 A job is charged the agent tokens it actually used, whatever its outcome: the input, output,
 cache-read and cache-write tokens of every attempt, retried and failed attempts included,
-at the token rates of the hardware's service model. A job whose agent never ran is charged
+at the service's token rates, the same on every hardware. A job whose agent never ran is charged
 nothing. The usage is charged in full even when it passes the available balance.
 
 An estimate (`POST /v1/quotes`) answers:

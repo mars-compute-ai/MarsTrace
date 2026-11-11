@@ -308,11 +308,11 @@ class ServiceTest(unittest.TestCase):
             self.client.download(url=f"{self.fake.origin}/r2/results/x", sha256="0" * 64, size_bytes=3)
 
     def test_a_malformed_answer_is_refused(self) -> None:
-        self.assertIsNone(self.workflow.hardware()["hardware"][2]["rates"])
-        self.fake.state.map_hardware["hardware"][0]["rates"]["agent_output_micro_usd_per_million"] = 90000000
-        with self.assertRaisesRegex(ServiceError, r"GET /v1/hardware answered with an unexpected body: the answer.hardware\[0\].rates.agent_output_micro_usd_per_million"):
+        self.assertNotIn("rates", self.workflow.hardware()["hardware"][2])
+        self.fake.state.map_hardware["rates"]["agent_output_micro_usd_per_million"] = 90000000
+        with self.assertRaisesRegex(ServiceError, r"GET /v1/hardware answered with an unexpected body: the answer.rates.agent_output_micro_usd_per_million"):
             self.workflow.hardware()
-        self.fake.state.map_hardware["hardware"][0]["rates"]["agent_output_micro_usd_per_million"] = "90000000"
+        self.fake.state.map_hardware["rates"]["agent_output_micro_usd_per_million"] = "90000000"
         self.fake.state.map_hardware["hardware"][0]["cuda_versions"] = ["13"]
         with self.assertRaisesRegex(ServiceError, r"the answer.hardware\[0\].cuda_versions\[0\] is not a string"):
             self.workflow.hardware()
