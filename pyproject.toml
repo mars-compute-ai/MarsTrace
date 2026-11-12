@@ -16,7 +16,7 @@ dependencies = [
 
 [project.urls]
 Homepage = "https://marscompute.ai"
-Source = "https://github.com/mars-compute-ai/mars-trace"
+Source = "https://github.com/mars-compute-ai/MarsTrace"
 
 [project.scripts]
 marstrace = "marstrace.cli:main"

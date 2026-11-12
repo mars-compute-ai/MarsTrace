@@ -6,7 +6,7 @@ import shutil
 import statistics
 import sys
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, TextIO
 from marstrace.viewer.common.launch import LaunchShape
 from marstrace.viewer.common.trace._result import TraceCompileResults, TraceResult
 from marstrace.viewer.common.trace.format._analysis import ScopeInterval, ScopePairing, TraceAnalysis
@@ -858,8 +858,9 @@ class ShowCommand:
     def _print_selection(
         selected: SelectionToken,
         data: TraceData,
+        stream: TextIO,
     ) -> None:
-        """What the token asked for, and what the report had to answer with."""
+        """What the token asked for, and what the report had to answer with, on ``stream``."""
         span = TraceClock.format_ticks(
             ticks=selected.t1 - selected.t0,
             clock_type=data.clock_type,
@@ -868,13 +869,15 @@ class ShowCommand:
             f"{ShowCommand.ANSI_BOLD}Selection:{ShowCommand.ANSI_RESET}     "
             f"{len(selected.list_id)} {selected.level}(s) → {len(data.list_tid):,} "
             f"{data.unit_label()}(s)  ·  "
-            f"[{selected.t0}, {selected.t1}] = {span}"
+            f"[{selected.t0}, {selected.t1}] = {span}",
+            file=stream,
         )
         if selected.list_scope:
             print(
-                f"{ShowCommand.ANSI_BOLD}Token scopes:{ShowCommand.ANSI_RESET}  {', '.join(selected.list_scope)}"
+                f"{ShowCommand.ANSI_BOLD}Token scopes:{ShowCommand.ANSI_RESET}  {', '.join(selected.list_scope)}",
+                file=stream,
             )
-        print()
+        print(file=stream)
 
     @staticmethod
     def _print_header(
@@ -1876,9 +1879,11 @@ class ShowCommand:
             set_tid=set_tid,
         )
         if selected:
+            # a JSON answer keeps stdout to the JSON alone
             ShowCommand._print_selection(
                 selected=selected,
                 data=data,
+                stream=sys.stderr if args.json else sys.stdout,
             )
 
         if args.json:

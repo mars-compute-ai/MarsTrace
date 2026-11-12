@@ -17,7 +17,7 @@ estimate, submit, fetch, show.**
 ## 1. Check the setup
 
 ```bash
-pip install git+https://github.com/mars-compute-ai/mars-trace
+pip install git+https://github.com/mars-compute-ai/MarsTrace
 echo "${MARSTRACE_API_KEY:?create one at console.marscompute.ai, MarsTrace keys: mt_live_...}"
 marstrace hardware      # hardware ids, GPU, architecture, CUDA versions, token rates, agent model and limits
 marstrace credit        # available balance, the minimum a job needs to start, the page to add credit
