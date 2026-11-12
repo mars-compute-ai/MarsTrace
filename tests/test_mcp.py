@@ -106,6 +106,7 @@ class McpStdioTest(unittest.TestCase):
         self.assertFalse(remote.get("isError", False))
         text = remote["content"][0]["text"]
         self.assertIn("# Tracing a kernel with MarsTrace", text)
+        self.assertIn("tenant/trace/keys", text)
         self.assertNotIn("name: marstrace-remote", text)
         read = self.call("marstrace_guide", topic="read")["content"][0]["text"]
         self.assertIn("Gate the trace first", read)

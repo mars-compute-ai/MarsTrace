@@ -9,9 +9,10 @@ for kernel developers and the coding agents that work with them; no local GPU is
 
 ## Usage
 
-Create a MarsTrace API key in the [MarsCompute console](https://console.marscompute.ai)
-and add credit; a job starts only while the workspace's balance reaches the minimum that
-`marstrace credit` shows, and it is charged the agent tokens it used. Then:
+Register in the [MarsCompute console](https://console.marscompute.ai/register), add credit
+and create a MarsTrace API key under MarsTrace › Keys (`marstrace guide remote`, section
+1); a job starts only while the workspace's balance reaches the minimum that `marstrace
+credit` shows, and it is charged the agent tokens it used. Then:
 
 ```bash
 pip install git+https://github.com/mars-compute-ai/MarsTrace

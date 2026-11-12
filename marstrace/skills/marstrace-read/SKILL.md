@@ -110,17 +110,22 @@ say what would explain it, and what trace would tell the explanations apart.
 ## 4. A selection token names a region
 
 A selection token is one line that names a stretch of time and a set of lanes of one
-kernel's trace:
+kernel's trace. The user copies it with a right click on the trace in the console's job page,
+as the token alone or as the whole `marstrace show` command:
 
 ```
 mtrace/1 kernel=square_matrix_mul#ef46 t=4365:11462ns lane=block:15-33 order=role scopes=mainloop
 ```
 
-When the user pastes one, hand it to the viewer verbatim:
+When the user pastes one, hand it to the viewer verbatim, on the run it was copied from
+(`--run <n>` for any run but the first, as the copied command already says):
 
 ```bash
-marstrace show marstrace.json --select 'mtrace/1 ...' --stats
+marstrace show marstrace-results/<job>/marstrace.json --select 'mtrace/1 ...' --stats
 ```
+
+The command reads the fetched result, so run `marstrace fetch <job>` first when it is not
+there.
 
 - **Do not rewrite it into `--tid` or `--stime`.** Its lane ids count across the launch
   (a warp counts from the grid), while `--warp` counts within a block; rewriting it by
