@@ -216,6 +216,16 @@ class CommandLineTest(unittest.TestCase):
             with contextlib.redirect_stderr(stderr):
                 self.assertEqual(CommandLine.run(["credit"]), 1)
         self.assertIn("marstrace: set MARSTRACE_API_KEY", stderr.getvalue())
+        self.assertIn("console.marscompute.ai/tenant/trace/keys", stderr.getvalue())
+
+    def test_guide_lists_and_prints_the_skills(self) -> None:
+        status, output, _ = self.run_cli("guide")
+        self.assertEqual(status, 0)
+        self.assertRegex(output, r"remote\s+set up an account")
+        self.assertRegex(output, r"read\s+gate a fetched trace")
+        status, output, _ = self.run_cli("guide", "read")
+        self.assertEqual(status, 0)
+        self.assertTrue(output.startswith("# Reading a MarsTrace report"))
 
 
 if __name__ == "__main__":
