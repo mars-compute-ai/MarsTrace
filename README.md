@@ -32,6 +32,6 @@ claude plugin marketplace add mars-compute-ai/MarsTrace
 claude plugin install marstrace@marscompute
 ```
 
-Other agents can load the skills from [skills/](skills/) and run `marstrace mcp` as a
-stdio MCP server. [docs/protocol.md](docs/protocol.md) maps `marstrace.toml` onto the
-MarsTrace API.
+Other agents can load the skills from [marstrace/skills/](marstrace/skills/) and run
+`marstrace mcp` as a stdio MCP server. [docs/protocol.md](docs/protocol.md) maps
+`marstrace.toml` onto the MarsTrace API.
