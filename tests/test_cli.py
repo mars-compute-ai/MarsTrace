@@ -41,7 +41,13 @@ class CommandLineTest(unittest.TestCase):
     def test_hardware_lists_the_service_rates_once_and_each_architecture(self) -> None:
         status, output, _ = self.run_cli("hardware")
         self.assertEqual(status, 0)
-        self.assertEqual(output.count("$18.000000 input, $90.000000 output per million, on every hardware"), 1)
+        self.assertEqual(
+            output.count(
+                "$18.000000 input, $1.800000 cache read, $22.500000 5-minute cache write, "
+                "$36.000000 1-hour cache write, $90.000000 output per million, on every hardware"
+            ),
+            1,
+        )
         self.assertRegex(output, r"h200\s+H200\s+sm_90a\s+available")
         self.assertIn("CUDA 12.8, 12.9, 13.0 (default)", output)
         self.assertIn("CUDA 12.9, 13.0 (default)", output)

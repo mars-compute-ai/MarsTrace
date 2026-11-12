@@ -95,6 +95,9 @@ class JobCommands:
         else:
             print(
                 f"tokens    {MarsTraceWorkflow.usd(map_rates['agent_input_micro_usd_per_million'])} input, "
+                f"{MarsTraceWorkflow.usd(map_rates['agent_cache_read_micro_usd_per_million'])} cache read, "
+                f"{MarsTraceWorkflow.usd(map_rates['agent_cache_write_5m_micro_usd_per_million'])} 5-minute cache write, "
+                f"{MarsTraceWorkflow.usd(map_rates['agent_cache_write_1h_micro_usd_per_million'])} 1-hour cache write, "
                 f"{MarsTraceWorkflow.usd(map_rates['agent_output_micro_usd_per_million'])} output "
                 "per million, on every hardware"
             )
