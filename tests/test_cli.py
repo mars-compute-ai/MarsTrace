@@ -41,7 +41,13 @@ class CommandLineTest(unittest.TestCase):
     def test_hardware_lists_the_service_rates_once_and_each_architecture(self) -> None:
         status, output, _ = self.run_cli("hardware")
         self.assertEqual(status, 0)
-        self.assertEqual(output.count("$18.000000 input, $90.000000 output per million, on every hardware"), 1)
+        self.assertEqual(
+            output.count(
+                "$18.000000 input, $1.800000 cache read, $22.500000 5-minute cache write, "
+                "$36.000000 1-hour cache write, $90.000000 output per million, on every hardware"
+            ),
+            1,
+        )
         self.assertRegex(output, r"h200\s+H200\s+sm_90a\s+available")
         self.assertIn("CUDA 12.8, 12.9, 13.0 (default)", output)
         self.assertIn("CUDA 12.9, 13.0 (default)", output)
@@ -210,6 +216,16 @@ class CommandLineTest(unittest.TestCase):
             with contextlib.redirect_stderr(stderr):
                 self.assertEqual(CommandLine.run(["credit"]), 1)
         self.assertIn("marstrace: set MARSTRACE_API_KEY", stderr.getvalue())
+        self.assertIn("console.marscompute.ai/tenant/trace/keys", stderr.getvalue())
+
+    def test_guide_lists_and_prints_the_skills(self) -> None:
+        status, output, _ = self.run_cli("guide")
+        self.assertEqual(status, 0)
+        self.assertRegex(output, r"remote\s+set up an account")
+        self.assertRegex(output, r"read\s+gate a fetched trace")
+        status, output, _ = self.run_cli("guide", "read")
+        self.assertEqual(status, 0)
+        self.assertTrue(output.startswith("# Reading a MarsTrace report"))
 
 
 if __name__ == "__main__":

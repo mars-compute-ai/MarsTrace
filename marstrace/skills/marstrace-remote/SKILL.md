@@ -14,21 +14,47 @@ reads in the terminal (skill `marstrace-read`).
 The flow: **settle the request, find the cubin, gather the workspace, set the caps,
 estimate, submit, fetch, show.**
 
-## 1. Check the setup
+## 1. Set up the account, the key and the client
+
+MarsTrace runs on the user's MarsCompute account and is paid from its prepaid credit. When
+`MARSTRACE_API_KEY` is unset, or a call answers `api_key_missing` or
+`authentication_required`, walk the user through these steps. They happen in the user's
+browser and shell; the agent cannot do them:
+
+1. **Register** at https://console.marscompute.ai/register with an email code or Google.
+   There is no approval; the new workspace is active at once.
+2. **Save the billing profile** at https://console.marscompute.ai/tenant/billing/profile:
+   legal name, country and address.
+3. **Add credit** at https://console.marscompute.ai/tenant/billing/credits, by card. A job
+   starts only while the available balance reaches the minimum that `marstrace credit`
+   shows (section 5), so add at least that.
+4. **Create a MarsTrace key** at https://console.marscompute.ai/tenant/trace/keys. It starts
+   with `mt_live_` and is shown once. The console's other API keys, for its models, do not
+   work with MarsTrace.
+5. **Hand the key to the client** in the shell that starts the agent, e.g.
+   `export MARSTRACE_API_KEY=mt_live_...` in the shell profile, then restart the agent: the
+   MCP server reads the key from its environment. Never ask the user to paste the key into
+   the conversation, and never write it into a file of the job directory.
+
+Then check the client and the account:
 
 ```bash
 pip install git+https://github.com/mars-compute-ai/MarsTrace
-echo "${MARSTRACE_API_KEY:?create one at console.marscompute.ai, MarsTrace keys: mt_live_...}"
 marstrace hardware      # hardware ids, GPU, architecture, CUDA versions, token rates, agent model and limits
 marstrace credit        # available balance, the minimum a job needs to start, the page to add credit
 ```
 
+`403 forbidden` ("not active, or MarsTrace is not enabled") means the workspace cannot run
+MarsTrace yet: the user should check the console, and contact MarsCompute if it persists.
+
 Every command has an MCP tool of the server `marstrace` (`marstrace mcp`, registered by
-`.mcp.json`): `marstrace_hardware`, `marstrace_credit`, `marstrace_cubin_find`,
-`marstrace_cubin_show`, `marstrace_estimate`, `marstrace_submit`, `marstrace_jobs`,
-`marstrace_job`, `marstrace_wait`, `marstrace_cancel`, `marstrace_result`,
-`marstrace_fetch`, `marstrace_show`. They take local paths and move the files themselves.
-Use whichever is at hand; the steps below name both.
+`.mcp.json`): `marstrace_guide`, `marstrace_hardware`, `marstrace_credit`,
+`marstrace_cubin_find`, `marstrace_cubin_show`, `marstrace_estimate`, `marstrace_submit`,
+`marstrace_jobs`, `marstrace_job`, `marstrace_wait`, `marstrace_cancel`,
+`marstrace_result`, `marstrace_fetch`, `marstrace_show`. They take local paths and move the
+files themselves. Use whichever is at hand; the steps below name both. `marstrace guide`
+(MCP: `marstrace_guide`) prints this guide and the reading guide, for an agent without the
+plugin.
 
 ## 2. Settle the request
 
@@ -101,7 +127,27 @@ max_attempts = 2                  # 1 to 3, 2 when absent: how often a failed at
 
 - **Give the agent a way to run the launch.** A driver script with the shapes the user
   cares about, a launch manifest, or source the agent can build; without one it derives
-  the launch from source and spends turns on it. State the problem size in `intent`.
+  the launch from source and spends turns on it. State the problem size in `intent`. A
+  driver script that launches the kernel as the user does is the surest of the three.
+- **A launch manifest** is JSON whose `schema_version` is `marscompute.kernel-launch`. The
+  agent on the GPU host reads the rest as a description, so name the kernel, the launch
+  shape, the buffers and the arguments plainly:
+
+  ```json
+  {
+    "schema_version": "marscompute.kernel-launch",
+    "kernel": "square_matrix_mul",
+    "grid": [16, 16, 1],
+    "block": [16, 16, 1],
+    "dynamic_shared_memory_bytes": 0,
+    "buffers": [
+      {"name": "a", "dtype": "int32", "shape": [256, 256], "init": "random"},
+      {"name": "b", "dtype": "int32", "shape": [256, 256], "init": "random"},
+      {"name": "c", "dtype": "int32", "shape": [256, 256], "init": "zeros"}
+    ],
+    "arguments": ["a", "b", "c", 256]
+  }
+  ```
 - **Real data only where it steers control flow.** Random inputs time a GEMM or an
   attention kernel as well as real ones. Send tensors for routing tables, block tables,
   sequence lengths and anything else the kernel branches on.
@@ -124,7 +170,8 @@ How MarsTrace charges, which the user must hear before the first submission:
   at a time. The minimum is not the price.
 - **The whole job is charged the agent tokens it actually used**: the input, output,
   cache-read and cache-write tokens of every attempt, retried and failed attempts
-  included, at the token rates `marstrace hardware` shows. The GPU is not charged
+  included, at the token rates `marstrace hardware` shows. Most of an agent's tokens are
+  cache reads, so quote all five rates, not the input and output rates alone. The GPU is not charged
   separately. A failure on MarsCompute's side is charged too, and MarsCompute corrects a
   charge for its own fault with a credit adjustment; a job whose agent never ran costs
   nothing. A cancelled job pays for the tokens it used up to the stop.
@@ -176,6 +223,10 @@ failed job was charged before submitting again.
 marstrace fetch <job>             # into marstrace-results/<job>/; --wait on submit does it
 marstrace show marstrace-results/<job>/marstrace.json --stats
 ```
+
+The user can also watch the job and read its trace in the console, at
+https://console.marscompute.ai/tenant/trace/jobs; a region marked there and copied with a
+right click is a `marstrace show --select` command (skill `marstrace-read`, section 4).
 
 The result is `marstrace.json` and its `result-manifest.json`. Gate the trace before
 reading conclusions from it (skill `marstrace-read`, section 2): the quality must be

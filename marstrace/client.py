@@ -11,6 +11,7 @@ import urllib.request
 from dataclasses import dataclass
 from typing import Any
 from marstrace.error import ServiceError
+from marstrace.guide import AgentGuide
 from marstrace.schema import ResponseSchema
 
 
@@ -22,6 +23,8 @@ class Credentials:
     ENV_API_URL = "MARSTRACE_API_URL"
     API_URL_DEFAULT = "https://console.marscompute.ai/trace"
     API_KEY_PREFIX = "mt_live_"
+    # the code a tool result carries when the environment holds no usable key
+    CODE_KEY_MISSING = "api_key_missing"
 
     api_key: str
     api_url: str
@@ -42,8 +45,9 @@ class Credentials:
         ).strip()
         if not api_key.startswith(Credentials.API_KEY_PREFIX):
             raise ServiceError(
-                f"set {Credentials.ENV_API_KEY} to a MarsTrace API key, {Credentials.API_KEY_PREFIX}... "
-                "(console.marscompute.ai, MarsTrace keys)"
+                f"set {Credentials.ENV_API_KEY} to a MarsTrace API key, {Credentials.API_KEY_PREFIX}...\n"
+                + AgentGuide.SETUP_STEPS,
+                code=Credentials.CODE_KEY_MISSING,
             )
         return cls(
             api_key=api_key,

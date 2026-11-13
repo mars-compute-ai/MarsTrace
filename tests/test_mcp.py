@@ -7,6 +7,7 @@ import tempfile
 import unittest
 from typing import Any
 from fake_service import ADD_CREDIT_URL, API_KEY, EXAMPLE_DIRECTORY, FakeServer, agent_job
+from marstrace.viewer.common.trace.format.panel import SelectionToken
 
 REPOSITORY = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -84,7 +85,8 @@ class McpStdioTest(unittest.TestCase):
         self.assertEqual(
             [tool["name"] for tool in list_tool],
             [
-                "marstrace_hardware", "marstrace_credit", "marstrace_cubin_find", "marstrace_cubin_show",
+                "marstrace_guide", "marstrace_hardware", "marstrace_credit", "marstrace_cubin_find",
+                "marstrace_cubin_show",
                 "marstrace_estimate", "marstrace_submit", "marstrace_jobs", "marstrace_job", "marstrace_wait",
                 "marstrace_cancel", "marstrace_result", "marstrace_fetch", "marstrace_show",
             ],
@@ -95,6 +97,33 @@ class McpStdioTest(unittest.TestCase):
         self.assertEqual(submit["inputSchema"]["required"], ["directory", "accept_cost_at_bounds_usd"])
         self.assertIn("failed ones included", submit["description"])
         self.assertIn("minimum", result["instructions"])
+        self.assertIn("marstrace_guide", result["instructions"])
+        self.assertIn("intent", result["instructions"])
+
+    def test_guide_and_show_need_no_service(self) -> None:
+        self.initialize()
+        remote = self.call("marstrace_guide", topic="remote")
+        self.assertFalse(remote.get("isError", False))
+        text = remote["content"][0]["text"]
+        self.assertIn("# Tracing a kernel with MarsTrace", text)
+        self.assertIn("tenant/trace/keys", text)
+        self.assertNotIn("name: marstrace-remote", text)
+        read = self.call("marstrace_guide", topic="read")["content"][0]["text"]
+        self.assertIn("Gate the trace first", read)
+        self.assertEqual(self.send("tools/call", {"name": "marstrace_guide", "arguments": {}})["error"]["code"], -32602)
+
+    def test_show_with_a_selection_and_json_answers_the_json_alone(self) -> None:
+        self.initialize()
+        trace = os.path.join(REPOSITORY, "tests", "fixtures", "trace_sass_regions.json")
+        kernel = json.loads(self.call("marstrace_show", trace=trace, options=["--json"])["content"][0]["text"])[
+            "kernel_prototype"
+        ]
+        token = f"mtrace/1 kernel={SelectionToken.kernel_tag(kernel)} t=0:1000000000ns lane=block:0 order=thread"
+        shown = self.call("marstrace_show", trace=trace, options=["--select", token, "--json"])
+        self.assertFalse(shown["isError"])
+        self.assertIn("scope_stats", json.loads(shown["content"][0]["text"]))
+        stats = self.call("marstrace_show", trace=trace, options=["--select", token, "--stats"])["content"][0]["text"]
+        self.assertTrue(stats.startswith("\x1b[1mSelection:") or stats.startswith("Selection:"))
 
     def test_protocol_errors(self) -> None:
         self.initialize()
@@ -167,6 +196,48 @@ class McpStdioTest(unittest.TestCase):
         self.assertEqual(result["structuredContent"]["error"]["add_credit_url"], ADD_CREDIT_URL)
         missing = self.call("marstrace_cubin_show", binary=os.path.join(self.directory, "absent.cubin"))
         self.assertTrue(missing["isError"])
+
+
+class McpWithoutKeyTest(unittest.TestCase):
+    """The MCP server started before the user has a key: it answers, and says how to get one."""
+
+    def setUp(self) -> None:
+        environment = {key: value for key, value in os.environ.items() if key != "MARSTRACE_API_KEY"}
+        environment["PYTHONPATH"] = REPOSITORY
+        self.process = subprocess.Popen(
+            [sys.executable, "-m", "marstrace.cli", "mcp"],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            text=True,
+            env=environment,
+        )
+        self.addCleanup(self.stop)
+
+    def stop(self) -> None:
+        self.process.stdin.close()
+        self.process.wait(timeout=10)
+        self.process.stdout.close()
+
+    def send(self, request_id: int, method: str, params: dict[str, Any]) -> dict[str, Any]:
+        self.process.stdin.write(json.dumps({"jsonrpc": "2.0", "id": request_id, "method": method, "params": params}) + "\n")
+        self.process.stdin.flush()
+        return json.loads(self.process.stdout.readline())
+
+    def test_a_service_tool_answers_how_to_get_a_key(self) -> None:
+        initialized = self.send(
+            1,
+            "initialize",
+            {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "test", "version": "1"}},
+        )
+        self.assertIn("marstrace_guide", initialized["result"]["instructions"])
+        credit = self.send(2, "tools/call", {"name": "marstrace_credit", "arguments": {}})["result"]
+        self.assertTrue(credit["isError"])
+        error = json.loads(credit["content"][0]["text"])["error"]
+        self.assertEqual(error["code"], "api_key_missing")
+        for step in ("/register", "/tenant/billing/credits", "/tenant/trace/keys", "export MARSTRACE_API_KEY"):
+            self.assertIn(step, error["message"])
+        guide = self.send(3, "tools/call", {"name": "marstrace_guide", "arguments": {"topic": "read"}})["result"]
+        self.assertFalse(guide.get("isError", False))
 
 
 if __name__ == "__main__":

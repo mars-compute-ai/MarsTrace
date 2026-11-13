@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from typing import Any, TextIO
 from marstrace.binary import DslCache, KernelBinary
 from marstrace.error import MarsTraceError, ServiceError, ToolArgumentError
+from marstrace.guide import AgentGuide
 from marstrace.viewer.cli.show import ShowCommand
 from marstrace.workflow import MarsTraceWorkflow
 
@@ -105,15 +106,20 @@ class McpServer:
     SERVER_NAME = "marstrace"
     SERVER_VERSION = "0.1.0"
     INSTRUCTIONS = (
-        "Trace CUDA kernels with MarsTrace. A job directory holds marstrace.toml with [workspace] "
-        "(cubins, and optionally source, a launch manifest, tensors and files), [agent] (the session's "
-        "caps), optionally cuda_version (a CUDA version the hardware offers) and [limits] "
-        "(max_attempts); an agent on the GPU host traces the kernel from them. A job starts only while "
-        "the workspace's available balance reaches the minimum the estimate names, and it is charged "
-        "the agent tokens it actually used over every attempt, failed ones included, even past the "
-        "balance. Estimate the job, show the user its token rates and cost at the bounds and get "
-        "their yes, submit with accept_cost_at_bounds_usd, wait, fetch, then read marstrace.json with "
-        "marstrace_show."
+        "Trace the timeline inside a CUDA kernel on a cloud GPU with MarsTrace. Before the first job, "
+        "read marstrace_guide with topic remote, and before reading a trace, topic read: they hold "
+        "the whole workflow. The user needs a MarsCompute account with credit and a MarsTrace key "
+        "(mt_live_...) in MARSTRACE_API_KEY; a tool that calls the service without one answers how to "
+        "get it. A job is a local directory holding marstrace.toml: hardware (an id from "
+        "marstrace_hardware), intent (what the trace should answer, with the problem size), "
+        "[workspace] cubins (1 to 8 cubins built for the hardware's architecture) and optionally "
+        "source, manifest, tensors and files, [agent] caps, cuda_version and [limits] max_attempts. "
+        "A job starts only while the available balance reaches the minimum the estimate names, and "
+        "is charged the agent tokens it actually used over every attempt, failed ones included, even "
+        "past the balance. Estimate, show the user the token rates and the cost at the bounds and "
+        "get their yes, submit with accept_cost_at_bounds_usd, wait, fetch. Then check quality and "
+        "reason_codes in result-manifest.json before any number, and read marstrace.json with "
+        "marstrace_show, never with a JSON parser of your own."
     )
     # JSON-RPC error codes
     PARSE_ERROR = -32700
@@ -126,9 +132,24 @@ class McpServer:
     WAIT_SECONDS_MAX = 3600
     JOBS_LIMIT_DEFAULT = 20
 
-    def __init__(self, workflow: MarsTraceWorkflow) -> None:
-        self._workflow = workflow
+    def __init__(self, workflow_of: Callable[[], MarsTraceWorkflow]) -> None:
+        """A server whose tools reach the service through the workflow ``workflow_of`` makes.
+
+        The workflow is made at the first tool that calls the service, so the server starts and
+        answers its guide without a key, and a tool that needs one says how to get it.
+
+        Args:
+            workflow_of: makes the workflow; raises when the environment holds no usable key
+        """
+        self._workflow_of = workflow_of
+        self._workflow_made: MarsTraceWorkflow | None = None
         self._map_tool = {tool.name: tool for tool in self._tools()}
+
+    def _workflow(self) -> MarsTraceWorkflow:
+        """The workflow, made on first use."""
+        if self._workflow_made is None:
+            self._workflow_made = self._workflow_of()
+        return self._workflow_made
 
     def serve(
         self,
@@ -375,6 +396,25 @@ class McpServer:
         }
         return [
             McpTool(
+                name="marstrace_guide",
+                description="How to use MarsTrace, in full: topic remote is setting up an account and "
+                "a key, finding the cubin, gathering the workspace, sizing the caps, estimating, "
+                "submitting and fetching; topic read is gating a trace and reading it with "
+                "marstrace_show. Needs no key. Read remote before the first job and read before the "
+                "first trace.",
+                map_input_schema=McpServer._schema(
+                    map_property={
+                        "topic": {
+                            "type": "string",
+                            "enum": AgentGuide.topics(),
+                            "description": "remote or read",
+                        },
+                    },
+                    list_required=["topic"],
+                ),
+                handler=lambda map_arguments: AgentGuide.text(map_arguments["topic"]),
+            ),
+            McpTool(
                 name="marstrace_hardware",
                 description="List the hardware a job can run on: id, GPU, architecture, availability "
                 "and the CUDA versions a job can choose with the default one; the service's agent token "
@@ -383,7 +423,7 @@ class McpServer:
                     map_property={},
                     list_required=[],
                 ),
-                handler=lambda map_arguments: self._workflow.hardware(),
+                handler=lambda map_arguments: self._workflow().hardware(),
             ),
             McpTool(
                 name="marstrace_credit",
@@ -394,7 +434,7 @@ class McpServer:
                     map_property={},
                     list_required=[],
                 ),
-                handler=lambda map_arguments: self._workflow.credit(),
+                handler=lambda map_arguments: self._workflow().credit(),
             ),
             McpTool(
                 name="marstrace_cubin_find",
@@ -441,7 +481,7 @@ class McpServer:
                     },
                     list_required=["directory"],
                 ),
-                handler=lambda map_arguments: self._workflow.quote(
+                handler=lambda map_arguments: self._workflow().quote(
                     directory=map_arguments["directory"],
                     hardware=map_arguments.get("hardware"),
                     cuda_version=map_arguments.get("cuda_version"),
@@ -486,7 +526,7 @@ class McpServer:
                     },
                     list_required=[],
                 ),
-                handler=lambda map_arguments: self._workflow.jobs(
+                handler=lambda map_arguments: self._workflow().jobs(
                     limit=map_arguments.get("limit", McpServer.JOBS_LIMIT_DEFAULT),
                     cursor=map_arguments.get("cursor"),
                 ),
@@ -500,7 +540,7 @@ class McpServer:
                     map_property={"job_id": map_job_id},
                     list_required=["job_id"],
                 ),
-                handler=lambda map_arguments: self._workflow.job(map_arguments["job_id"]),
+                handler=lambda map_arguments: self._workflow().job(map_arguments["job_id"]),
             ),
             McpTool(
                 name="marstrace_wait",
@@ -513,7 +553,7 @@ class McpServer:
                     },
                     list_required=["job_id"],
                 ),
-                handler=lambda map_arguments: self._workflow.wait(
+                handler=lambda map_arguments: self._workflow().wait(
                     job_id=map_arguments["job_id"],
                     timeout_seconds=min(
                         map_arguments.get("timeout_seconds", McpServer.WAIT_SECONDS_DEFAULT),
@@ -528,7 +568,7 @@ class McpServer:
                     map_property={"job_id": map_job_id},
                     list_required=["job_id"],
                 ),
-                handler=lambda map_arguments: self._workflow.cancel(map_arguments["job_id"]),
+                handler=lambda map_arguments: self._workflow().cancel(map_arguments["job_id"]),
             ),
             McpTool(
                 name="marstrace_result",
@@ -538,7 +578,7 @@ class McpServer:
                     map_property={"job_id": map_job_id},
                     list_required=["job_id"],
                 ),
-                handler=lambda map_arguments: self._workflow.result(map_arguments["job_id"]),
+                handler=lambda map_arguments: self._workflow().result(map_arguments["job_id"]),
             ),
             McpTool(
                 name="marstrace_fetch",
@@ -552,7 +592,7 @@ class McpServer:
                     list_required=["job_id"],
                 ),
                 handler=lambda map_arguments: {
-                    "files": self._workflow.fetch(
+                    "files": self._workflow().fetch(
                         job_id=map_arguments["job_id"],
                         output_directory=map_arguments.get("output") or os.path.join(
                             MarsTraceWorkflow.RESULTS_DIRECTORY,
@@ -564,7 +604,12 @@ class McpServer:
             McpTool(
                 name="marstrace_show",
                 description="Read a fetched marstrace.json with the trace viewer; options are the "
-                "'marstrace show' options, e.g. ['--stats'], ['--bubbles'], ['--json'].",
+                "'marstrace show' options, e.g. ['--stats'], ['--bubbles'], ['--json'], "
+                "['--select', '<mtrace/1 token>']. Check quality and reason_codes in the "
+                "result-manifest.json beside it first: an unusable or partial trace limits what it "
+                "can support. Times are in the report's clock (ns, or cyc for an sm clock), and a "
+                "warp-level run's rows are warps. With --json the answer is the JSON alone. "
+                "marstrace_guide topic read says how to find the bubbles.",
                 map_input_schema=McpServer._schema(
                     map_property={
                         "trace": {"type": "string", "description": "the marstrace.json"},
@@ -603,7 +648,7 @@ class McpServer:
         key the job directory already submitted under is submitted again as recorded."""
         idempotency_key = map_arguments.get("idempotency_key")
         if idempotency_key is not None:
-            map_job = self._workflow.resubmit(
+            map_job = self._workflow().resubmit(
                 directory=map_arguments["directory"],
                 idempotency_key=idempotency_key,
             )
@@ -612,19 +657,19 @@ class McpServer:
                     "estimate": None,
                     "job": map_job,
                 }
-        quoted = self._workflow.quote(
+        quoted = self._workflow().quote(
             directory=map_arguments["directory"],
             hardware=map_arguments.get("hardware"),
             cuda_version=map_arguments.get("cuda_version"),
         )
-        self._workflow.check_admissible(quoted)
+        self._workflow().check_admissible(quoted)
         McpServer._check_accepted(
             cost_micro_usd=quoted.map_quote["cost_at_bounds_micro_usd"]["total"],
             accepted_usd=map_arguments["accept_cost_at_bounds_usd"],
         )
         return {
             "estimate": quoted.summary(),
-            "job": self._workflow.submit(
+            "job": self._workflow().submit(
                 quoted=quoted,
                 idempotency_key=idempotency_key,
             ),
@@ -634,13 +679,20 @@ class McpServer:
         """The viewer's output on a trace."""
         parser = argparse.ArgumentParser(prog="marstrace")
         ShowCommand().register(parser.add_subparsers())
+        list_option = map_arguments.get("options", [])
         output = io.StringIO()
-        with contextlib.redirect_stdout(output), contextlib.redirect_stderr(output):
+        notes = io.StringIO()
+        with contextlib.redirect_stdout(output), contextlib.redirect_stderr(notes):
             try:
-                args = parser.parse_args(["show", map_arguments["trace"], *map_arguments.get("options", [])])
+                args = parser.parse_args(["show", map_arguments["trace"], *list_option])
                 args.func(args)
             except SystemExit as err:
-                raise MarsTraceError(f"marstrace show refused the options: {output.getvalue().strip()}") from err
+                raise MarsTraceError(
+                    f"marstrace show refused the options: {(notes.getvalue() + output.getvalue()).strip()}"
+                ) from err
             except ValueError as err:
                 raise MarsTraceError(f"marstrace show cannot read {map_arguments['trace']}: {err}") from err
-        return output.getvalue()
+        # a JSON answer is the JSON alone; otherwise the viewer's notes lead, as on a terminal
+        if "--json" in list_option:
+            return output.getvalue()
+        return notes.getvalue() + output.getvalue()

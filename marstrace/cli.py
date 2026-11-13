@@ -5,6 +5,7 @@ import sys
 from typing import Any
 from marstrace.binary import DslCache, KernelBinary
 from marstrace.error import MarsTraceError
+from marstrace.guide import AgentGuide
 from marstrace.mcp import McpServer
 from marstrace.viewer.cli.show import ShowCommand
 from marstrace.workflow import MarsTraceWorkflow, QuotedJob
@@ -95,6 +96,9 @@ class JobCommands:
         else:
             print(
                 f"tokens    {MarsTraceWorkflow.usd(map_rates['agent_input_micro_usd_per_million'])} input, "
+                f"{MarsTraceWorkflow.usd(map_rates['agent_cache_read_micro_usd_per_million'])} cache read, "
+                f"{MarsTraceWorkflow.usd(map_rates['agent_cache_write_5m_micro_usd_per_million'])} 5-minute cache write, "
+                f"{MarsTraceWorkflow.usd(map_rates['agent_cache_write_1h_micro_usd_per_million'])} 1-hour cache write, "
                 f"{MarsTraceWorkflow.usd(map_rates['agent_output_micro_usd_per_million'])} output "
                 "per million, on every hardware"
             )
@@ -288,9 +292,18 @@ class JobCommands:
         )
 
     @staticmethod
+    def guide(args: argparse.Namespace) -> None:
+        """Print one guide, or the list of guides."""
+        if args.topic is None:
+            for topic in AgentGuide.topics():
+                print(f"{topic:<8} {AgentGuide.MAP_TOPIC_SUMMARY[topic]}")
+            return
+        print(AgentGuide.text(args.topic), end="")
+
+    @staticmethod
     def mcp(args: argparse.Namespace) -> None:
         """Serve the operations as MCP tools over stdio."""
-        McpServer(MarsTraceWorkflow.from_environment()).serve(
+        McpServer(workflow_of=MarsTraceWorkflow.from_environment).serve(
             input_stream=sys.stdin,
             output_stream=sys.stdout,
         )
@@ -461,6 +474,18 @@ class CommandLine:
             help="serve these operations as MCP tools over stdio",
         )
         mcp.set_defaults(func=JobCommands.mcp)
+
+        guide = subparsers.add_parser(
+            name="guide",
+            help="print the guide an agent follows: remote (set up, submit, fetch) or read (read a trace)",
+        )
+        guide.add_argument(
+            "topic",
+            nargs="?",
+            choices=AgentGuide.topics(),
+            help="the guide to print; the list of guides when absent",
+        )
+        guide.set_defaults(func=JobCommands.guide)
 
     @staticmethod
     def _add_binary_commands(subparsers: argparse._SubParsersAction) -> None:

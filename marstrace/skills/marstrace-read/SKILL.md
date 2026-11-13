@@ -64,11 +64,17 @@ or a warp.
 
 | Reason code | What it means for the reading |
 | --- | --- |
+| `no_trace_produced` | the session ended without a trace: no timeline exists. The other codes say why |
+| `session_turn_limit_reached`, `session_time_limit_reached` | the agent stopped at `[agent] max_turns` or `max_wall_seconds`. What it published is complete, but it may not have placed every probe it meant to: check the regions against `intent`. Raise the cap before submitting again |
+| `agent_session_incomplete` | the agent's session ended early for another reason; read what was published with the same care |
 | `empty_trace` | nothing recorded: the sites never executed under this launch. No timeline exists |
 | `sites_without_records` | some sites never executed on the traced path; regions using them are empty |
-| `record_capacity_reached_possible_wrap` | some rows filled their record buffer: counts are lower bounds and the earliest records are lost. Ask in `intent` for fewer sites per iteration or for warp-level records |
-| `unpaired_region_boundaries` | a region's pair rate is below 100%: unequal enter and leave counts, or a wrapped record buffer. Say which before using its numbers |
+| `unpaired_region_boundaries` | a region's pair rate is below 100%: unequal enter and leave counts, or a record buffer that wrapped. Say which before using its numbers |
 | `regions_without_intervals` | a declared region produced no interval: its sites are backwards or on disjoint paths |
+| `record_limit_reached`, `trace_size_limit_reached` | the report was cut to fit: later records or runs are missing, so counts are lower bounds. Ask in `intent` for fewer sites per iteration, warp-level records or a smaller launch |
+| `run_limit_reached`, `run_file_too_large` | some runs the agent saved were left out of the report |
+| `non_sass_runs_skipped`, `mixed_granularity_runs_skipped`, `mixed_clock_runs_skipped`, `run_not_publishable`, `run_redaction_failed` | some runs were left out because they could not be published alongside the others; the report holds the rest |
+| `out_of_range_records_dropped` | records outside the run's time range were dropped; the intervals that remain are sound |
 
 A code not in this table is still a limit: quote it to the user rather than ignore it.
 
@@ -110,17 +116,22 @@ say what would explain it, and what trace would tell the explanations apart.
 ## 4. A selection token names a region
 
 A selection token is one line that names a stretch of time and a set of lanes of one
-kernel's trace:
+kernel's trace. The user copies it with a right click on the trace in the console's job page,
+as the token alone or as the whole `marstrace show` command:
 
 ```
 mtrace/1 kernel=square_matrix_mul#ef46 t=4365:11462ns lane=block:15-33 order=role scopes=mainloop
 ```
 
-When the user pastes one, hand it to the viewer verbatim:
+When the user pastes one, hand it to the viewer verbatim, on the run it was copied from
+(`--run <n>` for any run but the first, as the copied command already says):
 
 ```bash
-marstrace show marstrace.json --select 'mtrace/1 ...' --stats
+marstrace show marstrace-results/<job>/marstrace.json --select 'mtrace/1 ...' --stats
 ```
+
+The command reads the fetched result, so run `marstrace fetch <job>` first when it is not
+there.
 
 - **Do not rewrite it into `--tid` or `--stime`.** Its lane ids count across the launch
   (a warp counts from the grid), while `--warp` counts within a block; rewriting it by

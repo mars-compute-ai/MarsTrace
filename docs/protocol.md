@@ -138,6 +138,7 @@ contract:
 | Code | Status | Client |
 | --- | --- | --- |
 | `invalid_request` | 400 | the message names the field; a CUDA version the hardware does not offer names the ones it does |
+| `api_key_missing` | none | raised by the client, before any call, when `MARSTRACE_API_KEY` holds no `mt_live_` key; names the console steps that give one |
 | `authentication_required` | 401 | set `MARSTRACE_API_KEY` to a live key |
 | `insufficient_credit`, `spending_limit_exceeded`, `billing_suspended` | 402 | the available balance is below the minimum a job needs, or billing is not active; names the console page where credit is added |
 | `forbidden` | 403 | the account or workspace is not active for MarsTrace |
@@ -188,7 +189,12 @@ remote MCP tools: `marstrace_hardware`, `marstrace_credit`, `marstrace_estimate`
 `marstrace_cancel` and `marstrace_result`. `marstrace_estimate` and `marstrace_submit`
 take a job directory and upload it themselves, so the remote `marstrace_upload` and
 `marstrace_upload_complete` have no local counterpart. The local tools are
-`marstrace_cubin_find`, `marstrace_cubin_show`, `marstrace_fetch` and `marstrace_show`.
+`marstrace_guide`, `marstrace_cubin_find`, `marstrace_cubin_show`, `marstrace_fetch` and
+`marstrace_show`; `marstrace_guide` returns the skills `marstrace-remote` (topic `remote`) and
+`marstrace-read` (topic `read`) that the package ships, as `marstrace guide` prints them.
+The server starts without `MARSTRACE_API_KEY`: the local tools answer, and a tool that calls
+the service answers `api_key_missing` with the steps that give the user a key.
+`marstrace_show` with `--json` answers the JSON alone.
 `marstrace_submit` takes `accept_cost_at_bounds_usd`, the cost at the bounds the user
 agreed to, and refuses an estimate whose cost at the bounds is above it, since prices are
 read again at submission.

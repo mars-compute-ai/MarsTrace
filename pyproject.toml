@@ -21,6 +21,9 @@ Source = "https://github.com/mars-compute-ai/MarsTrace"
 [project.scripts]
 marstrace = "marstrace.cli:main"
 
+[tool.setuptools.package-data]
+marstrace = ["skills/*/SKILL.md"]
+
 [tool.setuptools.packages.find]
 include = [
     "marstrace*",
