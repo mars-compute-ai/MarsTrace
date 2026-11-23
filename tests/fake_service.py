@@ -291,6 +291,7 @@ class FakeState:
         self.hold_status: str | None = None
         # whether a job's first attempt is preempted while it runs, and retried
         self.do_preempt_first_attempt = False
+        self.is_trace_unusable = False
         # whether admission refuses although the estimate said admissible, as when another job took the balance
         self.do_refuse_admission = False
         # submissions to drop without an answer, to exercise the retry under one key
@@ -521,6 +522,8 @@ class FakeService(http.server.BaseHTTPRequestHandler):
                 list_line[0] = {"dimension": "service_agent_cache_read_tokens", "quantity": 1124000, "amount_micro_usd": "2023200"}
             job["cost"]["charged_micro_usd"] = str(sum(int(line["amount_micro_usd"]) for line in list_line))
             job["cost"]["lines"] = list_line
+            if state.is_trace_unusable:
+                job["cost"].update(charged_micro_usd="0", lines=[], not_charged_reason="unusable_result")
             job["result"] = self._result_summary(job)
             if state.available_micro_usd is not None:
                 state.available_micro_usd -= int(job["cost"]["charged_micro_usd"])

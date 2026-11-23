@@ -15,7 +15,8 @@ from marstrace.tensors import TensorFile
 @dataclass
 class JobLimits:
     """The optional ``[limits]`` table: how many attempts a job may take. A job is charged its
-    actual usage over every attempt, so ``max_attempts`` and ``[agent]`` bound what it can cost.
+    actual usage over every attempt, nothing when its trace is unusable, so ``max_attempts``
+    and ``[agent]`` bound what it can cost.
 
     Args:
         max_attempts: the most attempts, or None for the service's default

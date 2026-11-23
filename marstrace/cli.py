@@ -70,7 +70,10 @@ class JobCommands:
                 line += f": {map_attempt['error']['code']}: {map_attempt['error']['message']}"
             print(line)
         print(f"held      {MarsTraceWorkflow.usd(map_cost['held_micro_usd'])}")
-        print(f"charged   {MarsTraceWorkflow.usd(map_cost['charged_micro_usd'])}")
+        charged = f"charged   {MarsTraceWorkflow.usd(map_cost['charged_micro_usd'])}"
+        if map_cost.get("not_charged_reason") == MarsTraceWorkflow.UNUSABLE_REASON:
+            charged += " (the trace is unusable, so the job is not charged)"
+        print(charged)
         for map_line in map_cost["lines"]:
             if map_line["quantity"] == 0:
                 continue
@@ -169,7 +172,7 @@ class JobCommands:
         print(
             f"at most   {map_cost['total_usd']}: {map_cost['agent_tokens_per_attempt_usd']} of tokens per attempt"
         )
-        print("charged   the tokens every attempt actually used, failed ones included")
+        print("charged   the tokens every attempt actually used, failed ones included; nothing if the trace is unusable")
         print(f"balance   {map_summary['available_usd']} available, {map_summary['minimum_usd']} needed to start")
         if not map_summary["admissible"]:
             print(f"refused   {map_summary['message'] or 'the available balance is below the minimum'}")

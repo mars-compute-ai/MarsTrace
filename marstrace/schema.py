@@ -199,6 +199,7 @@ class ResponseSchema:
         "cost": {
             "held_micro_usd": (MONEY, None),
             "charged_micro_usd": (MONEY, None),
+            "not_charged_reason?": (str, None),
             "lines": [
                 {
                     "dimension": str,
