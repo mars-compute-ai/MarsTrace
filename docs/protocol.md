@@ -67,7 +67,8 @@ max_attempts = 2
 other key or table is refused. `marstrace estimate` and `submit` take `--cuda-version` to
 override `cuda_version`, and the MCP tools take `cuda_version`; the client checks the
 version against the hardware before it uploads anything. The request carries no amount of
-money: a job is charged the agent tokens it actually used (section 7). The agent's
+money: a job is charged the agent tokens it actually used, or nothing when its trace is
+unusable (section 7). The agent's
 model is not a request field: every job runs the model `GET /v1/hardware` names. A file is
 named once in `[workspace]`, and all inputs together hold at most 256 MiB. A cubin is an
 ELF cubin; PTX is refused. A launch manifest is JSON whose `schema_version` is
@@ -155,10 +156,10 @@ A failed job carries `error` with `code` and `message`, and each failed attempt 
 
 ## 7. Cost
 
-A job is charged the agent tokens it actually used, whatever its outcome: the input, output,
-cache-read and cache-write tokens of every attempt, retried and failed attempts included,
-at the service's token rates, the same on every hardware. A job whose agent never ran is charged
-nothing. The usage is charged in full even when it passes the available balance.
+A job is charged the agent tokens it actually used: the input, output, cache-read and
+cache-write tokens of every attempt, retried and failed attempts included, at the service's
+token rates, the same on every hardware. A job whose trace is delivered `unusable`, whatever
+the cause, and a job whose agent never ran are charged nothing. The usage is charged in full even when it passes the available balance.
 
 An estimate (`POST /v1/quotes`) answers:
 
@@ -177,6 +178,8 @@ settles (`cost.held_micro_usd` of the job), so a workspace runs as many jobs at 
 balance holds minimums. A job's `progress.usage_micro_usd` is its usage so far; once it
 settles, `cost.charged_micro_usd` and `cost.lines`, `{dimension, quantity,
 amount_micro_usd}` per token dimension of the rate card, hold the charge, which may exceed the hold.
+A job charged nothing says why in `cost.not_charged_reason`: `unusable_result`,
+`not_started` or `cancelled_before_start`; it is `null` or absent otherwise.
 `marstrace submit` prints the CUDA version, the token rates, the cost at the bounds and the balance, refuses a job
 that is not admissible, and asks before it submits, unless `--yes`.
 
