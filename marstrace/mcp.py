@@ -116,7 +116,8 @@ class McpServer:
         "source, manifest, tensors and files, [agent] caps, cuda_version and [limits] max_attempts. "
         "A job starts only while the available balance reaches the minimum the estimate names, and "
         "is charged the agent tokens it actually used over every attempt, failed ones included, even "
-        "past the balance. Estimate, show the user the token rates and the cost at the bounds and "
+        "past the balance; a job whose trace is unusable is not charged. Estimate, show the user "
+        "the token rates and the cost at the bounds and "
         "get their yes, submit with accept_cost_at_bounds_usd, wait, fetch. Then check quality and "
         "reason_codes in result-manifest.json before any number, and read marstrace.json with "
         "marstrace_show, never with a JSON parser of your own."
@@ -491,7 +492,8 @@ class McpServer:
                 name="marstrace_submit",
                 description="Price and submit a job directory. Show the user the estimate's rates and "
                 "cost_at_bounds.total_usd first, say that the job is charged the tokens it actually used over every "
-                "attempt, failed ones included, even past the available balance, and submit only with "
+                "attempt, failed ones included, even past the available balance, or nothing if its trace is "
+                "unusable, and submit only with "
                 "their consent. accept_cost_at_bounds_usd is the cost at the bounds they agreed to; a "
                 "higher one is refused. Reuse idempotency_key when retrying a submission whose answer "
                 "was lost.",

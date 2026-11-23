@@ -1,6 +1,6 @@
 ---
 name: marstrace-remote
-description: Trace the timeline inside one CUDA kernel on an H200, B200 or B300 with MarsTrace, without a local GPU. Gather the kernel's cubins (from nvcc, Triton, torch.compile, TileLang or CuTeDSL output), and optionally its source, a launch description, input data and a driver script, into a workspace that an agent on the GPU host traces within the caps you set. Then estimate the cost, submit, fetch marstrace.json and read it. A job starts once the workspace's balance reaches a minimum and is charged the agent tokens it actually used, failed attempts included. Works through the `marstrace` CLI or its stdio MCP server (`marstrace mcp`). Use when the user wants per-phase durations, pipeline bubbles or warp-role scheduling inside a kernel.
+description: Trace the timeline inside one CUDA kernel on an H200, B200 or B300 with MarsTrace, without a local GPU. Gather the kernel's cubins (from nvcc, Triton, torch.compile, TileLang or CuTeDSL output), and optionally its source, a launch description, input data and a driver script, into a workspace that an agent on the GPU host traces within the caps you set. Then estimate the cost, submit, fetch marstrace.json and read it. A job starts once the workspace's balance reaches a minimum and is charged the agent tokens it actually used, failed attempts included, or nothing when its trace is unusable. Works through the `marstrace` CLI or its stdio MCP server (`marstrace mcp`). Use when the user wants per-phase durations, pipeline bubbles or warp-role scheduling inside a kernel.
 ---
 
 # Tracing a kernel with MarsTrace
@@ -172,9 +172,10 @@ How MarsTrace charges, which the user must hear before the first submission:
   cache-read and cache-write tokens of every attempt, retried and failed attempts
   included, at the token rates `marstrace hardware` shows. Most of an agent's tokens are
   cache reads, so quote all five rates, not the input and output rates alone. The GPU is not charged
-  separately. A failure on MarsCompute's side is charged too, and MarsCompute corrects a
-  charge for its own fault with a credit adjustment; a job whose agent never ran costs
-  nothing. A cancelled job pays for the tokens it used up to the stop.
+  separately. A job whose trace is delivered `unusable` costs nothing, whatever the cause,
+  and so does a job whose agent never ran. Another failure on MarsCompute's side is charged,
+  and MarsCompute corrects a charge for its own fault with a credit adjustment. A cancelled
+  job pays for the tokens it used up to the stop.
 - **Usage is charged in full even past the available balance**; the balance can go
   negative. The cost at the bounds is the most the job can cost.
 

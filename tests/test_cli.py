@@ -152,6 +152,12 @@ class CommandLineTest(unittest.TestCase):
         self.assertEqual(status, 0)
         self.assertIn("mainloop", output)
 
+    def test_a_job_whose_trace_is_unusable_says_it_is_not_charged(self) -> None:
+        self.fake.state.is_trace_unusable = True
+        status, output, error = self.run_cli("submit", self.directory, "--yes", "--wait")
+        self.assertEqual(status, 0, error)
+        self.assertIn("charged   $0.000000 (the trace is unusable, so the job is not charged)", output)
+
     def test_every_attempt_is_charged_and_the_balance_gates_the_next_job(self) -> None:
         self.fake.state.do_preempt_first_attempt = True
         status, output, error = self.run_cli("submit", self.directory, "--yes", "--wait")
