@@ -1,7 +1,7 @@
 {
   "name": "marstrace",
   "description": "Trace CUDA kernels on cloud GPUs with MarsTrace and read the traces in the terminal",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "homepage": "https://marscompute.ai",
   "repository": "https://github.com/mars-compute-ai/MarsTrace",
   "skills": [
