@@ -1,0 +1,10 @@
+Required Notice: Copyright 2026 MarsCompute (https://marscompute.ai)
+
+The MarsTrace client is licensed under the PolyForm Noncommercial License 1.0.0,
+whose terms are in LICENSE and at https://polyformproject.org/licenses/noncommercial/1.0.0
+
+LICENSE-ADDITIONAL-PERMISSION grants MarsCompute's customers an additional permission to use
+the client, commercially included, to access the MarsTrace service.
+
+The trace viewer in marstrace/viewer/ comes from MarsCompute's own trace viewer. It is
+provided under the same license.

@@ -43,8 +43,8 @@ class CommandLineTest(unittest.TestCase):
         self.assertEqual(status, 0)
         self.assertEqual(
             output.count(
-                "$18.000000 input, $1.800000 cache read, $22.500000 5-minute cache write, "
-                "$36.000000 1-hour cache write, $90.000000 output per million, on every hardware"
+                "$7.000000 input, $0.700000 cache read, $8.750000 5-minute cache write, "
+                "$14.000000 1-hour cache write, $35.000000 output per million, on every hardware"
             ),
             1,
         )
@@ -82,7 +82,7 @@ class CommandLineTest(unittest.TestCase):
         self.assertIn("hardware  h200, H200 (sm_90a)", output)
         self.assertIn("cuda      13.0", output)
         self.assertIn("bounds    per attempt 4000000 input and 60000 output tokens; 2 attempt(s)", output)
-        self.assertIn("at most   $298.800000: $149.400000 of tokens per attempt", output)
+        self.assertIn("at most   $116.200000: $58.100000 of tokens per attempt", output)
         self.assertNotIn("GPU", output)
         self.assertIn("failed ones included", output)
         self.assertIn("balance   $118.250000 available, $100.000000 needed to start", output)
@@ -96,8 +96,8 @@ class CommandLineTest(unittest.TestCase):
         status, output, error = self.run_cli("estimate", directory, "--hardware", "h200", "--cuda-version", "12.9")
         self.assertEqual(status, 0, error)
         self.assertIn(
-            "tokens    claude-opus-5-5: $18.000000 input, $1.800000 cache read, $22.500000 5-minute cache write, "
-            "$36.000000 1-hour cache write, $90.000000 output per million",
+            "tokens    claude-opus-5-5: $7.000000 input, $0.700000 cache read, $8.750000 5-minute cache write, "
+            "$14.000000 1-hour cache write, $35.000000 output per million",
             output,
         )
         self.assertIn("per attempt 2000000 input and 100000 output tokens; 1 attempt(s)", output)
@@ -140,9 +140,9 @@ class CommandLineTest(unittest.TestCase):
         self.assertEqual(status, 0, output)
         self.assertIn("quality   usable", output)
         self.assertIn("held      $100.000000", output)
-        self.assertIn("charged   $4.954500", output)
+        self.assertIn("charged   $1.926750", output)
         self.assertIn("cuda      13.0", output)
-        self.assertIn("          service_agent_output_tokens 38810: $3.492900", output)
+        self.assertIn("          service_agent_output_tokens 38810: $1.358350", output)
         self.assertNotIn("service_agent_input_tokens", output)
         self.assertIn("attempt   1 succeeded", output)
         job_id = next(iter(self.fake.state.map_job))
@@ -172,10 +172,10 @@ class CommandLineTest(unittest.TestCase):
         status, output, error = self.run_cli("submit", self.directory, "--yes", "--wait")
         self.assertEqual(status, 0, error)
         self.assertIn("attempt   1 failed (supplier): vm_preempted: The GPU machine was reclaimed by the supplier.", output)
-        self.assertIn("charged   $5.516100", output)
+        self.assertIn("charged   $2.145150", output)
         status, output, error = self.run_cli("submit", self.directory, "--yes")
         self.assertEqual(status, 1)
-        self.assertIn("balance   $12.733900 available, $100.000000 needed to start", output)
+        self.assertIn("balance   $16.104850 available, $100.000000 needed to start", output)
         self.assertIn(ADD_CREDIT_URL, error)
 
     def test_a_recorded_key_is_resubmitted(self) -> None:

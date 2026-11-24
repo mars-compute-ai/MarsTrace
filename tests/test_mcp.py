@@ -125,6 +125,21 @@ class McpStdioTest(unittest.TestCase):
         stats = self.call("marstrace_show", trace=trace, options=["--select", token, "--stats"])["content"][0]["text"]
         self.assertTrue(stats.startswith("\x1b[1mSelection:") or stats.startswith("Selection:"))
 
+    def test_show_answers_the_delivered_analysis(self) -> None:
+        self.initialize()
+        with open(os.path.join(REPOSITORY, "tests", "fixtures", "trace_sass_regions.json")) as trace_file:
+            document = json.load(trace_file)
+        with open(os.path.join(REPOSITORY, "tests", "fixtures", "analysis_section.json")) as section_file:
+            document["sections"].append(json.load(section_file))
+        trace = os.path.join(self.directory, "with-analysis.json")
+        with open(trace, "w") as trace_file:
+            json.dump(document, trace_file)
+        text = self.call("marstrace_show", trace=trace, options=["--analysis"])["content"][0]["text"]
+        self.assertIn("[WORK-ONLY]", text)
+        self.assertIn("enter site 0: SASS 34 PLOP3.LUT (matmul.cu:9)", text)
+        data = json.loads(self.call("marstrace_show", trace=trace, options=["--analysis", "--json"])["content"][0]["text"])
+        self.assertEqual(data["summary"]["schema"], "xplain.summary/2")
+
     def test_protocol_errors(self) -> None:
         self.initialize()
         self.assertEqual(self.send("resources/list")["error"]["code"], -32601)
@@ -142,19 +157,19 @@ class McpStdioTest(unittest.TestCase):
         binary = os.path.join(self.directory, "matmul.cubin")
         self.assertEqual(self.call("marstrace_cubin_show", binary=binary)["structuredContent"]["kernels"], ["square_matrix_mul"])
         quote = self.call("marstrace_estimate", directory=self.directory)["structuredContent"]
-        self.assertEqual((quote["cost_at_bounds"]["total_usd"], quote["cuda_version"]), ("$298.800000", "13.0"))
+        self.assertEqual((quote["cost_at_bounds"]["total_usd"], quote["cuda_version"]), ("$116.200000", "13.0"))
         self.assertEqual(self.call("marstrace_estimate", directory=self.directory, cuda_version="12.9")["structuredContent"]["cuda_version"], "12.9")
         self.assertTrue(self.call("marstrace_estimate", directory=self.directory, cuda_version="12.7")["isError"])
         self.assertEqual((quote["minimum_usd"], quote["available_usd"], quote["admissible"]), ("$100.000000", "$118.250000", True))
-        refused = self.call("marstrace_submit", directory=self.directory, accept_cost_at_bounds_usd=298)
+        refused = self.call("marstrace_submit", directory=self.directory, accept_cost_at_bounds_usd=116)
         self.assertTrue(refused["isError"])
-        self.assertIn("is $298.800000, above the accepted $298", refused["structuredContent"]["error"]["message"])
+        self.assertIn("is $116.200000, above the accepted $116", refused["structuredContent"]["error"]["message"])
         self.assertEqual(self.fake.state.map_job, {})
-        submitted = self.call("marstrace_submit", directory=self.directory, accept_cost_at_bounds_usd=298.8, cuda_version="12.9", idempotency_key="k-1")
-        self.assertEqual(submitted["structuredContent"]["estimate"]["cost_at_bounds"]["total_usd"], "$298.800000")
+        submitted = self.call("marstrace_submit", directory=self.directory, accept_cost_at_bounds_usd=116.2, cuda_version="12.9", idempotency_key="k-1")
+        self.assertEqual(submitted["structuredContent"]["estimate"]["cost_at_bounds"]["total_usd"], "$116.200000")
         self.assertEqual(submitted["structuredContent"]["job"]["cuda_version"], "12.9")
         job_id = submitted["structuredContent"]["job"]["job_id"]
-        again = self.call("marstrace_submit", directory=self.directory, accept_cost_at_bounds_usd=298.8, cuda_version="12.9", idempotency_key="k-1")
+        again = self.call("marstrace_submit", directory=self.directory, accept_cost_at_bounds_usd=116.2, cuda_version="12.9", idempotency_key="k-1")
         self.assertEqual(again["structuredContent"]["job"]["job_id"], job_id)
         self.assertEqual(len(self.fake.state.map_job), 1)
         self.assertEqual(self.call("marstrace_wait", job_id=job_id, timeout_seconds=30)["structuredContent"]["status"], "succeeded")

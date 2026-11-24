@@ -1,14 +1,20 @@
 [build-system]
 requires = [
-    "setuptools>=68",
+    "setuptools>=77",
 ]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "mars-trace"
-version = "0.2.0"
+version = "0.2.1"
 description = "Trace CUDA kernels on cloud GPUs with MarsTrace and read the traces in the terminal"
 readme = "README.md"
+license = "LicenseRef-PolyForm-Noncommercial-1.0.0"
+license-files = [
+    "LICENSE",
+    "LICENSE-ADDITIONAL-PERMISSION",
+    "NOTICE",
+]
 requires-python = ">=3.11"
 dependencies = [
     "prettytable>=3",

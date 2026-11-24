@@ -31,7 +31,7 @@ class TraceSchema:
     WARP_LABEL = "warp"
 
     # the boundary kinds a scope record carries, by their reserved ids: stable across runs,
-    # so an instrumented kernel encodes them as compile-time constants
+    # so a report written by one run reads the same in another
     MAP_TYPE_ID_RESERVED = {
         "SCOPE_START": 1,
         "SCOPE_END": 2,

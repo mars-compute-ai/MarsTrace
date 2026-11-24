@@ -105,7 +105,7 @@ class McpServer:
         "2025-11-25",
     )
     SERVER_NAME = "marstrace"
-    SERVER_VERSION = "0.2.0"
+    SERVER_VERSION = "0.2.1"
     INSTRUCTIONS = (
         "Trace the timeline inside a CUDA kernel on a cloud GPU with MarsTrace. Before the first job, "
         "read marstrace_guide with topic remote, and before reading a trace, topic read: they hold "
@@ -699,7 +699,9 @@ class McpServer:
     def _show(self, map_arguments: dict[str, Any]) -> str:
         """The viewer's output on a trace."""
         parser = argparse.ArgumentParser(prog="marstrace")
-        ShowCommand().register(parser.add_subparsers())
+        subparsers = parser.add_subparsers()
+        ShowCommand().register(subparsers)
+        DeliveredAnalysis.extend_show(subparsers)
         list_option = map_arguments.get("options", [])
         output = io.StringIO()
         notes = io.StringIO()

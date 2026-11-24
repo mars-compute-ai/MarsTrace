@@ -14,6 +14,11 @@ class SiteRegion:
     leave_site: int
     label: str
 
+    @property
+    def is_period(self) -> bool:
+        """Whether the region is a period: one site both opens and closes its intervals."""
+        return self.enter_site == self.leave_site
+
     def to_json(self) -> list[Any]:
         """The region as the JSON archive keeps it.
 
@@ -31,8 +36,9 @@ class SiteRegion:
         """The caller's region list as :class:`SiteRegion` entries.
 
         A caller may name a region as a triple, or as a pair whose label defaults to the
-        two site ids. A region naming the same site twice is rejected: an instruction
-        cannot both open and close the same interval.
+        two site ids. A region naming the same site twice is a period: each interval runs
+        from one firing of the site to the row's next, which on a loop-head site is one
+        turn of the loop.
 
         Args:
             list_site_region: the regions as the caller or a saved report named them, each a
@@ -41,9 +47,6 @@ class SiteRegion:
 
         Returns:
             the regions
-
-        Raises:
-            ValueError: a region names the same site as its enter and its leave
         """
         list_region: list[SiteRegion] = []
         for entry in list_site_region or []:
@@ -53,11 +56,6 @@ class SiteRegion:
                 enter, leave = entry
                 label = f"site {enter}-{leave}"
             enter, leave = int(enter), int(leave)
-            if enter == leave:
-                raise ValueError(
-                    f"a region's enter and leave are the same site ({enter}); "
-                    f"one instruction cannot both open and close an interval"
-                )
             list_region.append(
                 SiteRegion(
                     enter_site=enter,
@@ -299,12 +297,75 @@ class SitePairing:
                         list_out.append(list_enter.pop(0))
                         is_open = True
                     else:
-                        # an unpartnered boundary: the pairing counts it as dropped
-                        list_out.extend(list_leave if is_open else list_enter)
+                        # what is left is all enters to an open region or all leaves to a
+                        # closed one: kept, so the pairing counts the unpartnered as dropped
+                        list_out.extend(list_enter)
+                        list_out.extend(list_leave)
+                        is_open = is_open or bool(list_enter)
                         break
                 map_region_open[region] = is_open
             start = end
         return list_out
+
+    @staticmethod
+    def _scope_record(
+        record: SiteTraceRecord,
+        type_str: str,
+        region_id: int,
+        region: SiteRegion,
+    ) -> ScopeTraceRecord:
+        """One boundary of a paired interval as a scope record."""
+        return ScopeTraceRecord(
+            global_tid=record.global_tid,
+            type_id=TraceSchema.MAP_TYPE_ID_RESERVED[type_str],
+            type_str=type_str,
+            scope_id=region_id,
+            scope_str=str(region_id),
+            scope_label=region.label,
+            payload=record.timestamp,
+        )
+
+    @classmethod
+    def _pair_period(
+        cls,
+        map_row_record: dict[int, list[SiteTraceRecord]],
+        map_row_position: dict[int, int],
+        region_id: int,
+        region: SiteRegion,
+        list_nb_interval: list[int],
+        set_row: set,
+        list_keyed_out: list[tuple[tuple[int, int, int, int, int], ScopeTraceRecord]],
+    ) -> None:
+        """Pair a period region: each firing of its site opens an interval the row's next closes.
+
+        A row's last firing opens nothing, and a row that fired once makes no interval;
+        neither is a dropped boundary. At the firing where one interval ends and the next
+        begins, the end sorts first, so the intervals lie back to back.
+        """
+        for row, list_row_record in map_row_record.items():
+            list_firing = [record for record in list_row_record if record.site_id == region.enter_site]
+            for order, (start, end) in enumerate(zip(list_firing, list_firing[1:])):
+                list_nb_interval[region_id] += 1
+                set_row.add(row)
+                for type_str, record, rank in (
+                    ("SCOPE_START", start, 1),
+                    ("SCOPE_END", end, 0),
+                ):
+                    list_keyed_out.append((
+                        (
+                            map_row_position[row],
+                            record.timestamp,
+                            rank,
+                            region_id,
+                            order,
+                        ),
+                        cls._scope_record(
+                            record=record,
+                            type_str=type_str,
+                            region_id=region_id,
+                            region=region,
+                        ),
+                    ))
 
     @classmethod
     def pair(
@@ -316,8 +377,10 @@ class SitePairing:
 
         A leave closes the latest still-open enter of its own region, walking each row
         in time order, so a truncated head or one corrupted record costs a single
-        interval rather than cascading mispairs down the run. Sites no region names are
-        dropped.
+        interval rather than cascading mispairs down the run. Each region pairs on its
+        own, so one site may close a region and open the next (``(0, 1)``, ``(1, 2)``)
+        or open several. A period region (``(0, 0)``) pairs each firing of its site with
+        the row's next. Sites no region names are dropped.
 
         Each region also gets one statistics entry: how many intervals it paired, over
         how many rows, how many boundaries it had to drop, and the pair rate -- twice
@@ -332,77 +395,86 @@ class SitePairing:
             the paired intervals as scope-start and scope-end records, and one statistics
             entry per region
         """
-        map_enter = {
-            region.enter_site: (
-                index,
-                region.label,
-            )
-            for index, region in enumerate(list_region)
-        }
-        map_leave = {
-            region.leave_site: (
-                index,
-                region.label,
-            )
-            for index, region in enumerate(list_region)
-        }
-        list_row_ordered = [
-            record
-            for list_row_record in SiteRecords.by_row(list_record).values()
-            for record in cls._untangle_ties(
-                list_row_record=list_row_record,
-                map_enter=map_enter,
-                map_leave=map_leave,
-            )
-        ]
-        boundary_pairing = BoundaryPairing.pair(
-            list_record=list_row_ordered,
-            row_of=lambda record: record.global_tid,
-            is_start=lambda record: record.site_id in map_enter,
-            is_end=lambda record: record.site_id in map_leave,
-            key_of=lambda record: (
-                map_enter[record.site_id]
-                if record.site_id in map_enter
-                else map_leave[record.site_id]
-            )[0],
-        )
-
-        # every enter opens a scope; a leave closes one only where it found its enter
-        set_paired_end = {id(boundary_pair.end) for boundary_pair in boundary_pairing.list_pair}
-        list_out: list[ScopeTraceRecord] = []
-        for record in list_row_ordered:
-            if record.site_id in map_enter:
-                type_str = "SCOPE_START"
-                scope_id, scope_label = map_enter[record.site_id]
-            elif id(record) in set_paired_end:
-                type_str = "SCOPE_END"
-                scope_id, scope_label = map_leave[record.site_id]
-            else:
-                continue
-            list_out.append(
-                ScopeTraceRecord(
-                    global_tid=record.global_tid,
-                    type_id=TraceSchema.MAP_TYPE_ID_RESERVED[type_str],
-                    type_str=type_str,
-                    scope_id=scope_id,
-                    scope_str=str(scope_id),
-                    scope_label=scope_label,
-                    payload=record.timestamp,
-                )
-            )
-
+        map_row_record = SiteRecords.by_row(list_record)
+        map_row_position = {row: position for position, row in enumerate(map_row_record)}
         nb_region = len(list_region)
         list_nb_interval = [0] * nb_region
         list_nb_dropped = [0] * nb_region
         list_set_row: list[set] = [set() for _ in range(nb_region)]
-        for boundary_pair in boundary_pairing.list_pair:
-            pair_region_id = map_enter[boundary_pair.start.site_id][0]
-            list_nb_interval[pair_region_id] += 1
-            list_set_row[pair_region_id].add(boundary_pair.end.global_tid)
-        for record in boundary_pairing.list_unpaired_start:
-            list_nb_dropped[map_enter[record.site_id][0]] += 1
-        for record in boundary_pairing.list_unpaired_end:
-            list_nb_dropped[map_leave[record.site_id][0]] += 1
+        # (row, timestamp, end before start, region, order in the row) -> scope record
+        list_keyed_out: list[tuple[tuple[int, int, int, int, int], ScopeTraceRecord]] = []
+
+        # each region pairs on its own records, so a site may close one region and open the
+        # next, or open several
+        for region_id, region in enumerate(list_region):
+            if region.is_period:
+                cls._pair_period(
+                    map_row_record=map_row_record,
+                    map_row_position=map_row_position,
+                    region_id=region_id,
+                    region=region,
+                    list_nb_interval=list_nb_interval,
+                    set_row=list_set_row[region_id],
+                    list_keyed_out=list_keyed_out,
+                )
+                continue
+            map_enter = {region.enter_site: (region_id, region.label)}
+            map_leave = {region.leave_site: (region_id, region.label)}
+            list_row_ordered = [
+                record
+                for list_row_record in map_row_record.values()
+                for record in cls._untangle_ties(
+                    list_row_record=[
+                        record
+                        for record in list_row_record
+                        if record.site_id in map_enter or record.site_id in map_leave
+                    ],
+                    map_enter=map_enter,
+                    map_leave=map_leave,
+                )
+            ]
+            boundary_pairing = BoundaryPairing.pair(
+                list_record=list_row_ordered,
+                row_of=lambda record: record.global_tid,
+                is_start=lambda record: record.site_id in map_enter,
+                is_end=lambda record: record.site_id in map_leave,
+            )
+            list_nb_interval[region_id] = len(boundary_pairing.list_pair)
+            list_nb_dropped[region_id] = (
+                len(boundary_pairing.list_unpaired_start) + len(boundary_pairing.list_unpaired_end)
+            )
+            for boundary_pair in boundary_pairing.list_pair:
+                list_set_row[region_id].add(boundary_pair.end.global_tid)
+
+            # every enter opens a scope; a leave closes one only where it found its enter
+            set_paired_end = {id(boundary_pair.end) for boundary_pair in boundary_pairing.list_pair}
+            for order, record in enumerate(list_row_ordered):
+                if record.site_id in map_enter:
+                    type_str = "SCOPE_START"
+                elif id(record) in set_paired_end:
+                    type_str = "SCOPE_END"
+                else:
+                    continue
+                list_keyed_out.append((
+                    (
+                        map_row_position[record.global_tid],
+                        record.timestamp,
+                        0 if type_str == "SCOPE_END" else 1,
+                        region_id,
+                        order,
+                    ),
+                    ScopeTraceRecord(
+                        global_tid=record.global_tid,
+                        type_id=TraceSchema.MAP_TYPE_ID_RESERVED[type_str],
+                        type_str=type_str,
+                        scope_id=region_id,
+                        scope_str=str(region_id),
+                        scope_label=region.label,
+                        payload=record.timestamp,
+                    ),
+                ))
+        list_keyed_out.sort(key=lambda keyed: keyed[0])
+        list_out = [scope_record for _, scope_record in list_keyed_out]
 
         list_region_stat = []
         for region_id, region in enumerate(list_region):
@@ -426,7 +498,7 @@ class SitePairing:
 
 
 class SiteRecords:
-    """The records a machine-code run's sites wrote, read as points rather than scope boundaries."""
+    """The records a run's sites wrote, read as points rather than scope boundaries."""
 
     @staticmethod
     def are_sites(list_record: list[TraceRecord]) -> bool:

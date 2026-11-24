@@ -7,15 +7,14 @@ from marstrace.viewer.common.trace._schema import TraceSchema
 class ScopeTraceRecord:
     """One scope boundary a thread (or, warp-level, a warp's leading lane) recorded.
 
-    The PTX tier writes these at the sentinels a source marker or a pass placed, and a
-    site run paired into regions is read back in the same shape.
+    A site run paired into regions is read back in the same shape.
     """
 
     global_tid: int  # recovered from the slab row the record sits in
     type_id: int  # dense id of the boundary kind
     type_str: str  # SCOPE_START, SCOPE_END or POINT
     scope_id: int  # dense id of the scope
-    scope_str: str  # the scope's name as the sentinel or the pass gave it
+    scope_str: str  # the scope's name as the run gave it
     scope_label: str  # the caller's label for the scope, else its name
     payload: int  # the timestamp: the GPU-wide timer (gpu) or the core clock (sm)
     value: int = 0  # the value the site recorded, 0 where it names none
@@ -40,11 +39,11 @@ class ScopeTraceRecord:
 
 @dataclass
 class SiteTraceRecord:
-    """One record a machine-code site wrote (SASS or AMDGPU): the site, the value it read and when."""
+    """One record a site wrote: the site, the value it read and when."""
 
     global_tid: int  # the thread, or a warp's leading thread, that reached the site
     site_id: int  # the site's position in the site list
-    value: int  # the recorded register's value, 0 for a timestamp-only site
+    value: int  # the value the site recorded, 0 for a timestamp-only site
     timestamp: int  # in the run's clock units
     smid: int | None = None  # the SM (CU on AMDGPU) a warp-level record's block ran on, None per thread
 
@@ -68,19 +67,19 @@ class SiteTraceRecord:
 
 @dataclass
 class TraceCompileResults:
-    """What instrumenting a kernel did to it, and how its records are to be read."""
+    """How a run was traced, and how its records are to be read."""
 
-    instrumentation_level: str  # ptx, sass, iket or amdgpu
-    origin_reg_used_avg: int  # registers the original binary declares
-    trace_reg_used_avg: int  # registers the instrumented binary declares
+    instrumentation_level: str  # the kind of trace the run is
+    origin_reg_used_avg: int  # the kernel's register count as built
+    trace_reg_used_avg: int  # the kernel's register count while traced
     # the clock the payloads were read from, and what one record observes and whose
     clock_type: str | None = None
     record_shape: str | None = None
     record_granularity: str | None = None
-    # general registers the SASS parse finds in use, on the PTX tier
+    # the counts in use, where the run reports them
     origin_reg_used_overall: int | None = None
     trace_reg_used_overall: int | None = None
-    # the record buffer of an iket run
+    # the record buffer's size, where the run reports it
     slab_bytes: int | None = None
     nb_warps: int | None = None
     # the threads of a warp, the warps of a warpgroup and the backend's name for a warp;
@@ -88,6 +87,9 @@ class TraceCompileResults:
     warp_size: int | None = None
     warps_per_group: int | None = None
     warp_label: str | None = None
+    # the records one row (a thread, or a warp at warp level) keeps before its ring wraps: a
+    # count equal to it may have wrapped, one below it did not
+    records_per_row: int | None = None
 
     # field -> the key the archive names it by, in the archive's order
     MAP_JSON_KEY = {
@@ -104,6 +106,7 @@ class TraceCompileResults:
         "warp_size": "warp_size",
         "warps_per_group": "warps_per_group",
         "warp_label": "warp_label",
+        "records_per_row": "records_per_row",
     }
 
     def to_json(self) -> dict[str, Any]:
@@ -169,33 +172,33 @@ class TraceCompileResults:
 
 @dataclass
 class SiteSpliceReport:
-    """What placing one machine-code site's probe cost, splice by splice."""
+    """One site's placement details, as the run reported them."""
 
-    # each splice's report, as the instrumentation context gave it, with the splice's kind
+    # each entry as the run reported it
     list_map_splice: list[dict[str, Any]] = field(default_factory=list)
 
     def to_json(self) -> dict[str, Any]:
         """The report as the JSON archive keeps it.
 
         Returns:
-            the splices, under ``splices``
+            the entries, under ``splices``
         """
         return {"splices": self.list_map_splice}
 
 
 @dataclass
 class TraceSpliceResults:
-    """How a machine-code tier placed its probes, and what each site's placement cost."""
+    """Each site's placement details, and the setting they were made under."""
 
-    schedule_mode: str  # first_feasible or least_makespan
-    schedule_prune: bool  # whether least_makespan took its faster path
+    schedule_mode: str  # the placement setting the run used
+    schedule_prune: bool  # a second placement setting
     map_site_report: dict[int, SiteSpliceReport] = field(default_factory=dict)
 
     def to_json(self) -> dict[str, Any]:
         """The results as the JSON archive keeps them, before its keys are made strings.
 
         Returns:
-            the schedule choice and every site's report, keyed by site id
+            the setting and every site's details, keyed by site id
         """
         return {
             "schedule_mode": self.schedule_mode,
@@ -210,8 +213,62 @@ TraceRecord = ScopeTraceRecord | SiteTraceRecord
 
 
 @dataclass
+class TraceDevice:
+    """The device a run traced on, so a report read elsewhere need not guess it."""
+
+    name: str
+    sm_count: int  # streaming multiprocessors (compute units on AMDGPU)
+    compute_capability: str  # "major.minor"
+    sm_clock_khz: int | None = None  # the SM clock rate the driver reports
+    sm_clock_mhz_at_trace: int | None = None  # the SM clock read right after the launch, None without NVML
+
+    def to_json(self) -> dict[str, Any]:
+        """The device as the JSON archive keeps it.
+
+        Returns:
+            the device's fields, keyed by field name; the clocks only when known
+        """
+        map_device: dict[str, Any] = {
+            "name": self.name,
+            "sm_count": self.sm_count,
+            "compute_capability": self.compute_capability,
+        }
+        if self.sm_clock_khz is not None:
+            map_device["sm_clock_khz"] = self.sm_clock_khz
+        if self.sm_clock_mhz_at_trace is not None:
+            map_device["sm_clock_mhz_at_trace"] = self.sm_clock_mhz_at_trace
+        return map_device
+
+    @classmethod
+    def from_json(cls, map_device: Any) -> "TraceDevice | None":
+        """A device a JSON archive kept, or None when the archive names none.
+
+        Args:
+            map_device: the run's ``device`` entry
+
+        Returns:
+            the device, or None when the entry is missing or names no SM count
+        """
+        if not isinstance(
+            map_device,  # obj
+            dict,        # class_or_tuple
+        ) or not isinstance(
+            map_device.get("sm_count"),  # obj
+            int,                         # class_or_tuple
+        ):
+            return None
+        return cls(
+            name=str(map_device.get("name", "")),
+            sm_count=map_device["sm_count"],
+            compute_capability=str(map_device.get("compute_capability", "")),
+            sm_clock_khz=map_device.get("sm_clock_khz"),
+            sm_clock_mhz_at_trace=map_device.get("sm_clock_mhz_at_trace"),
+        )
+
+
+@dataclass
 class TraceResult:
-    """One traced launch: the kernel, what instrumenting it did and the records it wrote."""
+    """One traced launch: the kernel, how it was traced and the records it wrote."""
 
     kernel_prototype: str
     compile_results: TraceCompileResults
@@ -220,10 +277,12 @@ class TraceResult:
     list_record: list[TraceRecord] = field(default_factory=list)
     # observer-effect results: always empty, as the evaluation is not implemented
     map_oe_results: dict[str, Any] = field(default_factory=dict)
-    # how a machine-code tier placed its probes, None on the PTX tier
+    # each site's placement details, None where the run reports none
     splice_results: TraceSpliceResults | None = None
     # the analysis block a saved report kept beside the run, None for a fresh trace
     map_saved_analysis: dict[str, Any] | None = None
+    # the device the launch ran on, None where the backend or an old report names none
+    device: TraceDevice | None = None
 
     @staticmethod
     def record_from_json(map_record: Any) -> TraceRecord | None:
@@ -352,4 +411,5 @@ class TraceResult:
             map_oe_results=dict(map_run.get("oe_results") or {}),
             splice_results=splice_results,
             map_saved_analysis=map_analysis,
+            device=TraceDevice.from_json(map_run.get("device")),
         )

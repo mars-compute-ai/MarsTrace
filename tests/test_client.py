@@ -70,7 +70,7 @@ class ServiceTest(unittest.TestCase):
     def test_single_upload_is_checksummed(self) -> None:
         upload = self.client.upload(data=b"abc", role="cubin", name="k.cubin")
         self.assertEqual(upload["status"], "verified")
-        put = self.fake.state.requests_to("PUT", r"^/r2/")[0]
+        put = self.fake.state.requests_to("PUT", r"^/storage/")[0]
         self.assertIsNone(put["authorization"])
         self.assertEqual(put["body"], b"abc")
         self.assertIn("x-amz-checksum-sha256", put["headers"])
@@ -82,7 +82,7 @@ class ServiceTest(unittest.TestCase):
         self.fake.state.part_bytes = 4
         data = bytes(range(10))
         self.assertEqual(self.client.upload(data=data, role="tensor", name="t.safetensors")["size_bytes"], 10)
-        list_put = self.fake.state.requests_to("PUT", r"^/r2/.*/part/")
+        list_put = self.fake.state.requests_to("PUT", r"^/storage/.*/part/")
         self.assertEqual([put["body"] for put in list_put], [data[0:4], data[4:8], data[8:10]])
         complete = json.loads(self.fake.state.requests_to("POST", r".*/complete$")[0]["body"])
         self.assertEqual(complete["parts"], [{"part_number": number, "etag": f'"etag-{number}"'} for number in (1, 2, 3)])
@@ -99,12 +99,12 @@ class ServiceTest(unittest.TestCase):
             self.assertEqual(tar.getnames(), ["matmul.cu"])
         summary = quoted.summary()
         self.assertEqual(set(summary["rates"]), {"agent_model", "agent_usd_per_million_tokens"})
-        self.assertEqual(summary["rates"]["agent_usd_per_million_tokens"]["cache_write_1h"], "$36.000000")
+        self.assertEqual(summary["rates"]["agent_usd_per_million_tokens"]["cache_write_1h"], "$14.000000")
         self.assertEqual(summary["cuda_version"], "13.0")
         self.assertEqual(summary["bounds_per_attempt"], {"agent_input_tokens": 4000000, "agent_output_tokens": 60000})
         self.assertEqual(
             summary["cost_at_bounds"],
-            {"agent_tokens_per_attempt_usd": "$149.400000", "total_usd": "$298.800000"},
+            {"agent_tokens_per_attempt_usd": "$58.100000", "total_usd": "$116.200000"},
         )
         self.assertEqual((summary["max_attempts"], summary["minimum_usd"], summary["available_usd"]), (2, "$100.000000", "$118.250000"))
         self.assertTrue(summary["admissible"])
@@ -118,7 +118,7 @@ class ServiceTest(unittest.TestCase):
         quoted = self.workflow.quote(self.directory)
         self.assertNotIn("limits", quoted.map_request)
         summary = quoted.summary()
-        self.assertEqual((summary["max_attempts"], summary["cost_at_bounds"]["total_usd"]), (2, "$298.800000"))
+        self.assertEqual((summary["max_attempts"], summary["cost_at_bounds"]["total_usd"]), (2, "$116.200000"))
         job = self.workflow.submit(quoted)
         self.assertEqual(job["limits"], {"max_attempts": 2})
 
@@ -231,8 +231,8 @@ class ServiceTest(unittest.TestCase):
         finished = self.workflow.wait(job["job_id"])
         self.assertEqual([(attempt["status"], attempt["failure"]) for attempt in finished["attempts"]], [("failed", "supplier"), ("succeeded", None)])
         self.assertEqual(finished["attempts"][0]["error"]["code"], "vm_preempted")
-        self.assertEqual(finished["cost"]["charged_micro_usd"], "5516100")
-        self.assertEqual(sum(int(line["amount_micro_usd"]) for line in finished["cost"]["lines"]), 5516100)
+        self.assertEqual(finished["cost"]["charged_micro_usd"], "2145150")
+        self.assertEqual(sum(int(line["amount_micro_usd"]) for line in finished["cost"]["lines"]), 2145150)
         self.assertTrue(all(line["dimension"].startswith("service_agent_") for line in finished["cost"]["lines"]))
         self.assertEqual(finished["result"]["name"], "marstrace.json")
 
@@ -241,8 +241,8 @@ class ServiceTest(unittest.TestCase):
         self.assertEqual(job["status"], "queued")
         finished = self.workflow.wait(job["job_id"])
         self.assertEqual(finished["status"], "succeeded")
-        self.assertEqual(finished["cost"]["charged_micro_usd"], "4954500")
-        self.assertEqual(finished["progress"]["usage_micro_usd"], "5034000")
+        self.assertEqual(finished["cost"]["charged_micro_usd"], "1926750")
+        self.assertEqual(finished["progress"]["usage_micro_usd"], "1958000")
         self.assertEqual(finished["cuda_version"], "13.0")
         list_wait = self.fake.state.requests_to("GET", r"^/v1/jobs/[^/]+/wait$")
         self.assertEqual(len(list_wait), 4)
@@ -306,7 +306,7 @@ class ServiceTest(unittest.TestCase):
     def test_download_checks_the_digest(self) -> None:
         self.fake.state.map_object["x"] = b"abc"
         with self.assertRaisesRegex(ServiceError, "different bytes"):
-            self.client.download(url=f"{self.fake.origin}/r2/results/x", sha256="0" * 64, size_bytes=3)
+            self.client.download(url=f"{self.fake.origin}/storage/results/x", sha256="0" * 64, size_bytes=3)
 
     def test_a_malformed_answer_is_refused(self) -> None:
         self.assertNotIn("rates", self.workflow.hardware()["hardware"][2])

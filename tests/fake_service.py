@@ -28,11 +28,11 @@ CROCKFORD = "0123456789abcdefghjkmnpqrstvwxyz"
 MIB = 1 << 20
 MILLION = 1_000_000
 RATES = {
-    "agent_input_micro_usd_per_million": "18000000",
-    "agent_cache_read_micro_usd_per_million": "1800000",
-    "agent_cache_write_5m_micro_usd_per_million": "22500000",
-    "agent_cache_write_1h_micro_usd_per_million": "36000000",
-    "agent_output_micro_usd_per_million": "90000000",
+    "agent_input_micro_usd_per_million": "7000000",
+    "agent_cache_read_micro_usd_per_million": "700000",
+    "agent_cache_write_5m_micro_usd_per_million": "8750000",
+    "agent_cache_write_1h_micro_usd_per_million": "14000000",
+    "agent_output_micro_usd_per_million": "35000000",
 }
 LIST_INPUT_RATE = [
     "agent_input_micro_usd_per_million",
@@ -317,9 +317,9 @@ class FakeState:
 
 
 class FakeService(http.server.BaseHTTPRequestHandler):
-    """A stand-in for the routes of http/app.ts behind nginx's /trace/ location, and for R2's presigned URLs."""
+    """A stand-in for the MarsTrace customer API under its /trace base path, and for the presigned storage URLs it hands out."""
 
-    # the base path nginx strips before the service sees a request, as at console.marscompute.ai/trace
+    # the base path of the customer API, as at console.marscompute.ai/trace
     BASE_PATH = "/trace"
     state = FakeState()
 
@@ -399,7 +399,7 @@ class FakeService(http.server.BaseHTTPRequestHandler):
     def do_PUT(self) -> None:
         body = self._record()
         state = FakeService.state
-        match = re.match(r"^/r2/(upl_[a-z0-9]+)(?:/part/(\d+))?$", urllib.parse.urlsplit(self.path).path)
+        match = re.match(r"^/storage/(upl_[a-z0-9]+)(?:/part/(\d+))?$", urllib.parse.urlsplit(self.path).path)
         if match is None or self.headers.get("Authorization") is not None:
             self._send(403, b"<Error>forbidden</Error>")
             return
@@ -418,7 +418,7 @@ class FakeService(http.server.BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         self._record()
         path = urllib.parse.urlsplit(self.path).path
-        if path.startswith("/r2/results/"):
+        if path.startswith("/storage/results/"):
             self._send(200, FakeService.state.map_object[path.rsplit("/", 1)[1]])
             return
         service_path = self._service_path()
@@ -517,7 +517,7 @@ class FakeService(http.server.BaseHTTPRequestHandler):
             job["attempts"].append(self._attempt(1))
         if job["status"] in ("running", "finishing"):
             job["attempts"][-1]["status"] = job["status"]
-            job["progress"] = {"agent_turn": 14, "usage_micro_usd": "5034000"}
+            job["progress"] = {"agent_turn": 14, "usage_micro_usd": "1958000"}
         if job["status"] == "succeeded":
             with open(os.path.join(FIXTURE_DIRECTORY, "trace_sass_regions.json"), "rb") as trace_file:
                 trace = trace_file.read()
@@ -530,15 +530,15 @@ class FakeService(http.server.BaseHTTPRequestHandler):
             job["attempts"][-1].update(status="succeeded", ended_at=TIMESTAMP)
             job["ended_at"] = TIMESTAMP
             list_line = [
-                {"dimension": "service_agent_cache_read_tokens", "quantity": 812000, "amount_micro_usd": "1461600"},
+                {"dimension": "service_agent_cache_read_tokens", "quantity": 812000, "amount_micro_usd": "568400"},
                 *(
                     {"dimension": dimension, "quantity": 0, "amount_micro_usd": "0"}
                     for dimension in ("service_agent_input_tokens", "service_agent_cache_write_5m_tokens", "service_agent_cache_write_1h_tokens")
                 ),
-                {"dimension": "service_agent_output_tokens", "quantity": 38810, "amount_micro_usd": "3492900"},
+                {"dimension": "service_agent_output_tokens", "quantity": 38810, "amount_micro_usd": "1358350"},
             ]
             if len(job["attempts"]) > 1:
-                list_line[0] = {"dimension": "service_agent_cache_read_tokens", "quantity": 1124000, "amount_micro_usd": "2023200"}
+                list_line[0] = {"dimension": "service_agent_cache_read_tokens", "quantity": 1124000, "amount_micro_usd": "786800"}
             job["cost"]["charged_micro_usd"] = str(sum(int(line["amount_micro_usd"]) for line in list_line))
             job["cost"]["lines"] = list_line
             if state.is_trace_unusable:
@@ -553,7 +553,7 @@ class FakeService(http.server.BaseHTTPRequestHandler):
             "name": "marstrace.json",
             "sha256": hashlib.sha256(data).hexdigest(),
             "size_bytes": len(data),
-            "download_url": f"{FakeService.state.origin}/r2/results/{job['job_id']}",
+            "download_url": f"{FakeService.state.origin}/storage/results/{job['job_id']}",
             "expires_at": TIMESTAMP,
         }
 
@@ -603,12 +603,12 @@ class FakeService(http.server.BaseHTTPRequestHandler):
                     "part_number": number + 1,
                     "offset": offset,
                     "size_bytes": min(state.part_bytes, request["size_bytes"] - offset),
-                    "upload_url": f"{state.origin}/r2/{upload_id}/part/{number + 1}",
+                    "upload_url": f"{state.origin}/storage/{upload_id}/part/{number + 1}",
                 }
                 for number, offset in enumerate(range(0, request["size_bytes"], state.part_bytes))
             ]
         else:
-            grant["upload_url"] = f"{state.origin}/r2/{upload_id}"
+            grant["upload_url"] = f"{state.origin}/storage/{upload_id}"
             grant["headers"] = {
                 "x-amz-checksum-sha256": base64.b64encode(bytes.fromhex(request["sha256"])).decode(),
                 "content-type": request["content_type"],

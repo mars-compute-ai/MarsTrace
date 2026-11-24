@@ -1,4 +1,5 @@
 import re
+import urllib.parse
 from dataclasses import dataclass, field
 from ._contract import PanelContract
 from ._data import PanelLane
@@ -143,8 +144,9 @@ class SelectionToken:
                 "order",   # key
                 "thread",  # default
             ),
+            # each scope name is percent-encoded; a token written before that holds no '%'
             list_scope=[
-                s
+                urllib.parse.unquote(s)
                 for s in map_field.get(
                     "scopes",  # key
                     "",        # default
