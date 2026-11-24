@@ -105,7 +105,7 @@ class McpServer:
         "2025-11-25",
     )
     SERVER_NAME = "marstrace"
-    SERVER_VERSION = "0.2.0"
+    SERVER_VERSION = "0.2.1"
     INSTRUCTIONS = (
         "Trace the timeline inside a CUDA kernel on a cloud GPU with MarsTrace. Before the first job, "
         "read marstrace_guide with topic remote, and before reading a trace, topic read: they hold "

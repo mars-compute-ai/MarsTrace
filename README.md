@@ -16,7 +16,7 @@ local GPU.
 2. Install the client and trace the bundled example:
 
 ```bash
-pip install 'git+https://github.com/mars-compute-ai/MarsTrace@v0.2.0'
+pip install 'git+https://github.com/mars-compute-ai/MarsTrace@v0.2.1'
 export MARSTRACE_API_KEY=mt_live_...
 
 marstrace estimate examples/matmul        # token rates, the most the job can cost, your balance
@@ -139,13 +139,15 @@ overhead fall outside it. The analysis reports the gap.
 
 ## Contributing
 
-Issues and pull requests are welcome. [AGENT.md](AGENT.md) describes the layout, the tests
-and the rules a change follows; run `python -m unittest discover -s tests` before you open a
-pull request.
+Issues are welcome; pull requests are not accepted for now.
+[CONTRIBUTING.md](CONTRIBUTING.md) says how to report a problem, and [AGENT.md](AGENT.md)
+describes the layout, the tests and the rules a change follows.
 
 ## License
 
 The MarsTrace client is source-available under the
 [PolyForm Noncommercial License 1.0.0](LICENSE): you may use, change and share it for any
 noncommercial purpose. [NOTICE](NOTICE) holds the required notice. The license does not
-allow commercial use.
+allow commercial use, with one exception in
+[LICENSE-ADDITIONAL-PERMISSION](LICENSE-ADDITIONAL-PERMISSION): a MarsCompute customer may use
+the client for any purpose, commercial ones included, to access the MarsTrace service.

@@ -10,7 +10,7 @@ MarsTrace 在云端 GPU 上测量 CUDA kernel 内部的耗时。你提交 kernel
 2. 安装客户端，跑一下仓库自带的例子：
 
 ```bash
-pip install 'git+https://github.com/mars-compute-ai/MarsTrace@v0.2.0'
+pip install 'git+https://github.com/mars-compute-ai/MarsTrace@v0.2.1'
 export MARSTRACE_API_KEY=mt_live_...
 
 marstrace estimate examples/matmul        # token 单价、这次 job 最多花多少、余额
@@ -102,8 +102,8 @@ claude plugin install marstrace@marscompute
 
 ## 参与贡献
 
-欢迎提 issue 和 pull request。仓库结构、测试方法和改动要遵守的规则见 [AGENT.md](AGENT.md)。提 pull request 前请先跑 `python -m unittest discover -s tests`。
+欢迎提 issue，暂不接受 pull request。怎么反馈问题见 [CONTRIBUTING.md](CONTRIBUTING.md)；仓库结构、测试方法和改动要遵守的规则见 [AGENT.md](AGENT.md)。
 
 ## 许可证
 
-MarsTrace 客户端的源码按 [PolyForm Noncommercial License 1.0.0](LICENSE) 公开（source-available），不是 OSI 意义上的开源软件。你可以出于任何非商业目的使用、修改和分享它。[NOTICE](NOTICE) 里有必须保留的声明。本许可不允许商业使用。
+MarsTrace 客户端的源码按 [PolyForm Noncommercial License 1.0.0](LICENSE) 公开（source-available），不是 OSI 意义上的开源软件。你可以出于任何非商业目的使用、修改和分享它。[NOTICE](NOTICE) 里有必须保留的声明。本许可不允许商业使用，只有一个例外，写在 [LICENSE-ADDITIONAL-PERMISSION](LICENSE-ADDITIONAL-PERMISSION) 里：MarsCompute 的客户可以出于任何目的（包括商业目的）使用本客户端访问 MarsTrace 服务。
