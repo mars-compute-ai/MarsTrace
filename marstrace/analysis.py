@@ -1,4 +1,7 @@
+import argparse
+import functools
 import json
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -148,6 +151,42 @@ class DeliveredAnalysis:
             list_line.append("notes:")
             list_line.extend(f"  {line}" for line in self.notes.strip().splitlines())
         return "\n".join(list_line) + "\n"
+
+    @staticmethod
+    def extend_show(subparsers: argparse._SubParsersAction) -> None:
+        """Give the viewer's ``show`` command the ``--analysis`` view, which the client owns.
+
+        Args:
+            subparsers: the subcommands, after the viewer registered ``show`` among them
+        """
+        show = subparsers.choices["show"]
+        show.add_argument(
+            "--analysis",
+            action="store_true",
+            help="Show the analysis the job delivered: findings with where their sites sit, "
+            "what the trace cannot tell, the grid's balance",
+        )
+        show.set_defaults(
+            func=functools.partial(
+                DeliveredAnalysis._show,
+                viewer=show.get_default("func"),
+            )
+        )
+
+    @staticmethod
+    def _show(
+        args: argparse.Namespace,
+        viewer: Callable[[argparse.Namespace], None],
+    ) -> None:
+        """Print the report's analysis for ``--analysis``; any other view is the viewer's."""
+        if not args.analysis:
+            viewer(args)
+            return
+        analysis = DeliveredAnalysis.from_file(args.report)
+        if args.json:
+            print(json.dumps(None if analysis is None else analysis.to_json(), indent=2))
+            return
+        print(analysis.text() if analysis is not None else "analysis: this report carries none\n", end="")
 
     def to_json(self) -> dict[str, Any]:
         """The section's data as delivered, for a machine reader."""

@@ -699,7 +699,9 @@ class McpServer:
     def _show(self, map_arguments: dict[str, Any]) -> str:
         """The viewer's output on a trace."""
         parser = argparse.ArgumentParser(prog="marstrace")
-        ShowCommand().register(parser.add_subparsers())
+        subparsers = parser.add_subparsers()
+        ShowCommand().register(subparsers)
+        DeliveredAnalysis.extend_show(subparsers)
         list_option = map_arguments.get("options", [])
         output = io.StringIO()
         notes = io.StringIO()

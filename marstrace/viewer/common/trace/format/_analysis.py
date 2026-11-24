@@ -437,9 +437,6 @@ class TraceAnalysis:
 
         Returns:
             the run's analysis
-
-        Raises:
-            ValueError: a region names the same site as its enter and its leave
         """
         # a run re-read from a report carries its launch in the block it was given
         map_analysis = run.map_saved_analysis or {}

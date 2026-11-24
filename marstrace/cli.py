@@ -555,6 +555,7 @@ class CommandLine:
         CommandLine._add_service_commands(subparsers)
         CommandLine._add_binary_commands(subparsers)
         ShowCommand().register(subparsers)
+        DeliveredAnalysis.extend_show(subparsers)
         return parser
 
     @staticmethod

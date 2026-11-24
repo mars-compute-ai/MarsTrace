@@ -58,7 +58,10 @@ Conventional Commits form, with no agent attribution.
   the user shares with the agent on the GPU machine, on purpose; add no other path that
   carries code to execute.
 - **The viewer is generated.** Do not edit `marstrace/viewer/` by hand: the maintainers
-  regenerate it, and a hand edit is lost.
+  regenerate it from their own viewer, and a hand edit is lost. A fix to the viewer goes to
+  the maintainers. A view only the client has, such as `show --analysis`, lives in the
+  client's modules (`DeliveredAnalysis.extend_show` in `analysis.py`) and is attached to
+  `show` after the viewer registers it.
 - **The service's API is the source of truth.** A change to the API changes `client.py`,
   `schema.py`, `job.py`, the fake service and `docs/protocol.md` together.
 

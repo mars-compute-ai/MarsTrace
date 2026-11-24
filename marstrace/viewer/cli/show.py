@@ -7,7 +7,6 @@ import statistics
 import sys
 from dataclasses import dataclass, field
 from typing import Any, TextIO
-from marstrace.analysis import DeliveredAnalysis
 from marstrace.viewer.common.launch import LaunchShape
 from marstrace.viewer.common.trace._result import TraceCompileResults, TraceResult
 from marstrace.viewer.common.trace.format._analysis import ScopeInterval, ScopePairing, TraceAnalysis
@@ -1694,12 +1693,6 @@ class ShowCommand:
             metavar="SCOPE",
             help="Show the single longest instance of SCOPE (scope_label)",
         )
-        parser.add_argument(
-            "--analysis",
-            action="store_true",
-            help="Show the analysis the job delivered: findings with where their sites sit, "
-            "what the trace cannot tell, the grid's balance",
-        )
 
         # Rendering
         parser.add_argument(
@@ -1761,17 +1754,6 @@ class ShowCommand:
                 file=sys.stderr,
             )
             sys.exit(ShowCommand.EXIT_USAGE)
-
-        if args.analysis:
-            analysis = DeliveredAnalysis.from_document(doc)
-            if args.json:
-                print(json.dumps(None if analysis is None else analysis.to_json(), indent=2))
-            else:
-                print(
-                    analysis.text() if analysis is not None else "analysis: this report carries none\n",
-                    end="",
-                )
-            return
 
         map_section = ShowCommand._find_intra_kernel_section(doc)
         if map_section is None:

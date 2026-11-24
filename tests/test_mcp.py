@@ -125,6 +125,21 @@ class McpStdioTest(unittest.TestCase):
         stats = self.call("marstrace_show", trace=trace, options=["--select", token, "--stats"])["content"][0]["text"]
         self.assertTrue(stats.startswith("\x1b[1mSelection:") or stats.startswith("Selection:"))
 
+    def test_show_answers_the_delivered_analysis(self) -> None:
+        self.initialize()
+        with open(os.path.join(REPOSITORY, "tests", "fixtures", "trace_sass_regions.json")) as trace_file:
+            document = json.load(trace_file)
+        with open(os.path.join(REPOSITORY, "tests", "fixtures", "analysis_section.json")) as section_file:
+            document["sections"].append(json.load(section_file))
+        trace = os.path.join(self.directory, "with-analysis.json")
+        with open(trace, "w") as trace_file:
+            json.dump(document, trace_file)
+        text = self.call("marstrace_show", trace=trace, options=["--analysis"])["content"][0]["text"]
+        self.assertIn("[WORK-ONLY]", text)
+        self.assertIn("enter site 0: SASS 34 PLOP3.LUT (matmul.cu:9)", text)
+        data = json.loads(self.call("marstrace_show", trace=trace, options=["--analysis", "--json"])["content"][0]["text"])
+        self.assertEqual(data["summary"]["schema"], "xplain.summary/2")
+
     def test_protocol_errors(self) -> None:
         self.initialize()
         self.assertEqual(self.send("resources/list")["error"]["code"], -32601)
