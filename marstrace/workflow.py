@@ -42,7 +42,7 @@ class QuotedJob:
         """What the job would cost, in dollars.
 
         A job is charged the agent tokens it actually used over every attempt, failed ones
-        included, and nothing when its trace is delivered unusable; the cost at the bounds is the most it can reach, and nothing is held against
+        included, and nothing when its trace is delivered unusable or it fails without a result; the cost at the bounds is the most it can reach, and nothing is held against
         it.
 
         Returns:
@@ -91,6 +91,11 @@ class MarsTraceWorkflow:
     """
 
     UNUSABLE_REASON = "unusable_result"  # why a job whose trace is unusable is not charged
+    FAILED_NO_RESULT_REASON = "failed_no_result"  # why a job that failed without a result is not charged
+    MAP_NOT_CHARGED_NOTE = {
+        UNUSABLE_REASON: "the trace is unusable, so the job is not charged",
+        FAILED_NO_RESULT_REASON: "the job failed without a result, so it is not charged",
+    }
     SET_JOB_FINAL_STATUS = {
         "succeeded",
         "failed",

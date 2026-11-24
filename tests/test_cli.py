@@ -158,6 +158,15 @@ class CommandLineTest(unittest.TestCase):
         self.assertEqual(status, 0, error)
         self.assertIn("charged   $0.000000 (the trace is unusable, so the job is not charged)", output)
 
+    def test_a_job_that_fails_without_a_result_says_it_is_not_charged(self) -> None:
+        self.fake.state.do_fail_job = True
+        unused_status, output, error = self.run_cli("submit", self.directory, "--yes", "--wait")
+        job_id = output.split("job       ", 1)[1].split()[0]
+        status, output, error = self.run_cli("job", job_id)
+        self.assertEqual(status, 0, error)
+        self.assertIn("status    failed", output)
+        self.assertIn("charged   $0.000000 (the job failed without a result, so it is not charged)", output)
+
     def test_every_attempt_is_charged_and_the_balance_gates_the_next_job(self) -> None:
         self.fake.state.do_preempt_first_attempt = True
         status, output, error = self.run_cli("submit", self.directory, "--yes", "--wait")

@@ -1,6 +1,6 @@
 ---
 name: marstrace-remote
-description: Trace the timeline inside one CUDA kernel on an H200, B200 or B300 with MarsTrace, without a local GPU. Gather the kernel's cubins (from nvcc, Triton, torch.compile, TileLang or CuTeDSL output), and optionally its source, a launch description, input data and a driver script, into a workspace that an agent on the GPU host traces within the caps you set. Then estimate the cost, submit, fetch marstrace.json and read it. A job starts once the workspace's balance reaches a minimum and is charged the agent tokens it actually used, failed attempts included, or nothing when its trace is unusable. Works through the `marstrace` CLI or its stdio MCP server (`marstrace mcp`). Use when the user wants per-phase durations, pipeline bubbles or warp-role scheduling inside a kernel.
+description: Trace the timeline inside one CUDA kernel on an H200, B200 or B300 with MarsTrace, without a local GPU. Gather the kernel's cubins (from nvcc, Triton, torch.compile, TileLang or CuTeDSL output), and optionally its source, a launch description, input data and a driver script, into a workspace that an agent on the GPU host traces within the caps you set. Then estimate the cost, submit, fetch marstrace.json and read it. A job starts once the workspace's balance reaches a minimum and is charged the agent tokens it actually used, failed attempts included, or nothing when its trace is unusable or it fails without a result. Works through the `marstrace` CLI or its stdio MCP server (`marstrace mcp`). Use when the user wants per-phase durations, pipeline bubbles or warp-role scheduling inside a kernel.
 ---
 
 # Tracing a kernel with MarsTrace
@@ -173,8 +173,9 @@ How MarsTrace charges, which the user must hear before the first submission:
   included, at the token rates `marstrace hardware` shows. Most of an agent's tokens are
   cache reads, so quote all five rates, not the input and output rates alone. The GPU is not charged
   separately. A job whose trace is delivered `unusable` costs nothing, whatever the cause,
-  and so does a job whose agent never ran. Another failure on MarsCompute's side is charged,
-  and MarsCompute corrects a charge for its own fault with a credit adjustment. A cancelled
+  and so do a job that fails without delivering a result and a job whose agent never ran.
+  A job a retry finished is charged its failed attempts too, and MarsCompute corrects a
+  charge for its own fault with a credit adjustment. A cancelled
   job pays for the tokens it used up to the stop.
 - **Usage is charged in full even past the available balance**; the balance can go
   negative. The cost at the bounds is the most the job can cost.
@@ -185,7 +186,7 @@ marstrace estimate my-job         # uploads, checks, prices: CUDA version, token
 
 **Tell the user the token rates, the cost at the bounds (`at most`), the minimum and the available
 balance, say that the job is charged the tokens it actually used over every attempt, failed ones
-included, and get a yes before the first submission of a session.** After that, keep them
+included, and nothing if its trace is unusable or it fails without a result, and get a yes before the first submission of a session.** After that, keep them
 informed of what each job was charged. An estimate marked refused means the available
 balance is below the minimum or billing is not active: give the user the page where credit
 is added.
@@ -215,8 +216,9 @@ recorded request, and the service answers with the job it already started.
 
 Read the job with `marstrace job <id>`: each attempt's status and failure, the usage so
 far, the amount held, and once the job ends the charge with a line per dimension. When it
-fails, read its `error` (`code` and `message`) and each attempt's; tell the user what the
-failed job was charged before submitting again.
+fails, read its `error` (`code` and `message`) and each attempt's; a failed job without a
+result is not charged (`cost.not_charged_reason` is `failed_no_result`), so tell the user it
+cost nothing before submitting again.
 
 ## 6. Fetch and show
 
@@ -232,7 +234,7 @@ right click is a `marstrace show --select` command (skill `marstrace-read`, sect
 The result is `marstrace.json` and its `result-manifest.json`. Gate the trace before
 reading conclusions from it (skill `marstrace-read`, section 2): the quality must be
 `usable`, or each reason code explained. A session that ends without a trace has
-`quality: "unusable"`; it was still charged its usage. Before submitting again, revisit the
+`quality: "unusable"` and is not charged. Before submitting again, revisit the
 intent, the workspace and the caps with the user. Results can be fetched for 30 days
 after the job ends.
 
