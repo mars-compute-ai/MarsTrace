@@ -179,7 +179,7 @@ balance holds minimums. A job's `progress.usage_micro_usd` is its usage so far; 
 settles, `cost.charged_micro_usd` and `cost.lines`, `{dimension, quantity,
 amount_micro_usd}` per token dimension of the rate card, hold the charge, which may exceed the hold.
 A job charged nothing says why in `cost.not_charged_reason`: `unusable_result`,
-`not_started` or `cancelled_before_start`; it is `null` or absent otherwise.
+`failed_no_result`, `not_started` or `cancelled_before_start`; it is `null` or absent otherwise.
 `marstrace submit` prints the CUDA version, the token rates, the cost at the bounds and the balance, refuses a job
 that is not admissible, and asks before it submits, unless `--yes`.
 

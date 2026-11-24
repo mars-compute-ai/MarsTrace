@@ -104,7 +104,7 @@ class McpServer:
         "2025-11-25",
     )
     SERVER_NAME = "marstrace"
-    SERVER_VERSION = "0.1.1"
+    SERVER_VERSION = "0.1.2"
     INSTRUCTIONS = (
         "Trace the timeline inside a CUDA kernel on a cloud GPU with MarsTrace. Before the first job, "
         "read marstrace_guide with topic remote, and before reading a trace, topic read: they hold "
@@ -116,7 +116,8 @@ class McpServer:
         "source, manifest, tensors and files, [agent] caps, cuda_version and [limits] max_attempts. "
         "A job starts only while the available balance reaches the minimum the estimate names, and "
         "is charged the agent tokens it actually used over every attempt, failed ones included, even "
-        "past the balance; a job whose trace is unusable is not charged. Estimate, show the user "
+        "past the balance; a job whose trace is unusable, or that fails without a result, is not "
+        "charged. Estimate, show the user "
         "the token rates and the cost at the bounds and "
         "get their yes, submit with accept_cost_at_bounds_usd, wait, fetch. Then check quality and "
         "reason_codes in result-manifest.json before any number, and read marstrace.json with "

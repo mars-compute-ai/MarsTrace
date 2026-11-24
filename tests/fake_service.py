@@ -90,7 +90,11 @@ MAP_ERROR_STATUS = {
 SET_RETRYABLE = {"rate_limited", "too_many_jobs", "service_unavailable"}
 MAP_ROLE_MAX_BYTES = {"cubin": 64 * MIB, "source_archive": 256 * MIB, "launch_manifest": MIB, "tensor": 128 * MIB, "file": 16 * MIB}
 MAX_TOTAL_BYTES = 256 * MIB
-MAP_FAILURE_MESSAGE = {"vm_preempted": "The GPU machine was reclaimed by the supplier.", "cancelled": "The job was cancelled."}
+MAP_FAILURE_MESSAGE = {
+    "vm_preempted": "The GPU machine was reclaimed by the supplier.",
+    "cancelled": "The job was cancelled.",
+    "kernel_launch_failed": "The kernel failed to launch.",
+}
 
 
 def new_id(prefix: str) -> str:
@@ -292,6 +296,7 @@ class FakeState:
         # whether a job's first attempt is preempted while it runs, and retried
         self.do_preempt_first_attempt = False
         self.is_trace_unusable = False
+        self.do_fail_job = False
         # whether admission refuses although the estimate said admissible, as when another job took the balance
         self.do_refuse_admission = False
         # submissions to drop without an answer, to exercise the retry under one key
@@ -496,6 +501,12 @@ class FakeService(http.server.BaseHTTPRequestHandler):
             )
             job["attempts"].append(self._attempt(2))
             job["status"] = "starting"
+            return
+        if job["status"] == "running" and state.do_fail_job:
+            error = {"code": "kernel_launch_failed", "message": MAP_FAILURE_MESSAGE["kernel_launch_failed"]}
+            job["attempts"][-1].update(status="failed", failure="workload", ended_at=TIMESTAMP, error=error)
+            job.update(status="failed", ended_at=TIMESTAMP, error=error)
+            job["cost"].update(charged_micro_usd="0", lines=[], not_charged_reason="failed_no_result")
             return
         job["status"] = LIST_JOB_STEP[LIST_JOB_STEP.index(job["status"]) + 1]
         if job["status"] == "starting":

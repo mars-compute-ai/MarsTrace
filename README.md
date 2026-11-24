@@ -13,7 +13,7 @@ Register in the [MarsCompute console](https://console.marscompute.ai/register), 
 and create a MarsTrace API key under MarsTrace › Keys (`marstrace guide remote`, section
 1); a job starts only while the workspace's balance reaches the minimum that `marstrace
 credit` shows, and it is charged the agent tokens it used, or nothing when its trace is
-unusable. Then:
+unusable or it fails without a result. Then:
 
 ```bash
 pip install git+https://github.com/mars-compute-ai/MarsTrace
