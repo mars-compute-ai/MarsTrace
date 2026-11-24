@@ -3,6 +3,7 @@ import json
 import os
 import sys
 from typing import Any
+from marstrace.analysis import DeliveredAnalysis
 from marstrace.binary import DslCache, KernelBinary
 from marstrace.error import MarsTraceError
 from marstrace.guide import AgentGuide
@@ -241,7 +242,7 @@ class JobCommands:
 
     @staticmethod
     def _print_saved(list_path: list[str]) -> None:
-        """The files a fetch wrote, and the quality of the trace."""
+        """The files a fetch wrote, the quality of the trace, and the analysis it carries."""
         for path in list_path:
             print(f"saved     {path}")
         with open(
@@ -251,6 +252,11 @@ class JobCommands:
         ) as manifest_file:
             map_manifest = json.load(manifest_file)
         print(f"quality   {map_manifest['quality']} {', '.join(map_manifest['reason_codes'])}".rstrip())
+        for path in list_path:
+            if os.path.basename(path) == MarsTraceWorkflow.RESULT_FILE:
+                analysis = DeliveredAnalysis.from_file(path)
+                if analysis is not None:
+                    print(analysis.text(), end="")
 
     @staticmethod
     def jobs(args: argparse.Namespace) -> None:
@@ -287,16 +293,15 @@ class JobCommands:
 
     @staticmethod
     def fetch(args: argparse.Namespace) -> None:
-        """Download a succeeded job's marstrace.json and its result manifest."""
-        JobCommands._print_saved(
-            JobCommands._workflow().fetch(
-                job_id=args.job,
-                output_directory=args.output or os.path.join(
-                    MarsTraceWorkflow.RESULTS_DIRECTORY,
-                    args.job,
-                ),
-            )
+        """Download a succeeded job's marstrace.json and its result manifest, and print the analysis it carries."""
+        list_path = JobCommands._workflow().fetch(
+            job_id=args.job,
+            output_directory=args.output or os.path.join(
+                MarsTraceWorkflow.RESULTS_DIRECTORY,
+                args.job,
+            ),
         )
+        JobCommands._print_saved(list_path)
 
     @staticmethod
     def guide(args: argparse.Namespace) -> None:

@@ -29,6 +29,7 @@ what the workspace holds, within the caps of `[agent]`, and returns one `marstra
 ```toml
 hardware = "b200"
 cuda_version = "13.0"
+mode = "fast"
 intent = "find the longest bubble in the mainloop of the producer warps at M=N=K=8192"
 
 [workspace]
@@ -55,6 +56,7 @@ max_attempts = 2
 | `hardware` (required) | `hardware`, an `id` of `GET /v1/hardware` that is `available`; every cubin must target its `architecture` |
 | `cuda_version` (optional, `M.m` such as `13.0`) | `cuda_version`, one of the hardware's `cuda_versions` in `GET /v1/hardware`; absent, the request has no `cuda_version` and the job runs the hardware's `default_cuda_version`. The agent's CUDA toolkit is that version, and the result manifest's `device.cuda_toolkit_version` names it |
 | `intent` (required, 1 to 32,000 characters, no NUL) | `prompt` |
+| `mode` (optional: `fast`, `thinking-light` or `thinking-heavy`; `fast` when absent) | `mode`. A fast job delivers the trace and the analyser's summary of it (section 5). `thinking-light` and `thinking-heavy`, which optimize the kernel, are not offered yet: the service answers `mode_unavailable` |
 | `[workspace] cubins` (1 to 8, each at most 64 MiB) | uploads of role `cubin` → `inputs.cubins` |
 | `[workspace] source` (a directory) | archived as `source.tar.gz` (at most 256 MiB) → role `source_archive` → `inputs.source_archive` |
 | `[workspace] manifest` (a `marscompute.kernel-launch` file, at most 1 MiB) | role `launch_manifest` → `inputs.launch_manifest` |
@@ -63,7 +65,7 @@ max_attempts = 2
 | `[agent] max_turns` (1 to 500), `max_input_tokens` (1 to 50,000,000), `max_output_tokens` (1 to 1,000,000), `max_wall_seconds` (60 to 2,580) | `agent`; an absent key takes `agent.defaults` of `GET /v1/hardware`, and none may exceed `agent.maximums` |
 | `[limits] max_attempts` (1 to 3) | `limits.max_attempts`; absent, the request has no `limits` and the service takes 2 |
 
-`[workspace]` is required, `cuda_version`, `[agent]` and `[limits]` are optional, and any
+`[workspace]` is required, `cuda_version`, `mode`, `[agent]` and `[limits]` are optional, and any
 other key or table is refused. `marstrace estimate` and `submit` take `--cuda-version` to
 override `cuda_version`, and the MCP tools take `cuda_version`; the client checks the
 version against the hardware before it uploads anything. The request carries no amount of
@@ -121,8 +123,12 @@ digest and size of the result manifest's `file`, and writes it next to
 
 | File | Holds |
 | --- | --- |
-| `marstrace.json` | the trace report, read by `marstrace show` |
+| `marstrace.json` | the trace report, read by `marstrace show`, and the job's analysis: a section of `type` `marscompute.analysis` whose `data` holds `status` (`complete` or `skipped`), `analyser_release`, `notes` (null for a fast job) and `summary`, the analyser's `xplain.summary/2` output: `findings` (each with `code`, `title`, `evidence`, `next_step`, `list_hypothesis` of `cause` and `verify_with`, and `list_location`, the region's sites with `sass_index`, `opcode` and `source`), `unmeasured`, `imbalance` (SM utilization, tail, blocks resident per SM) and `gate` |
 | `result-manifest.json` | the result manifest: `quality` (`usable`, `partial`, `unusable`), `reason_codes`, `file`, `device`, `clock_type` and `granularity` |
+
+`marstrace fetch` and `submit --wait` print the analysis after the files they saved;
+`marstrace show <marstrace.json> --analysis` prints it again, and with `--json` gives its
+`data`. The MCP tool `marstrace_fetch` answers it as `analysis` and `analysis_text`.
 
 A job that ends without a usable trace still succeeds with `marstrace.json`, its
 `quality` `unusable` and reason codes that say why. A download URL lasts 10 minutes, and

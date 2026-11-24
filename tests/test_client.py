@@ -90,7 +90,8 @@ class ServiceTest(unittest.TestCase):
     def test_estimate_uploads_the_example_and_prices_it(self) -> None:
         quoted = self.workflow.quote(self.directory)
         request = quoted.map_request
-        self.assertEqual(set(request), {"hardware", "prompt", "inputs", "agent", "limits"})
+        self.assertEqual(set(request), {"hardware", "prompt", "mode", "inputs", "agent", "limits"})
+        self.assertEqual(request["mode"], "fast")
         self.assertEqual(request["hardware"], "h200")
         self.assertEqual(set(request["inputs"]), {"cubins", "source_archive", "tensors", "files"})
         self.assertEqual(request["limits"], {"max_attempts": 2})

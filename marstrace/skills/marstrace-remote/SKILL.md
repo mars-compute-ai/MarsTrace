@@ -160,6 +160,10 @@ max_attempts = 2                  # 1 to 3, 2 when absent: how often a failed at
   costs: there is no dollar cap. The job is charged the tokens it actually uses, usually far
   less than the caps.
 
+A job's `mode` is `fast` (the default): it delivers the trace and the analyser's summary of
+it, with where each finding sits. `thinking-light` and `thinking-heavy`, which optimize the
+kernel, are not offered yet; the service refuses them as `mode_unavailable`.
+
 ## 5. Estimate, then submit
 
 How MarsTrace charges, which the user must hear before the first submission:
@@ -223,7 +227,8 @@ cost nothing before submitting again.
 ## 6. Fetch and show
 
 ```bash
-marstrace fetch <job>             # into marstrace-results/<job>/; --wait on submit does it
+marstrace fetch <job>             # into marstrace-results/<job>/; --wait on submit does it; prints the analysis
+marstrace show marstrace-results/<job>/marstrace.json --analysis   # the delivered analysis again
 marstrace show marstrace-results/<job>/marstrace.json --stats
 ```
 

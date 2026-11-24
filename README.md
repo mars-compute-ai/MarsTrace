@@ -4,7 +4,9 @@ This is the client of MarsTrace, the `mars-trace` package and its `marstrace` co
 which traces the timeline inside a CUDA kernel on an H200, B200 or B300 and reads the
 trace in your terminal. You hand an agent on the GPU host a workspace of the kernel's
 cubins, and optionally its source and data; it traces the kernel within the caps you set
-and returns `marstrace.json`, a report of per-region durations and pipeline bubbles. It is
+and returns `marstrace.json`, a report of per-region durations and pipeline bubbles with an
+analysis of it: what the trace shows, where each finding sits in the SASS, and what to
+measure next. It is
 for kernel developers and the coding agents that work with them; no local GPU is needed.
 
 ## Usage
@@ -23,6 +25,7 @@ marstrace hardware                                        # hardware, CUDA versi
 marstrace cubin find my_triton_kernel --copy-to my-job    # or nvcc -cubin; see the skill
 marstrace estimate examples/matmul                        # token rates, the most the job can cost, the balance
 marstrace submit examples/matmul --wait
+marstrace show examples/matmul/marstrace-results/<job>/marstrace.json --analysis
 marstrace show examples/matmul/marstrace-results/<job>/marstrace.json --stats --bubbles
 ```
 

@@ -1,6 +1,6 @@
 ---
 name: marstrace-read
-description: Read a MarsTrace trace report of a CUDA kernel in the terminal with `marstrace show` — per-region statistics, per-thread timelines, pipeline bubbles, concurrency over time, outlier threads, the longest instances, and the region a selection token names. Use whenever there is a marstrace.json from a MarsTrace job to analyse, or its result-manifest.json to judge, or when the user pastes a selection token starting with mtrace/1.
+description: Read a MarsTrace trace report of a CUDA kernel in the terminal with `marstrace show` — the analysis the job delivered (findings with where they sit in the SASS, what the trace cannot tell, the grid's balance), per-region statistics, per-thread timelines, pipeline bubbles, concurrency over time, outlier threads, the longest instances, and the region a selection token names. Use whenever there is a marstrace.json from a MarsTrace job to analyse, or its result-manifest.json to judge, or when the user pastes a selection token starting with mtrace/1.
 ---
 
 # Reading a MarsTrace report
@@ -86,6 +86,25 @@ Then check the trace against the kernel's structure with `--stats`:
 - **Every declared site appears**, and **spans make sense**: an interval close to the
   whole kernel is a wait the regions do not split out; a leave before its enter means the region
   is backwards.
+
+## 2a. Read the delivered analysis
+
+A fast job carries the analyser's summary of its first run beside the trace. `marstrace
+fetch` prints it; `marstrace show <marstrace.json> --analysis` prints it again, and adds
+`--json` for its data. Read it after the gate:
+
+- **Findings** name what the trace shows, each with its evidence (numbers of this run), the
+  next step, and **where** it sits: the region and its sites' SASS index, opcode and source
+  line. Quote the numbers as they read; they are the analyser's, not estimates.
+- **Hypotheses** under a finding, and **what this trace cannot tell**, are causes a timing
+  trace does not measure (DRAM bandwidth, coalescing, stalls, L2). Each names the measurement
+  that would settle it, such as a range profiler metric. Never present one as the cause until
+  that measurement has been made.
+- **Balance**: SM utilization, the tail, blocks resident per SM and the SM count describe the
+  grid. Blocks resident per SM is measured; do not derive waves from blocks divided by SMs.
+- **Traced span against the uninstrumented kernel time**: a span much shorter than the
+  kernel time means work outside the traced sites, or launch overhead; the UNSEEN finding
+  says how much.
 
 ## 3. Find the bubbles
 
