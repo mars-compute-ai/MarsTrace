@@ -88,7 +88,7 @@ claude plugin install marstrace@marscompute
 - 每次 attempt 都在一台独立的 GPU 机器上运行，attempt 结束后机器即被删除，不同 job、不同客户之间不共享任何东西。
 - 机器不接受任何入站连接，agent 所在的容器只能连到 MarsTrace 服务。
 - 你上传的文件在 job 结束 24 小时后删除，结果可以在 30 天内下载。
-- MarsCompute 会保留每个 job 中 agent 与模型往来的请求和回复，其中可能引用你的代码。只有 MarsCompute 的管理员能查看；你提出要求时会删除。
+- MarsCompute 会保留每个 job 中 agent 与模型往来的请求和回复，其中可能引用你的代码。这些记录在 job 结束后保留 30 天，到期自动删除；只有 MarsCompute 的管理员能查看。你提出要求时，可以提前删除。
 
 ## 常见问题
 

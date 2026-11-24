@@ -118,8 +118,8 @@ minimum that `marstrace credit` shows, and `marstrace estimate` shows the most i
 - Your uploaded files are deleted 24 hours after the job ends. Results can be downloaded
   for 30 days.
 - MarsCompute keeps the agent's model requests and replies for each job, which may quote
-  your code. Only MarsCompute administrators can read them, and they are deleted on your
-  request.
+  your code, for 30 days after the job ends, and then deletes them. Only MarsCompute
+  administrators can read them, and they are deleted earlier on your request.
 
 ## FAQ
 
