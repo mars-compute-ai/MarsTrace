@@ -148,4 +148,6 @@ pull request.
 The MarsTrace client is source-available under the
 [PolyForm Noncommercial License 1.0.0](LICENSE): you may use, change and share it for any
 noncommercial purpose. [NOTICE](NOTICE) holds the required notice. The license does not
-allow commercial use.
+allow commercial use, with one exception in
+[LICENSE-ADDITIONAL-PERMISSION](LICENSE-ADDITIONAL-PERMISSION): a MarsCompute customer may use
+the client for any purpose, commercial ones included, to access the MarsTrace service.

@@ -12,6 +12,7 @@ readme = "README.md"
 license = "LicenseRef-PolyForm-Noncommercial-1.0.0"
 license-files = [
     "LICENSE",
+    "LICENSE-ADDITIONAL-PERMISSION",
     "NOTICE",
 ]
 requires-python = ">=3.11"

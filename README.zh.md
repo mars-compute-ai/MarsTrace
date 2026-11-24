@@ -106,4 +106,4 @@ claude plugin install marstrace@marscompute
 
 ## 许可证
 
-MarsTrace 客户端的源码按 [PolyForm Noncommercial License 1.0.0](LICENSE) 公开（source-available），不是 OSI 意义上的开源软件。你可以出于任何非商业目的使用、修改和分享它。[NOTICE](NOTICE) 里有必须保留的声明。本许可不允许商业使用。
+MarsTrace 客户端的源码按 [PolyForm Noncommercial License 1.0.0](LICENSE) 公开（source-available），不是 OSI 意义上的开源软件。你可以出于任何非商业目的使用、修改和分享它。[NOTICE](NOTICE) 里有必须保留的声明。本许可不允许商业使用，只有一个例外，写在 [LICENSE-ADDITIONAL-PERMISSION](LICENSE-ADDITIONAL-PERMISSION) 里：MarsCompute 的客户可以出于任何目的（包括商业目的）使用本客户端访问 MarsTrace 服务。
