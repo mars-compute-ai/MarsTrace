@@ -10,7 +10,7 @@ MarsTrace 在云端 GPU 上测量 CUDA kernel 内部的耗时。你提交 kernel
 2. 安装客户端，跑一下仓库自带的例子：
 
 ```bash
-pip install 'git+https://github.com/mars-compute-ai/MarsTrace@v0.2.0'
+pip install 'git+https://github.com/mars-compute-ai/MarsTrace@v0.2.1'
 export MARSTRACE_API_KEY=mt_live_...
 
 marstrace estimate examples/matmul        # token 单价、这次 job 最多花多少、余额

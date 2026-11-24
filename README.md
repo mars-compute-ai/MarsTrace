@@ -16,7 +16,7 @@ local GPU.
 2. Install the client and trace the bundled example:
 
 ```bash
-pip install 'git+https://github.com/mars-compute-ai/MarsTrace@v0.2.0'
+pip install 'git+https://github.com/mars-compute-ai/MarsTrace@v0.2.1'
 export MARSTRACE_API_KEY=mt_live_...
 
 marstrace estimate examples/matmul        # token rates, the most the job can cost, your balance
