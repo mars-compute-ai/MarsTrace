@@ -6,11 +6,9 @@ order the client makes them.
 
 ## 1. Source of truth
 
-Section 3 of the MarsTrace contract, `docs/reference/marstrace.md` of
-mars-compute-ai/marscompute-maas, defines the API, and the service in
-`services/marstrace` of the same repository implements it. Where this document and the
-contract disagree, the contract wins; where the contract and the service disagree, the
-client follows the service.
+MarsCompute's MarsTrace service contract defines the API, and the service at
+`https://console.marscompute.ai/trace` implements it. Where this document and the service
+disagree, the client follows the service.
 
 The service publishes no JSON Schemas. The client checks every answer against its own
 shapes in `marstrace/schema.py`: required fields, types, money strings, prefixed ids, times
