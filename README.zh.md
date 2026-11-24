@@ -1,6 +1,6 @@
 # MarsTrace
 
-MarsTrace 在云端 GPU 上测量 CUDA kernel 内部的耗时。你提交 kernel 的 cubin，GPU 机器上的 agent 负责插桩，按你写的 launch 运行，然后返回 `marstrace.json`。结果里有每个 thread 或 warp 在各个区间的耗时、grid 的负载平衡，以及时间花在哪里的分析。本仓库是客户端，也就是 `marstrace` 命令和它的 MCP 服务，面向 kernel 开发者和他们的 coding agent，本地不需要 GPU。
+MarsTrace 在云端 GPU 上测量 CUDA kernel 内部的耗时。你提交 kernel 的 cubin，GPU 机器上的 agent 负责插桩，按你写的 launch 运行，然后返回 `marstrace.json`。结果里有每个 thread 或 warp 在各个区间的耗时、grid 的负载平衡，以及时间花在哪里的分析。本仓库是源码公开（source-available）的客户端，也就是 `marstrace` 命令和它的 MCP 服务，面向 kernel 开发者和他们的 coding agent，本地不需要 GPU。
 
 [English](README.md)
 
@@ -106,4 +106,4 @@ claude plugin install marstrace@marscompute
 
 ## 许可证
 
-许可证会在本仓库公开前加上。
+MarsTrace 客户端的源码按 [PolyForm Noncommercial License 1.0.0](LICENSE) 公开（source-available），不是 OSI 意义上的开源软件。你可以出于任何非商业目的使用、修改和分享它。[NOTICE](NOTICE) 里有必须保留的声明。本许可不允许商业使用。

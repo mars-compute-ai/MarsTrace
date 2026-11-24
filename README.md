@@ -3,8 +3,8 @@
 MarsTrace times the inside of a CUDA kernel on a cloud GPU. You send the kernel's cubin, and
 an agent on a GPU machine instruments it, runs it at the launch you describe and returns
 `marstrace.json`: per-region durations for every thread or warp, the balance of the grid, and
-an analysis of where the time goes. This repository is the client, the `marstrace` command
-and its MCP server. It is for kernel developers and their coding agents, and it needs no
+an analysis of where the time goes. This repository is the source-available client, the
+`marstrace` command and its MCP server. It is for kernel developers and their coding agents, and it needs no
 local GPU.
 
 [中文版](README.zh.md)
@@ -145,4 +145,7 @@ pull request.
 
 ## License
 
-The license will be added before this repository is published.
+The MarsTrace client is source-available under the
+[PolyForm Noncommercial License 1.0.0](LICENSE): you may use, change and share it for any
+noncommercial purpose. [NOTICE](NOTICE) holds the required notice. The license does not
+allow commercial use.
