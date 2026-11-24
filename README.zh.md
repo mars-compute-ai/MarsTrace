@@ -102,7 +102,7 @@ claude plugin install marstrace@marscompute
 
 ## 参与贡献
 
-欢迎提 issue 和 pull request。仓库结构、测试方法和改动要遵守的规则见 [AGENT.md](AGENT.md)。提 pull request 前请先跑 `python -m unittest discover -s tests`。
+欢迎提 issue，暂不接受 pull request。怎么反馈问题见 [CONTRIBUTING.md](CONTRIBUTING.md)；仓库结构、测试方法和改动要遵守的规则见 [AGENT.md](AGENT.md)。
 
 ## 许可证
 

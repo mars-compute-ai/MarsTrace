@@ -139,9 +139,9 @@ overhead fall outside it. The analysis reports the gap.
 
 ## Contributing
 
-Issues and pull requests are welcome. [AGENT.md](AGENT.md) describes the layout, the tests
-and the rules a change follows; run `python -m unittest discover -s tests` before you open a
-pull request.
+Issues are welcome; pull requests are not accepted for now.
+[CONTRIBUTING.md](CONTRIBUTING.md) says how to report a problem, and [AGENT.md](AGENT.md)
+describes the layout, the tests and the rules a change follows.
 
 ## License
 
