@@ -83,6 +83,7 @@ MAP_ERROR_STATUS = {
     "result_unavailable": 409,
     "limit_exceeded": 413,
     "hardware_unavailable": 422,
+    "mode_unavailable": 400,
     "rate_limited": 429,
     "too_many_jobs": 429,
     "service_unavailable": 503,
@@ -182,6 +183,7 @@ class RequestSchema:
         "inputs": Field(INPUTS),
         "agent": Field(AGENT, is_optional=True, default={}),
         "limits": Field(LIMITS, is_optional=True, default={}),
+        "mode": Field({"fast", "thinking-light", "thinking-heavy"}, is_optional=True, default="fast"),
     }
     UPLOAD = {
         "role": Field({"cubin", "source_archive", "launch_manifest", "tensor", "file"}),
@@ -296,6 +298,7 @@ class FakeState:
         # whether a job's first attempt is preempted while it runs, and retried
         self.do_preempt_first_attempt = False
         self.is_trace_unusable = False
+        self.do_deliver_analysis = False
         self.do_fail_job = False
         # whether admission refuses although the estimate said admissible, as when another job took the balance
         self.do_refuse_admission = False
@@ -518,6 +521,11 @@ class FakeService(http.server.BaseHTTPRequestHandler):
         if job["status"] == "succeeded":
             with open(os.path.join(FIXTURE_DIRECTORY, "trace_sass_regions.json"), "rb") as trace_file:
                 trace = trace_file.read()
+            if state.do_deliver_analysis:
+                document = json.loads(trace)
+                with open(os.path.join(FIXTURE_DIRECTORY, "analysis_section.json"), "rb") as section_file:
+                    document["sections"].append(json.load(section_file))
+                trace = json.dumps(document).encode()
             state.map_object[job["job_id"]] = trace
             job["attempts"][-1].update(status="succeeded", ended_at=TIMESTAMP)
             job["ended_at"] = TIMESTAMP
@@ -645,6 +653,8 @@ class FakeService(http.server.BaseHTTPRequestHandler):
         return FakeService._upload_view(upload)
 
     def _hardware(self, request: dict[str, Any]) -> dict[str, Any]:
+        if request.get("mode", "fast") != "fast":
+            raise ServiceError("mode_unavailable", "This mode is not available yet; submit a fast job")
         entry = next((entry for entry in FakeService.state.map_hardware["hardware"] if entry["id"] == request["hardware"]), None)
         if entry is None:
             raise ServiceError("hardware_unavailable", f"Unknown hardware {request['hardware']}; see GET /v1/hardware")

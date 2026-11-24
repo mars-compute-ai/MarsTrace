@@ -7,6 +7,7 @@ import os
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, TextIO
+from marstrace.analysis import DeliveredAnalysis
 from marstrace.binary import DslCache, KernelBinary
 from marstrace.error import MarsTraceError, ServiceError, ToolArgumentError
 from marstrace.guide import AgentGuide
@@ -586,7 +587,9 @@ class McpServer:
             McpTool(
                 name="marstrace_fetch",
                 description="Download a succeeded job's marstrace.json and its result manifest into a "
-                "local directory.",
+                "local directory, and answer the analysis it carries: the analyser's findings, each "
+                "with where its sites sit (SASS index, opcode, source line), the causes the trace "
+                "cannot settle with the measurement that would, and the grid's balance.",
                 map_input_schema=McpServer._schema(
                     map_property={
                         "job_id": map_job_id,
@@ -594,15 +597,7 @@ class McpServer:
                     },
                     list_required=["job_id"],
                 ),
-                handler=lambda map_arguments: {
-                    "files": self._workflow().fetch(
-                        job_id=map_arguments["job_id"],
-                        output_directory=map_arguments.get("output") or os.path.join(
-                            MarsTraceWorkflow.RESULTS_DIRECTORY,
-                            map_arguments["job_id"],
-                        ),
-                    ),
-                },
+                handler=self._fetch,
             ),
             McpTool(
                 name="marstrace_show",
@@ -676,6 +671,29 @@ class McpServer:
                 quoted=quoted,
                 idempotency_key=idempotency_key,
             ),
+        }
+
+    def _fetch(self, map_arguments: dict[str, Any]) -> dict[str, Any]:
+        """The files a fetch wrote, and the analysis the trace carries."""
+        list_path = self._workflow().fetch(
+            job_id=map_arguments["job_id"],
+            output_directory=map_arguments.get("output") or os.path.join(
+                MarsTraceWorkflow.RESULTS_DIRECTORY,
+                map_arguments["job_id"],
+            ),
+        )
+        analysis = next(
+            (
+                DeliveredAnalysis.from_file(path)
+                for path in list_path
+                if os.path.basename(path) == MarsTraceWorkflow.RESULT_FILE
+            ),
+            None,
+        )
+        return {
+            "files": list_path,
+            "analysis": None if analysis is None else analysis.to_json(),
+            "analysis_text": None if analysis is None else analysis.text(),
         }
 
     def _show(self, map_arguments: dict[str, Any]) -> str:

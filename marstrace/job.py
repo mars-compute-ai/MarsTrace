@@ -477,6 +477,8 @@ class JobManifest:
         cuda_version: the CUDA toolkit version, ``M.m``, the job runs with; None for the
             hardware's default
         intent: what the trace should answer, the job's prompt
+        mode: ``fast`` (the trace and the analyser's summary of it), or ``thinking-light`` or
+            ``thinking-heavy``, which optimize the kernel and are not offered yet
         workspace: the files the agent works with
         agent: the session's budget
         limits: the attempts
@@ -501,11 +503,18 @@ class JobManifest:
         "hardware",
         "cuda_version",
         "intent",
+        "mode",
         "workspace",
         "agent",
         "limits",
     }
     CUDA_VERSION_PATTERN = re.compile(r"[1-9][0-9]*\.[0-9]+")
+    MODE_DEFAULT = "fast"
+    SET_MODE = {
+        "fast",
+        "thinking-light",
+        "thinking-heavy",
+    }
     # upload role of each workspace key
     MAP_ROLE = {
         "cubins": "cubin",
@@ -527,6 +536,7 @@ class JobManifest:
     hardware: str
     intent: str
     cuda_version: str | None = None
+    mode: str = "fast"
     workspace: WorkspaceSpec
     agent: AgentOptions
     limits: JobLimits = field(default_factory=JobLimits)
@@ -667,6 +677,9 @@ class JobManifest:
             if key not in map_manifest:
                 raise ManifestError(f"{path}: [{key}] is required: the files the agent works with")
         workspace = WorkspaceSpec.from_table(map_manifest["workspace"])
+        mode = map_manifest.get("mode", JobManifest.MODE_DEFAULT)
+        if mode not in JobManifest.SET_MODE:
+            raise ManifestError(f"{path}: 'mode' is one of {', '.join(sorted(JobManifest.SET_MODE))}")
         cuda_version = map_manifest.get("cuda_version")
         if cuda_version is not None:
             JobManifest.check_cuda_version(
@@ -678,6 +691,7 @@ class JobManifest:
             hardware=map_manifest["hardware"],
             cuda_version=cuda_version,
             intent=map_manifest["intent"],
+            mode=mode,
             workspace=workspace,
             agent=AgentOptions.from_table(
                 map_manifest.get(
@@ -853,12 +867,13 @@ class JobManifest:
             map_upload_ids: upload role to the ids of the verified uploads of that role
 
         Returns:
-            ``hardware``, ``prompt``, ``inputs``, ``agent``, ``cuda_version`` when the
-            manifest sets it, and ``limits`` when the manifest sets ``max_attempts``
+            ``hardware``, ``prompt``, ``mode``, ``inputs``, ``agent``, ``cuda_version`` when
+            the manifest sets it, and ``limits`` when the manifest sets ``max_attempts``
         """
         map_request = {
             "hardware": self.select_hardware(map_hardware)["id"],
             "prompt": self.intent,
+            "mode": self.mode,
             "inputs": JobManifest.inputs(map_upload_ids),
             "agent": self.agent.to_api(map_hardware["agent"]),
         }

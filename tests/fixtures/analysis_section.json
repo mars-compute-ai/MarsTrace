@@ -1,0 +1,379 @@
+{
+ "title": "Bottleneck analysis",
+ "type": "marscompute.analysis",
+ "data": {
+  "schema_version": "marscompute.marstrace.analysis.v1",
+  "status": "complete",
+  "analyser_release": "0.5.0+2e81c09f0218",
+  "run": "marstrace.json",
+  "notes": null,
+  "summary": {
+   "schema": "xplain.summary/2",
+   "kernel": "square_matrix_mul",
+   "kernel_short": "square_matrix_mul",
+   "unit": "ns",
+   "clock_type": "gpu",
+   "granularity": "warp",
+   "grid": [
+    16,
+    16,
+    1
+   ],
+   "block": [
+    16,
+    16,
+    1
+   ],
+   "records": 8192,
+   "rows": 2048,
+   "span": 8288.0,
+   "spec": {
+    "family": "",
+    "case": "marstrace",
+    "workload": "",
+    "uninstrumented_us": 16.64000004529953,
+    "instrumented_us": null
+   },
+   "gate": {
+    "verdict": "usable",
+    "issues": [],
+    "withheld_regions": {}
+   },
+   "regions": [
+    {
+     "label": "whole kernel",
+     "role": "Compute Warp",
+     "kind": "work",
+     "enter": 0,
+     "leave": 3,
+     "rows": 2048,
+     "per_row": 1.0,
+     "pair_rate": 1.0,
+     "dropped": 0,
+     "duration": {
+      "count": 2048,
+      "total": 15570752.0,
+      "mean": 7602.90625,
+      "min": 7136.0,
+      "p50": 7616.0,
+      "p95": 7872.0,
+      "max": 8000.0
+     },
+     "share_of_role": 1.0,
+     "excess_share_of_role": 0.0
+    },
+    {
+     "label": "setup before dot product",
+     "role": "Compute Warp",
+     "kind": "work",
+     "enter": 0,
+     "leave": 1,
+     "rows": 2048,
+     "per_row": 1.0,
+     "pair_rate": 1.0,
+     "dropped": 0,
+     "duration": {
+      "count": 2048,
+      "total": 255520.0,
+      "mean": 124.765625,
+      "min": 64.0,
+      "p50": 128.0,
+      "p95": 192.0,
+      "max": 224.0
+     },
+     "share_of_role": 0.01641025430242547,
+     "excess_share_of_role": 0.0
+    },
+    {
+     "label": "dot product loop",
+     "role": "Compute Warp",
+     "kind": "work",
+     "enter": 1,
+     "leave": 2,
+     "rows": 2048,
+     "per_row": 1.0,
+     "pair_rate": 1.0,
+     "dropped": 0,
+     "duration": {
+      "count": 2048,
+      "total": 15166016.0,
+      "mean": 7405.28125,
+      "min": 6944.0,
+      "p50": 7392.0,
+      "p95": 7680.0,
+      "max": 7840.0
+     },
+     "share_of_role": 0.974006650417398,
+     "excess_share_of_role": 0.0
+    },
+    {
+     "label": "result store after loop",
+     "role": "Compute Warp",
+     "kind": "work",
+     "enter": 2,
+     "leave": 3,
+     "rows": 2048,
+     "per_row": 1.0,
+     "pair_rate": 1.0,
+     "dropped": 0,
+     "duration": {
+      "count": 2048,
+      "total": 149216.0,
+      "mean": 72.859375,
+      "min": 32.0,
+      "p50": 64.0,
+      "p95": 128.0,
+      "max": 160.0
+     },
+     "share_of_role": 0.009583095280176578,
+     "excess_share_of_role": 0.0
+    }
+   ],
+   "roles": [
+    {
+     "role": "Compute Warp",
+     "rows": 2048,
+     "lifetime": {
+      "count": 2048,
+      "total": 15570752.0,
+      "mean": 7602.90625,
+      "min": 7136.0,
+      "p50": 7616.0,
+      "p95": 7872.0,
+      "max": 8000.0
+     },
+     "work_share": 1.0,
+     "wait_share": 0.0,
+     "mixed_share": 0.0,
+     "uncovered_share": 0.0,
+     "list_region_label": [
+      "whole kernel",
+      "setup before dot product",
+      "dot product loop",
+      "result store after loop"
+     ]
+    }
+   ],
+   "imbalance": {
+    "nb_block": 256,
+    "nb_sm": 148,
+    "span": 8288.0,
+    "busy": {
+     "count": 256,
+     "total": 1954048.0,
+     "mean": 7633.0,
+     "min": 7168.0,
+     "p50": 7616.0,
+     "p95": 7904.0,
+     "max": 8032.0
+    },
+    "end": {
+     "count": 256,
+     "total": 1996448.0,
+     "mean": 7798.625,
+     "min": 7200.0,
+     "p50": 7808.0,
+     "p95": 8128.0,
+     "max": 8288.0
+    },
+    "units": {
+     "count": 256,
+     "total": 256.0,
+     "mean": 1.0,
+     "min": 1.0,
+     "p50": 1.0,
+     "p95": 1.0,
+     "max": 1.0
+    },
+    "busy_max_over_p50": 1.0546218487394958,
+    "tail_share": 0.06666666666666672,
+    "sm_utilization": 0.9251800062610873,
+    "unit_label": "whole kernel",
+    "busy_unit_correlation": 0.0,
+    "nb_idle_sm": 0,
+    "resident_per_sm": 2.0,
+    "nb_empty_block": 0,
+    "curve": [
+     0.4203,
+     0.9938,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     0.8318,
+     0.4365,
+     0.1621,
+     0.0336
+    ],
+    "sm_count": 148,
+    "sm_count_source": "report",
+    "resident_mean": 1.5930293227590524,
+    "withheld": "",
+    "nb_unitless_sm": 0
+   },
+   "loops": [],
+   "handoffs": [],
+   "pipelines": [],
+   "budget": {
+    "idle_share": 0.07481999373891268,
+    "overhead_share": null,
+    "steady_share": null,
+    "main_role": "",
+    "main_region": "",
+    "turns_per_row": null,
+    "steady_turn": null,
+    "lifetime_per_turn": null,
+    "tiles_per_block": 0.0,
+    "tile_cost": null,
+    "has_loop": false,
+    "withheld": "",
+    "busy_share": 0.9251800062610873
+   },
+   "floor_ratios": {},
+   "start_level": "pipeline",
+   "findings": [
+    {
+     "code": "UNSEEN",
+     "severity": 4.0,
+     "title": "at least 8.4 us of the kernel lie outside the traced span (0.50x)",
+     "evidence": "traced span 8.3 us against 16.6 us uninstrumented; work before a role's first site or after its last (a tail epilogue, a final store) is invisible, and so is launch overhead. The probes' own cost is netted against it, so the real amount is larger; the trace cannot say whether it is before the first site or after the last",
+     "next_step": "add a site at kernel entry and at the exit of every role (the loops table's before/after columns then say where), or confirm the gap is launch overhead with a CUPTI timeline",
+     "playbook": "G2",
+     "region": "",
+     "role": "",
+     "level": "trace",
+     "list_location": [],
+     "list_hypothesis": [],
+     "withheld": ""
+    },
+    {
+     "code": "WORK-ONLY",
+     "severity": 4.0,
+     "title": "every traced region is work: the trace times whole kernel but cannot say what it waits for",
+     "evidence": "4 work region(s), no wait region; whole kernel p50 7,616 ns per row, 1.0 turns per row; a duration alone does not tell memory from compute from latency",
+     "next_step": "name no cause from this trace; measure the candidates below, or re-trace with sites on the waits (the scoreboard waits after the loads, the barrier, the MMA completion) so the trace can split wait from work",
+     "playbook": "G4",
+     "region": "whole kernel",
+     "role": "Compute Warp",
+     "level": "pipeline",
+     "list_location": [
+      {
+       "boundary": "enter",
+       "site_id": 0,
+       "sass_index": 34,
+       "opcode": "PLOP3.LUT",
+       "event": "",
+       "source": "matmul.cu:9"
+      },
+      {
+       "boundary": "leave",
+       "site_id": 1,
+       "sass_index": 108,
+       "opcode": "ISETP.GT.AND",
+       "event": "",
+       "source": "matmul.cu:8"
+      }
+     ],
+     "list_hypothesis": [
+      {
+       "cause": "DRAM bandwidth (memory-bound)",
+       "verify_with": "a range profiler (e.g. Nsight Compute): dram__bytes_read.sum and dram__bytes_write.sum against the minimum bytes (each input read once plus each output written once; the bytes all threads issue are not a floor), and dram__throughput.avg.pct_of_peak_sustained_elapsed"
+      },
+      {
+       "cause": "uncoalesced global loads or stores",
+       "verify_with": "per-instruction SASS counters (e.g. Nsight Compute source counters): global sectors against ideal per instruction"
+      },
+      {
+       "cause": "which instruction stalls, and why",
+       "verify_with": "PC sampling of stall reasons (e.g. Nsight Compute warp sampling) on the region's instruction range; on a kernel that allocates tensor memory (tcgen05.alloc) PC sampling sees nothing after the alloc, so use range profiling or ncu source counters"
+      }
+     ],
+     "withheld": ""
+    }
+   ],
+   "suppressed_findings": [],
+   "unmeasured": [
+    {
+     "cause": "the bound role's own issue work (its work regions, not the memory behind them)",
+     "verify_with": "the role's work regions in `xplain regions`; split the longest with a site, then SASS metrics on it"
+    },
+    {
+     "cause": "DRAM bandwidth (memory-bound)",
+     "verify_with": "a range profiler (e.g. Nsight Compute): dram__bytes_read.sum and dram__bytes_write.sum against the minimum bytes (each input read once plus each output written once; the bytes all threads issue are not a floor), and dram__throughput.avg.pct_of_peak_sustained_elapsed"
+    },
+    {
+     "cause": "L2 misses or L2 bandwidth",
+     "verify_with": "a range profiler (e.g. Nsight Compute): lts__t_sector_hit_rate.pct, lts__t_bytes.sum"
+    },
+    {
+     "cause": "uncoalesced global loads or stores",
+     "verify_with": "per-instruction SASS counters (e.g. Nsight Compute source counters): global sectors against ideal per instruction"
+    },
+    {
+     "cause": "shared-memory bank conflicts",
+     "verify_with": "per-instruction SASS counters (e.g. Nsight Compute source counters): shared wavefronts against ideal per instruction"
+    },
+    {
+     "cause": "which instruction stalls, and why",
+     "verify_with": "PC sampling of stall reasons (e.g. Nsight Compute warp sampling) on the region's instruction range; on a kernel that allocates tensor memory (tcgen05.alloc) PC sampling sees nothing after the alloc, so use range profiling or ncu source counters"
+    },
+    {
+     "cause": "tensor-pipe saturation",
+     "verify_with": "a range profiler (e.g. Nsight Compute): sm__pipe_tensor_cycles_active; or declare floors_ns_per_turn in the spec"
+    }
+   ]
+  },
+  "summary_reduced": false,
+  "summary_omitted_strings": 0
+ }
+}

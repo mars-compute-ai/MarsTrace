@@ -207,6 +207,51 @@ class CommandLineTest(unittest.TestCase):
         self.assertEqual(status, 0)
         self.assertEqual(sorted(os.listdir(output_directory)), ["marstrace.json", "result-manifest.json"])
 
+    def test_fetch_and_show_print_the_delivered_analysis_with_where_its_findings_sit(self) -> None:
+        self.fake.state.do_deliver_analysis = True
+        status, output, error = self.run_cli("submit", self.directory, "--yes", "--wait")
+        self.assertEqual(status, 0, error)
+        self.assertIn("analysis (analyser 0.5.0+2e81c09f0218)", output)
+        self.assertIn("[WORK-ONLY] every traced region is work", output)
+        self.assertIn(
+            "where: whole kernel, enter site 0: SASS 34 PLOP3.LUT (matmul.cu:9); "
+            "leave site 1: SASS 108 ISETP.GT.AND (matmul.cu:8)",
+            output,
+        )
+        self.assertIn("blocks resident per SM: 1.59", output)
+        self.assertIn("what this trace cannot tell:", output)
+        job_id = next(iter(self.fake.state.map_job))
+        trace = os.path.join(self.directory, "marstrace-results", job_id, "marstrace.json")
+        status, output, error = self.run_cli("show", trace, "--analysis")
+        self.assertEqual(status, 0, error)
+        self.assertIn("[UNSEEN]", output)
+        status, output, error = self.run_cli("show", trace, "--analysis", "--json")
+        self.assertEqual(json.loads(output)["summary"]["schema"], "xplain.summary/2")
+
+    def test_a_trace_without_an_analysis_says_so(self) -> None:
+        status, output, error = self.run_cli("submit", self.directory, "--yes", "--wait")
+        self.assertEqual(status, 0, error)
+        self.assertNotIn("findings:", output)
+        job_id = next(iter(self.fake.state.map_job))
+        trace = os.path.join(self.directory, "marstrace-results", job_id, "marstrace.json")
+        status, output, error = self.run_cli("show", trace, "--analysis")
+        self.assertIn("analysis: this report carries none", output)
+
+    def test_an_optimizing_mode_is_refused_and_an_unknown_one_is_caught_locally(self) -> None:
+        manifest = os.path.join(self.directory, "marstrace.toml")
+        with open(manifest) as manifest_file:
+            text = manifest_file.read()
+        with open(manifest, "w") as manifest_file:
+            manifest_file.write('mode = "thinking-light"\n' + text)
+        status, output, error = self.run_cli("submit", self.directory, "--yes")
+        self.assertNotEqual(status, 0)
+        self.assertIn("This mode is not available yet; submit a fast job", error + output)
+        with open(manifest, "w") as manifest_file:
+            manifest_file.write('mode = "thinking"\n' + text)
+        status, output, error = self.run_cli("estimate", self.directory)
+        self.assertNotEqual(status, 0)
+        self.assertIn("'mode' is one of fast, thinking-heavy, thinking-light", error + output)
+
     def test_cubin_find_copies_into_the_workspace(self) -> None:
         cache = os.path.join(self.directory, "cache")
         os.makedirs(cache)
