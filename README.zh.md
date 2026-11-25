@@ -75,7 +75,7 @@ claude plugin install marstrace@marscompute
 ## 目前支持的范围
 
 - 模式：fast，即 trace 加分析。用来优化 kernel 的 `thinking-light` 和 `thinking-heavy` 还未开放。
-- GPU：H200、B200。
+- GPU：H200、B200。`marstrace hardware` 列出你的账号能用的硬件。
 - CUDA：13.0。
 - 输入：最多 8 个 cubin（必须是 ELF cubin，不接受 PTX）。另外可以附源码、launch 描述文件、safetensors 输入和其他文件，合计不超过 256 MiB。
 

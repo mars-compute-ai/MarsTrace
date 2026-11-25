@@ -1,6 +1,6 @@
 ---
 name: marstrace-remote
-description: Trace the timeline inside one CUDA kernel on an H200, B200 or B300 with MarsTrace, without a local GPU. Gather the kernel's cubins (from nvcc, Triton, torch.compile, TileLang or CuTeDSL output), and optionally its source, a launch description, input data and a driver script, into a workspace that an agent on the GPU host traces within the caps you set. Then estimate the cost, submit, fetch marstrace.json and read it. A job starts once the workspace's balance reaches a minimum and is charged the agent tokens it actually used, failed attempts included, or nothing when its trace is unusable or it fails without a result. Works through the `marstrace` CLI or its stdio MCP server (`marstrace mcp`). Use when the user wants per-phase durations, pipeline bubbles or warp-role scheduling inside a kernel.
+description: Trace the timeline inside one CUDA kernel on an H200 or B200 with MarsTrace, without a local GPU. Gather the kernel's cubins (from nvcc, Triton, torch.compile, TileLang or CuTeDSL output), and optionally its source, a launch description, input data and a driver script, into a workspace that an agent on the GPU host traces within the caps you set. Then estimate the cost, submit, fetch marstrace.json and read it. A job starts once the workspace's balance reaches a minimum and is charged the agent tokens it actually used, failed attempts included, or nothing when its trace is unusable or it fails without a result. Works through the `marstrace` CLI or its stdio MCP server (`marstrace mcp`). Use when the user wants per-phase durations, pipeline bubbles or warp-role scheduling inside a kernel.
 ---
 
 # Tracing a kernel with MarsTrace
@@ -39,7 +39,7 @@ browser and shell; the agent cannot do them:
 Then check the client and the account:
 
 ```bash
-pip install git+https://github.com/mars-compute-ai/MarsTrace
+pip install 'git+https://github.com/mars-compute-ai/MarsTrace@v0.2.1'   # the version the README installs
 marstrace hardware      # hardware ids, GPU, architecture, CUDA versions, token rates, agent model and limits
 marstrace credit        # available balance, the minimum a job needs to start, the page to add credit
 ```
@@ -60,9 +60,9 @@ plugin.
 
 Settle these with the user before writing anything:
 
-- **The hardware.** Pick a hardware id from `marstrace hardware`: `h200`, `b200` or
-  `b300`, among those it shows as available. A cubin runs only on the SM version it was
-  built for: H200 is `sm_90a`, B200 `sm_100a`, B300 `sm_103a`.
+- **The hardware.** Pick a hardware id from `marstrace hardware`: `h200` or `b200`, among
+  those it shows as available; `marstrace hardware` lists the hardware the account can use.
+  A cubin runs only on the SM version it was built for: H200 is `sm_90a`, B200 `sm_100a`.
 - **The CUDA version.** The agent's CUDA toolkit is one of the versions `marstrace hardware`
   lists for the hardware, the one marked default unless `cuda_version` names another. Pick
   the version the user builds with, or one at least as new as the toolkit that built the
@@ -80,12 +80,12 @@ Settle these with the user before writing anything:
 | CUDA C++ | `nvcc -cubin -arch=sm_90a -lineinfo -o k.cubin k.cu` (no GPU needed) |
 | Triton, torch.compile | run it once, then `marstrace cubin find <name> --copy-to my-job` |
 | TileLang | run it once, then `marstrace cubin find <name> --copy-to my-job` |
-| CuTeDSL | have CuTeDSL keep its cubins in a directory (see its documentation on dumping compiled kernels), then `marstrace cubin find <name> --dir <that directory> --copy-to my-job` |
+| CuTeDSL | compile it with `CUTE_DSL_KEEP=cubin CUTE_DSL_DUMP_DIR=<dir> CUTE_DSL_LINEINFO=1` (older releases: `CUTE_DSL_KEEP_CUBIN=1`); `CUTE_DSL_ARCH=sm_100a` targets another GPU and compiles without one. Then `marstrace cubin find <name> --dir <dir> --copy-to my-job` |
 | only PTX at hand | `ptxas -arch=sm_90a -lineinfo -o k.cubin k.ptx`; MarsTrace takes cubins only |
 
 A cached cubin is built for the GPU the user ran it on. Check with
 `marstrace cubin show my-job/<file>.cubin`; when its target differs from the hardware,
-rebuild for that target. `sm_103a` needs CUDA 12.9 or later.
+rebuild for that target.
 
 For Triton, `marstrace cubin find` prints what the cache recorded: the block size
 (`num_warps × 32`), dynamic shared memory, cluster shape and the kernel's signature. Put
@@ -129,6 +129,12 @@ max_attempts = 2                  # 1 to 3, 2 when absent: how often a failed at
   cares about, a launch manifest, or source the agent can build; without one it derives
   the launch from source and spends turns on it. State the problem size in `intent`. A
   driver script that launches the kernel as the user does is the surest of the three.
+- **A CuTeDSL kernel takes its arguments as a struct its host code builds** (TMA
+  descriptors, layouts), so a driver must run that host code. Export it with the
+  compiled function's `export_to_c(dir, name)`, link the object and the DSL's
+  `libcuda_dialect_runtime_static.a` into a small C driver with `-lcuda`, and send the
+  driver, the object and the archive in `files`: the driver then runs with the CUDA
+  driver alone. The object embeds the cubin, so send the same cubin in `cubins`.
 - **A launch manifest** is JSON whose `schema_version` is `marscompute.kernel-launch`. The
   agent on the GPU host reads the rest as a description, so name the kernel, the launch
   shape, the buffers and the arguments plainly:

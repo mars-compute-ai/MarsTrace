@@ -96,7 +96,7 @@ environment, as [.mcp.json](.mcp.json) does, and load the skills from
 
 - Mode `fast`: a trace and its analysis. The modes `thinking-light` and `thinking-heavy`,
   which will optimize a kernel, are not offered yet.
-- GPUs: H200 and B200.
+- GPUs: H200 and B200. `marstrace hardware` lists the hardware your account can use.
 - CUDA 13.0.
 - Inputs: up to 8 cubins (ELF cubins, not PTX), plus optional source, a launch manifest,
   safetensors inputs and other files, 256 MiB in all.
