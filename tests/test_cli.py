@@ -229,6 +229,30 @@ class CommandLineTest(unittest.TestCase):
         status, output, error = self.run_cli("show", trace, "--analysis", "--json")
         self.assertEqual(json.loads(output)["summary"]["schema"], "xplain.summary/2")
 
+    def test_the_analysis_prints_the_run_summary_and_each_later_runs_findings(self) -> None:
+        from marstrace.analysis import DeliveredAnalysis
+
+        analysis = DeliveredAnalysis.from_document(
+            {
+                "sections": [
+                    {
+                        "type": "marscompute.analysis",
+                        "data": {
+                            "status": "complete",
+                            "summary": {"findings": [{"code": "TILE-COST", "title": "tile cost"}]},
+                            "run_summary": "2 run(s) delivered with 1024 records at warp level",
+                            "run_summaries": [
+                                {"run": 1, "summary": {"findings": [{"code": "LOOP", "title": "one iteration takes 1.18 us"}]}}
+                            ],
+                        },
+                    }
+                ]
+            }
+        )
+        text = analysis.text()
+        self.assertIn("2 run(s) delivered with 1024 records", text)
+        self.assertIn("run 1 findings:\n  1. [LOOP] one iteration takes 1.18 us", text)
+
     def test_a_trace_without_an_analysis_says_so(self) -> None:
         status, output, error = self.run_cli("submit", self.directory, "--yes", "--wait")
         self.assertEqual(status, 0, error)
