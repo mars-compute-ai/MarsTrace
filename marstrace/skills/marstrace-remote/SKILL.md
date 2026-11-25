@@ -1,6 +1,6 @@
 ---
 name: marstrace-remote
-description: Trace the timeline inside one CUDA kernel on an H200, B200 or B300 with MarsTrace, without a local GPU. Gather the kernel's cubins (from nvcc, Triton, torch.compile, TileLang or CuTeDSL output), and optionally its source, a launch description, input data and a driver script, into a workspace that an agent on the GPU host traces within the caps you set. Then estimate the cost, submit, fetch marstrace.json and read it. A job starts once the workspace's balance reaches a minimum and is charged the agent tokens it actually used, failed attempts included, or nothing when its trace is unusable or it fails without a result. Works through the `marstrace` CLI or its stdio MCP server (`marstrace mcp`). Use when the user wants per-phase durations, pipeline bubbles or warp-role scheduling inside a kernel.
+description: Trace the timeline inside one CUDA kernel on an H200 or B200 with MarsTrace, without a local GPU. Gather the kernel's cubins (from nvcc, Triton, torch.compile, TileLang or CuTeDSL output), and optionally its source, a launch description, input data and a driver script, into a workspace that an agent on the GPU host traces within the caps you set. Then estimate the cost, submit, fetch marstrace.json and read it. A job starts once the workspace's balance reaches a minimum and is charged the agent tokens it actually used, failed attempts included, or nothing when its trace is unusable or it fails without a result. Works through the `marstrace` CLI or its stdio MCP server (`marstrace mcp`). Use when the user wants per-phase durations, pipeline bubbles or warp-role scheduling inside a kernel.
 ---
 
 # Tracing a kernel with MarsTrace
@@ -60,9 +60,9 @@ plugin.
 
 Settle these with the user before writing anything:
 
-- **The hardware.** Pick a hardware id from `marstrace hardware`: `h200`, `b200` or
-  `b300`, among those it shows as available. A cubin runs only on the SM version it was
-  built for: H200 is `sm_90a`, B200 `sm_100a`, B300 `sm_103a`.
+- **The hardware.** Pick a hardware id from `marstrace hardware`: `h200` or `b200`, among
+  those it shows as available; `marstrace hardware` lists the hardware the account can use.
+  A cubin runs only on the SM version it was built for: H200 is `sm_90a`, B200 `sm_100a`.
 - **The CUDA version.** The agent's CUDA toolkit is one of the versions `marstrace hardware`
   lists for the hardware, the one marked default unless `cuda_version` names another. Pick
   the version the user builds with, or one at least as new as the toolkit that built the
@@ -80,12 +80,12 @@ Settle these with the user before writing anything:
 | CUDA C++ | `nvcc -cubin -arch=sm_90a -lineinfo -o k.cubin k.cu` (no GPU needed) |
 | Triton, torch.compile | run it once, then `marstrace cubin find <name> --copy-to my-job` |
 | TileLang | run it once, then `marstrace cubin find <name> --copy-to my-job` |
-| CuTeDSL | compile it with `CUTE_DSL_KEEP=cubin CUTE_DSL_DUMP_DIR=<dir> CUTE_DSL_LINEINFO=1` (older releases: `CUTE_DSL_KEEP_CUBIN=1`); `CUTE_DSL_ARCH=sm_103a` targets another GPU and compiles without one. Then `marstrace cubin find <name> --dir <dir> --copy-to my-job` |
+| CuTeDSL | compile it with `CUTE_DSL_KEEP=cubin CUTE_DSL_DUMP_DIR=<dir> CUTE_DSL_LINEINFO=1` (older releases: `CUTE_DSL_KEEP_CUBIN=1`); `CUTE_DSL_ARCH=sm_100a` targets another GPU and compiles without one. Then `marstrace cubin find <name> --dir <dir> --copy-to my-job` |
 | only PTX at hand | `ptxas -arch=sm_90a -lineinfo -o k.cubin k.ptx`; MarsTrace takes cubins only |
 
 A cached cubin is built for the GPU the user ran it on. Check with
 `marstrace cubin show my-job/<file>.cubin`; when its target differs from the hardware,
-rebuild for that target. `sm_103a` needs CUDA 12.9 or later.
+rebuild for that target.
 
 For Triton, `marstrace cubin find` prints what the cache recorded: the block size
 (`num_warps × 32`), dynamic shared memory, cluster shape and the kernel's signature. Put
