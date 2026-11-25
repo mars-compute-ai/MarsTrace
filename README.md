@@ -100,6 +100,9 @@ environment, as [.mcp.json](.mcp.json) does, and load the skills from
 - CUDA 13.0.
 - Inputs: up to 8 cubins (ELF cubins, not PTX), plus optional source, a launch manifest,
   safetensors inputs and other files, 256 MiB in all.
+- Rate limits per API key: 60 requests, 30 upload grants and 5 submissions a minute, and 2
+  running and 10 queued jobs per workspace. The client waits and retries a rate-limited
+  request on its own.
 
 ## Billing
 

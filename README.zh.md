@@ -78,6 +78,7 @@ claude plugin install marstrace@marscompute
 - GPU：H200、B200。`marstrace hardware` 列出你的账号能用的硬件。
 - CUDA：13.0。
 - 输入：最多 8 个 cubin（必须是 ELF cubin，不接受 PTX）。另外可以附源码、launch 描述文件、safetensors 输入和其他文件，合计不超过 256 MiB。
+- 每个 API key 的限额：每分钟 60 个请求、30 个上传授权、5 次提交；每个 workspace 同时运行 2 个 job，排队最多 10 个。请求被限流时，客户端会自动等待并重试。
 
 ## 计费
 
