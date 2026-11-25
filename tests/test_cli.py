@@ -253,6 +253,18 @@ class CommandLineTest(unittest.TestCase):
         self.assertIn("2 run(s) delivered with 1024 records", text)
         self.assertIn("run 1 findings:\n  1. [LOOP] one iteration takes 1.18 us", text)
 
+    def test_a_queued_job_says_why_it_waits(self) -> None:
+        from marstrace.cli import JobCommands
+
+        self.assertEqual(
+            JobCommands.queue_text({"reason": "workspace_limit", "position": 2, "workspace_dispatched_limit": 2}),
+            "your workspace already runs its 2 jobs; number 2 in its queue",
+        )
+        self.assertIn(
+            "next attempt at 2026-11-25T05:00:00Z",
+            JobCommands.queue_text({"reason": "retry_wait", "next_attempt_at": "2026-11-25T05:00:00Z"}),
+        )
+
     def test_a_trace_without_an_analysis_says_so(self) -> None:
         status, output, error = self.run_cli("submit", self.directory, "--yes", "--wait")
         self.assertEqual(status, 0, error)
