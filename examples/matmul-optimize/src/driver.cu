@@ -15,6 +15,9 @@ constexpr float kTime_MicrosecondsPerMillisecond = 1000.0f;
 constexpr int kExit_Success = 0;
 constexpr int kExit_Failure = 1;
 constexpr int kArgument_FirstSize = 2;
+// above this side the check compares a sample of rows, so it stays within seconds
+constexpr uint64_t kCheck_FullSide = 1024;
+constexpr uint64_t kCheck_SampledRows = 64;
 
 class MatmulDriver {
  public:
@@ -34,6 +37,7 @@ int MatmulDriver::run(uint64_t n, bool do_check) {
     uint64_t i = 0;
     uint64_t k = 0;
     uint64_t row = 0;
+    uint64_t row_step = 1;
     uint64_t column = 0;
     int64_t sum = 0;
     float elapsed_ms = 0.0f;
@@ -97,7 +101,8 @@ int MatmulDriver::run(uint64_t n, bool do_check) {
     }
 
     cudaMemcpy(list_c.data(), device_c, nb_byte, cudaMemcpyDeviceToHost);
-    for (row = 0; row < n; ++row) {
+    row_step = n <= kCheck_FullSide ? 1 : n / kCheck_SampledRows;
+    for (row = 0; row < n; row = (row + row_step < n || row == n - 1) ? row + row_step : n - 1) {
         for (column = 0; column < n; ++column) {
             sum = 0;
             for (k = 0; k < n; ++k) {
