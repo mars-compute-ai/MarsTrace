@@ -97,6 +97,19 @@ class TranslationTest(unittest.TestCase):
         self.assertIn("square_matrix_mul", request["prompt"])
         self.assertEqual(request["limits"], {"max_attempts": 2})
 
+    def test_optimize_example_translates(self) -> None:
+        manifest = JobManifest.load(os.path.join(os.path.dirname(EXAMPLE_DIRECTORY), "matmul-optimize"))
+        request = self.request(manifest)
+        self.assertEqual((request["mode"], request["limits"]), ("thinking-light", {"max_attempts": 1}))
+        self.assertEqual(
+            request["optimize"],
+            {"build": "./build.sh", "run": "python3 run.py", "verify": "python3 verify.py", "kernel": "square_matrix_mul"},
+        )
+        with tarfile.open(fileobj=io.BytesIO(manifest.workspace.archive_source(manifest.directory)), mode="r:gz") as tar:
+            map_member = {member.name: member for member in tar.getmembers()}
+        self.assertTrue({"build.sh", "driver.cu", "matmul.cu", "run.py", "verify.py"} <= set(map_member))
+        self.assertEqual(map_member["build.sh"].mode, 0o755)
+
     def test_workspace_and_agent_are_the_inputs_and_agent(self) -> None:
         manifest = self.load()
         self.assertEqual(
