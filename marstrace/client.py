@@ -77,6 +77,10 @@ class MarsTraceClient:
     # attempts of a submission whose answer never arrived, under the same idempotency key
     SUBMIT_ATTEMPTS = 3
     RETRY_SECONDS = 2
+    # attempts of a request the service refused as rate_limited, waiting its retry-after
+    # between them; a refused request did nothing, so any request may be sent again
+    RATE_LIMITED_ATTEMPTS = 6
+    RATE_LIMITED_WAIT_SECONDS_MAX = 60
     IDEMPOTENCY_KEY_PATTERN = re.compile(r"^[A-Za-z0-9._:-]{1,255}$")
     UPLOAD_NAME_PATTERN = re.compile(r"[^A-Za-z0-9._-]")
     UPLOAD_NAME_CHARACTERS_MAX = 255
@@ -216,13 +220,25 @@ class MarsTraceClient:
             body = json.dumps(map_body).encode("utf-8")
             map_request_header["Content-Type"] = "application/json"
         where = f"{method} {path.split('?')[0]}"
-        data = self._request(
-            method=method,
-            url=f"{self._credentials.api_url}{path}",
-            body=body,
-            map_header=map_request_header,
-            timeout=timeout,
-        )
+        for attempt in range(1, MarsTraceClient.RATE_LIMITED_ATTEMPTS + 1):
+            try:
+                data = self._request(
+                    method=method,
+                    url=f"{self._credentials.api_url}{path}",
+                    body=body,
+                    map_header=map_request_header,
+                    timeout=timeout,
+                )
+                break
+            except ServiceError as err:
+                if err.code != "rate_limited" or attempt == MarsTraceClient.RATE_LIMITED_ATTEMPTS:
+                    raise
+                time.sleep(
+                    min(
+                        err.retry_after_seconds or MarsTraceClient.RETRY_SECONDS,
+                        MarsTraceClient.RATE_LIMITED_WAIT_SECONDS_MAX,
+                    )
+                )
         try:
             map_envelope = json.loads(data)
         except ValueError as err:

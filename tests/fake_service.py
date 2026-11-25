@@ -304,6 +304,8 @@ class FakeState:
         self.do_refuse_admission = False
         # submissions to drop without an answer, to exercise the retry under one key
         self.drop_submissions = 0
+        # API requests to refuse as rate_limited before serving any
+        self.rate_limited_requests = 0
 
     def requests_to(self, method: str, pattern: str) -> list[dict[str, Any]]:
         regex = re.compile(pattern)
@@ -367,6 +369,9 @@ class FakeService(http.server.BaseHTTPRequestHandler):
         try:
             if self.headers.get("Origin") is not None:
                 raise ServiceError("forbidden", "Browser requests are not accepted here; use the console")
+            if FakeService.state.rate_limited_requests > 0:
+                FakeService.state.rate_limited_requests -= 1
+                raise ServiceError("rate_limited", "Too many requests; at most 10 per minute", retry_after_seconds=11)
             data = handler(*args)
         except ServiceError as err:
             if err.code == "invalid_request":
