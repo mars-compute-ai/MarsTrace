@@ -135,6 +135,11 @@ max_attempts = 2                  # 1 to 3, 2 when absent: how often a failed at
   `libcuda_dialect_runtime_static.a` into a small C driver with `-lcuda`, and send the
   driver, the object and the archive in `files`: the driver then runs with the CUDA
   driver alone. The object embeds the cubin, so send the same cubin in `cubins`.
+  Say in `intent` that the kernel is launched through that driver. In a launch
+  manifest, describe the grid, block and shared memory, but leave out `arguments`:
+  the kernel's parameters are the block the host code packs (many more than the
+  function's tensors), and a list of the function's arguments sends the agent to bind
+  them by hand.
 - **A launch manifest** is JSON whose `schema_version` is `marscompute.kernel-launch`. The
   agent on the GPU host reads the rest as a description, so name the kernel, the launch
   shape, the buffers and the arguments plainly:
