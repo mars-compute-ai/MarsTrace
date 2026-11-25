@@ -7,7 +7,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 from marstrace.client import Credentials, MarsTraceClient
-from marstrace.error import MarsTraceError
+from marstrace.error import MarsTraceError, ServiceError
 from marstrace.job import JobInput, JobManifest
 
 
@@ -101,6 +101,11 @@ class MarsTraceWorkflow:
         "failed",
         "cancelled",
     }
+    # a long poll that fails in transit, or that a gateway answers 502, 503 or 504, is sent
+    # again after WAIT_RETRY_SECONDS, up to WAIT_FAILURES_MAX failures in a row; the job runs on
+    SET_TRANSIENT_STATUS = {502, 503, 504}
+    WAIT_RETRY_SECONDS = 15
+    WAIT_FAILURES_MAX = 10
     MICRO_PER_UNIT = 1_000_000
     RESULTS_DIRECTORY = "marstrace-results"
     SUBMISSIONS_DIRECTORY = "submissions"
@@ -409,6 +414,16 @@ class MarsTraceWorkflow:
         """
         return self._client.result(job_id)
 
+    @staticmethod
+    def is_transient(err: ServiceError) -> bool:
+        """Whether a refusal is one the same read may get past later: no answer, a gateway, or
+        ``service_unavailable``."""
+        return (
+            err.status is None
+            or err.status in MarsTraceWorkflow.SET_TRANSIENT_STATUS
+            or err.code == "service_unavailable"
+        )
+
     def wait(
         self,
         job_id: str,
@@ -426,6 +441,7 @@ class MarsTraceWorkflow:
         deadline = None if timeout_seconds is None else time.monotonic() + timeout_seconds
         map_job = self._client.get_job(job_id)
         self._say(f"{time.strftime('%H:%M:%S')} {job_id} {map_job['status']}")
+        failures = 0
         while map_job["status"] not in MarsTraceWorkflow.SET_JOB_FINAL_STATUS:
             wait_seconds = MarsTraceClient.WAIT_SECONDS_MAX
             if deadline is not None:
@@ -436,10 +452,22 @@ class MarsTraceWorkflow:
                 if wait_seconds < 1:
                     return map_job
             last_status = map_job["status"]
-            map_job = self._client.wait_job(
-                job_id=job_id,
-                timeout_seconds=wait_seconds,
-            )
+            try:
+                map_job = self._client.wait_job(
+                    job_id=job_id,
+                    timeout_seconds=wait_seconds,
+                )
+            except ServiceError as err:
+                failures += 1
+                if not MarsTraceWorkflow.is_transient(err) or failures >= MarsTraceWorkflow.WAIT_FAILURES_MAX:
+                    raise
+                self._say(
+                    f"{time.strftime('%H:%M:%S')} {job_id} not reachable ({err}); "
+                    f"asking again in {MarsTraceWorkflow.WAIT_RETRY_SECONDS} s"
+                )
+                time.sleep(MarsTraceWorkflow.WAIT_RETRY_SECONDS)
+                continue
+            failures = 0
             if map_job["status"] != last_status:
                 self._say(f"{time.strftime('%H:%M:%S')} {job_id} {map_job['status']}")
         return map_job

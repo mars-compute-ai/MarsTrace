@@ -268,6 +268,19 @@ class ServiceTest(unittest.TestCase):
         with open(os.path.join(output, "result-manifest.json")) as manifest_file:
             self.assertEqual(json.load(manifest_file)["quality"], "usable")
 
+    def test_wait_asks_again_when_the_gateway_is_unavailable(self) -> None:
+        self.fake.state.available_micro_usd = None
+        job = self.workflow.submit(self.workflow.quote(self.directory))
+        self.fake.state.unavailable_waits = 2
+        with mock.patch("marstrace.workflow.time.sleep") as sleep:
+            self.assertEqual(self.workflow.wait(job["job_id"])["status"], "succeeded")
+        self.assertEqual([call.args for call in sleep.call_args_list], [(MarsTraceWorkflow.WAIT_RETRY_SECONDS,)] * 2)
+        job = self.workflow.submit(self.workflow.quote(self.directory))
+        self.fake.state.unavailable_waits = MarsTraceWorkflow.WAIT_FAILURES_MAX
+        with mock.patch("marstrace.workflow.time.sleep"), self.assertRaises(ServiceError) as context:
+            self.workflow.wait(job["job_id"])
+        self.assertEqual(context.exception.status, 503)
+
     def test_wait_returns_at_the_timeout(self) -> None:
         self.fake.state.hold_status = "running"
         job = self.workflow.submit(self.workflow.quote(self.directory))

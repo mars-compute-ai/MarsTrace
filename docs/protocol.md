@@ -96,7 +96,7 @@ set. Each path below is appended to that URL, so `GET /v1/hardware` goes to
 | estimate | `POST /v1/quotes` with the job request; the service stores and holds nothing | `marstrace estimate` |
 | submit | `POST /v1/jobs` with the job request and an `Idempotency-Key` header | `marstrace submit` |
 | state | `GET /v1/jobs/{id}` | `marstrace job` |
-| wait | `GET /v1/jobs/{id}/wait?timeout_seconds=60`, repeated until the job ends | `marstrace job --wait`, `submit --wait` |
+| wait | `GET /v1/jobs/{id}/wait?timeout_seconds=60`, repeated until the job ends; a poll that gets no answer, a 502, 503 or 504, or `service_unavailable` is sent again after 15 s, up to 10 failures in a row | `marstrace job --wait`, `submit --wait` |
 | list | `GET /v1/jobs?limit=&cursor=` → `items` and `next_cursor` | `marstrace jobs` |
 | cancel | `POST /v1/jobs/{id}/cancel` with `{}` | `marstrace cancel` |
 | result | `GET /v1/jobs/{id}/result` → `manifest`, `download_url` | `marstrace fetch` |
