@@ -39,7 +39,7 @@ browser and shell; the agent cannot do them:
 Then check the client and the account:
 
 ```bash
-pip install 'git+https://github.com/mars-compute-ai/MarsTrace@v0.2.1'   # the version the README installs
+pip install 'git+https://github.com/mars-compute-ai/MarsTrace@v0.3.0'   # the version the README installs
 marstrace hardware      # hardware ids, GPU, architecture, CUDA versions, token rates, agent model and limits
 marstrace credit        # available balance, the minimum a job needs to start, the page to add credit
 ```

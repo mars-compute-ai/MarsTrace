@@ -10,7 +10,7 @@ MarsTrace 在云端 GPU 上测量 CUDA kernel 内部的耗时。你提交 kernel
 2. 安装客户端，跑一下仓库自带的例子：
 
 ```bash
-pip install 'git+https://github.com/mars-compute-ai/MarsTrace@v0.2.1'
+pip install 'git+https://github.com/mars-compute-ai/MarsTrace@v0.3.0'
 export MARSTRACE_API_KEY=mt_live_...
 
 marstrace estimate examples/matmul        # token 单价、这次 job 最多花多少、余额
@@ -98,6 +98,8 @@ claude plugin install marstrace@marscompute
 其他 agent 可以把 `marstrace mcp` 配置成 stdio MCP 服务，并在环境变量里设好 `MARSTRACE_API_KEY`，写法参照 [.mcp.json](.mcp.json)。skill 在 [marstrace/skills/](marstrace/skills/) 下。
 
 ## 目前支持的范围
+
+MarsTrace 目前处于早期访问阶段：MarsCompute 为你的 workspace 开通之后，job 才会运行。需要开通请提 issue 或联系 MarsCompute。
 
 - 模式 fast：trace 加分析。
 - 模式 `thinking-light`：trace 之后优化 kernel，交付 patch 和报告。时间更长的 `thinking-heavy` 还未开放。

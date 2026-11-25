@@ -16,7 +16,7 @@ local GPU.
 2. Install the client and trace the bundled example:
 
 ```bash
-pip install 'git+https://github.com/mars-compute-ai/MarsTrace@v0.2.1'
+pip install 'git+https://github.com/mars-compute-ai/MarsTrace@v0.3.0'
 export MARSTRACE_API_KEY=mt_live_...
 
 marstrace estimate examples/matmul        # token rates, the most the job can cost, your balance
@@ -128,6 +128,9 @@ environment, as [.mcp.json](.mcp.json) does, and load the skills from
 [marstrace/skills/](marstrace/skills/).
 
 ## What is supported now
+
+MarsTrace is in early access: jobs run once MarsCompute enables your workspace. Open an
+issue or contact MarsCompute to ask for access.
 
 - Mode `fast`: a trace and its analysis.
 - Mode `thinking-light`: a trace, then an optimized kernel with its patch and reports.
