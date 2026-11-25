@@ -23,6 +23,7 @@
         "baseline_us": 812.4,
         "best_us": 590.1,
         "speedup": 1.377,
+        "noise_pct": 1.2,
         "correct": true
       },
       {

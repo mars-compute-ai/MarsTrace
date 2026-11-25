@@ -49,7 +49,7 @@ class DeliveredOptimizationTest(unittest.TestCase):
         self.assertTrue(os.path.isfile(os.path.join(directory, "iterations", "iter_001_shared_tiles", "post_bench.json")))
         text = optimization.text(directory)
         self.assertIn("optimization: improved, correctness passed, best speedup 1.41x", text)
-        self.assertRegex(text, r"n2048\s+6400.0\s+4400.0\s+1.46x\s+yes")
+        self.assertRegex(text, r"n2048\s+6400.0\s+4400.0\s+1.46x\s+-\s+yes")
         self.assertIn(f"patch     {os.path.join(directory, 'optimized.patch')}", text)
         self.assertIn(f"reports   {os.path.join(directory, 'performance_report.md')}", text)
         self.assertIn(os.path.join(directory, "optimization_process_report.md"), text)

@@ -369,7 +369,7 @@ class CommandLineTest(unittest.TestCase):
         results = os.path.join(self.directory, "marstrace-results", job_id)
         optimization = os.path.join(results, "optimization")
         self.assertIn("optimization: improved, correctness passed, best speedup 1.41x", output)
-        self.assertRegex(output, r"n1024\s+812.4\s+590.1\s+1.38x\s+yes")
+        self.assertRegex(output, r"n1024\s+812.4\s+590.1\s+1.38x\s+1.2%\s+yes")
         self.assertIn(f"patch     {os.path.join(optimization, 'optimized.patch')}", output)
         self.assertIn(f"reports   {os.path.join(optimization, 'performance_report.md')}", output)
         self.assertNotIn(f"saved     {os.path.join(optimization, 'optimized.patch')}", output)
