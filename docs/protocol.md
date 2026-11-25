@@ -177,8 +177,9 @@ digest and size of the result manifest's `file`, and writes it next to
 `data`. The MCP tool `marstrace_fetch` answers it as `analysis` and `analysis_text`.
 
 A thinking job's `marstrace.json` also holds at most one section of `type`
-`marscompute.optimization`, after the trace sections. Its `data` holds `status` (`improved`,
-`no_gain` or `incomplete`), `correctness`, `best_speedup`, `list_config` (per configuration
+`marscompute.optimization`, after the trace sections. Its `data` holds `summary` (`status`:
+`improved`, `no_gain` or `incomplete`; `correctness`; `best_speedup`; the counts `configs`,
+`iterations`, `kept` and `reverted`), `list_config` (per configuration
 its `name`, `baseline_us`, `best_us`, `speedup` and `correct`), `list_iteration` (per
 iteration its `name`, `verdict`, `speedup` and `summary`) and `list_file`, the deliverables as
 UTF-8 text, each with `path`, `sha256`, `size_bytes`, `media_type` and `text`:

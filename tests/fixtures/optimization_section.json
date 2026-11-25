@@ -3,14 +3,20 @@
   "type": "marscompute.optimization",
   "data": {
     "schema": "marscompute.optimization.v1",
+    "summary": {
+      "status": "improved",
+      "best_speedup": 1.41,
+      "configs": 2,
+      "correctness": "passed",
+      "iterations": 2,
+      "kept": 1,
+      "reverted": 1
+    },
     "playbook": {
       "name": "kernel-optimization",
       "version": "1.0.0",
       "sha256": "9faf8344f7cc9262b3ccae02fe94343a2c2de58084d229e7e9c3bb09f2306963"
     },
-    "status": "improved",
-    "correctness": "passed",
-    "best_speedup": 1.41,
     "list_config": [
       {
         "name": "n1024",

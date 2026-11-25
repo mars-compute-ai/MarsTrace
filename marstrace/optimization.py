@@ -119,10 +119,11 @@ class DeliveredOptimization:
                 )
             ):
                 data = section["data"]
+                summary = data.get("summary") if isinstance(data.get("summary"), dict) else data
                 return DeliveredOptimization(
-                    status=str(data.get("status") or ""),
-                    correctness=str(data.get("correctness") or ""),
-                    best_speedup=DeliveredOptimization._number(data.get("best_speedup")),
+                    status=str(summary.get("status") or ""),
+                    correctness=str(summary.get("correctness") or ""),
+                    best_speedup=DeliveredOptimization._number(summary.get("best_speedup")),
                     list_config=DeliveredOptimization._list_of_object(data.get("list_config")),
                     list_iteration=DeliveredOptimization._list_of_object(data.get("list_iteration")),
                     list_file=DeliveredOptimization._list_of_object(data.get("list_file")),
