@@ -43,24 +43,6 @@ class JobCommands:
             )
         )
 
-    MAP_QUEUE_REASON = {
-        "paused": "MarsTrace is not starting jobs right now",
-        "retry_wait": "waiting before the next attempt",
-        "service_capacity": "every GPU machine of MarsTrace is in use",
-        "workspace_limit": "your workspace already runs its {limit} jobs",
-        "dispatching": "starting now",
-    }
-
-    @staticmethod
-    def queue_text(map_queue: dict[str, Any]) -> str:
-        """Why a queued job waits and its place in the workspace's queue, in words."""
-        reason = JobCommands.MAP_QUEUE_REASON.get(str(map_queue.get("reason")), str(map_queue.get("reason") or "waiting"))
-        text = reason.format(limit=map_queue.get("workspace_dispatched_limit", 2))
-        if isinstance(map_queue.get("position"), int):
-            text += f"; number {map_queue['position']} in its queue"
-        if map_queue.get("next_attempt_at"):
-            text += f"; next attempt at {map_queue['next_attempt_at']}"
-        return text
 
     @staticmethod
     def print_job(map_job: dict[str, Any]) -> None:
@@ -79,7 +61,7 @@ class JobCommands:
         if map_job["ended_at"]:
             print(f"ended     {map_job['ended_at']}")
         if isinstance(map_job.get("queue"), dict):
-            print(f"queued    {JobCommands.queue_text(map_job['queue'])}")
+            print(f"queued    {MarsTraceWorkflow.queue_text(map_job['queue'])}")
         if map_progress:
             print(
                 f"progress  agent turn {map_progress['agent_turn']}, "
