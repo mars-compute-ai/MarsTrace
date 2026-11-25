@@ -33,6 +33,13 @@ class DeliveredOptimization:
     PATCH_PATH = "optimized.patch"
     REPORT_SUFFIX = ".md"
     ITERATIONS_DIRECTORY = "iterations"
+    NO_GAIN_STATUS = "no_gain"
+    PASSED = "passed"
+    # a finished run that measured every change and kept none, told apart from a failed job
+    NO_GAIN_NOTE = (
+        "  no faster version found: every change was measured and reverted, so the uploaded code "
+        "stays the fastest; the job is complete, and its quality is partial because nothing got faster"
+    )
     PATH_PATTERN = re.compile(r"[A-Za-z0-9._/-]{1,200}")
     PARENT_REFERENCE = ".."
     # path segments that name no file
@@ -344,6 +351,11 @@ class DeliveredOptimization:
             f"optimization: {self.status or 'no status'}, correctness {self.correctness or 'unknown'}, "
             f"best speedup {DeliveredOptimization.speedup_text(self.best_speedup)}"
         ]
+        if (
+            self.status == DeliveredOptimization.NO_GAIN_STATUS
+            and self.correctness == DeliveredOptimization.PASSED
+        ):
+            list_line.append(DeliveredOptimization.NO_GAIN_NOTE)
         list_line.extend(self.config_lines())
         if self.list_iteration:
             list_line.append("iterations:")

@@ -73,6 +73,13 @@ class DeliveredOptimizationTest(unittest.TestCase):
         with self.assertRaisesRegex(ServiceError, "optimized.patch twice"):
             self.optimization(with_file(load_section(), "optimized.patch", "again\n")).write_files(self.directory)
 
+    def test_a_verified_run_without_gain_says_the_job_is_complete(self) -> None:
+        section = load_section()
+        section["data"]["summary"].update(status="no_gain", correctness="passed")
+        self.assertIn("no faster version found", self.optimization(section).text())
+        section["data"]["summary"].update(status="improved")
+        self.assertNotIn("no faster version found", self.optimization(section).text())
+
     def test_a_report_without_the_section_has_no_optimization(self) -> None:
         self.assertIsNone(DeliveredOptimization.from_document({"sections": []}))
         self.assertIsNone(DeliveredOptimization.from_document([]))
