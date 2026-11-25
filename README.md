@@ -147,8 +147,15 @@ and `marstrace estimate` show. GPU time is not charged separately. A job whose t
 `unusable`, or that fails without delivering a result, is not charged. A cancelled job pays
 for the tokens used up to the stop. A job starts only while your balance reaches the
 minimum of its mode: $100 for `fast` and `thinking-light`, and $300 for `thinking-heavy`.
-`marstrace credit` shows the current minimum, and `marstrace estimate` shows the minimum of
-the job's mode and the most the job can cost.
+`marstrace credit` shows the current minimum.
+
+`marstrace estimate` shows two figures. **Typical** is the middle half of what recent jobs of
+the same mode were charged, a guide rather than a bound. **At most** is a ceiling the service
+enforces. In the thinking modes each attempt stops at its cost cap, $250 for
+`thinking-light` and $1,000 for `thinking-heavy` by default, so a default job costs at most
+$500 or $3,000. Set `max_attempt_cost_usd` in `[limits]` to change the cap. A fast job's
+ceiling prices every input token at the dearest input rate, well above what its mostly cached
+calls cost.
 
 ## Privacy and security
 

@@ -108,7 +108,9 @@ claude plugin install marstrace@marscompute
 
 ## 计费
 
-按 agent 在所有 attempt 中实际使用的 token 收费，单价以 `marstrace hardware` 和 `marstrace estimate` 显示的为准。GPU 时间不另外收费。以下两种 job 不收费：交付的 trace 判为 `unusable`，或者 job 失败、没有交付结果。job 被取消时，按取消前已经用掉的 token 收费。余额达到该模式的最低额度，job 才会开始运行：`fast` 和 `thinking-light` 为 $100，`thinking-heavy` 为 $300。`marstrace credit` 显示当前的最低额度，`marstrace estimate` 会显示这个 job 所属模式的最低额度，以及这次 job 最多可能花多少钱。
+按 agent 在所有 attempt 中实际使用的 token 收费，单价以 `marstrace hardware` 和 `marstrace estimate` 显示的为准。GPU 时间不另外收费。以下两种 job 不收费：交付的 trace 判为 `unusable`，或者 job 失败、没有交付结果。job 被取消时，按取消前已经用掉的 token 收费。余额达到该模式的最低额度，job 才会开始运行：`fast` 和 `thinking-light` 为 $100，`thinking-heavy` 为 $300。`marstrace credit` 显示当前的最低额度。
+
+`marstrace estimate` 会给出两个数。**typical** 是同一模式最近一批 job 实际收费的中间一半，只供参考，不是上限。**at most** 是服务强制执行的上限：thinking 模式下每个 attempt 到了花费上限就会停止，`thinking-light` 默认 $250，`thinking-heavy` 默认 $1,000，所以默认的 job 最多花 $500 或 $3,000。可以在 `[limits]` 里设置 `max_attempt_cost_usd` 来调整。fast job 的 at most 是把所有 input token 都按最贵的 input 单价计算出来的，远高于它以缓存命中为主的实际花费。
 
 ## 隐私与安全
 

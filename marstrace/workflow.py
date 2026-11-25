@@ -83,6 +83,16 @@ class QuotedJob:
             "admissible": self.map_quote["admissible"],
             "message": self.map_quote.get("message"),
             "notes": list(self.map_quote.get("notes") or []),
+            "max_attempt_cost_usd": self.map_quote.get("max_attempt_cost_usd"),
+            "typical": (
+                None
+                if not isinstance(self.map_quote.get("typical_micro_usd"), dict)
+                else {
+                    "low_usd": MarsTraceWorkflow.usd(self.map_quote["typical_micro_usd"]["low_micro_usd"]),
+                    "high_usd": MarsTraceWorkflow.usd(self.map_quote["typical_micro_usd"]["high_micro_usd"]),
+                    "jobs": self.map_quote["typical_micro_usd"]["jobs"],
+                }
+            ),
         }
 
 

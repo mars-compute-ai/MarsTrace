@@ -63,6 +63,7 @@ max_attempts = 2
 | `[agent] max_turns` (1 to 500), `max_input_tokens` (1 to 50,000,000), `max_output_tokens` (1 to 1,000,000), `max_wall_seconds` (60 to 2,580) | `agent`; an absent key takes `agent.defaults` of `GET /v1/hardware`, and none may exceed `agent.maximums` |
 | `[optimize] build`, `run`, `verify`, `kernel` and caps (thinking modes only) | `optimize` (section 3.1) |
 | `[limits] max_attempts` (1 to 3) | `limits.max_attempts`; absent, the request has no `limits` and the service takes 2, or 3 for `thinking-heavy` |
+| `[limits] max_attempt_cost_usd` (1 to 100000) | `limits.max_attempt_cost_usd`: the most one attempt may cost; absent, the service takes 250 for `thinking-light`, 1000 for `thinking-heavy`, and none for `fast` |
 
 `[workspace]` is required, `cuda_version`, `mode`, `[agent]` and `[limits]` are optional, and any
 other key or table is refused. In `thinking-light` and `thinking-heavy`, `[optimize]` and
@@ -252,7 +253,8 @@ An estimate (`POST /v1/quotes`) answers:
 | `cuda_version` | the CUDA version the job runs with |
 | `rates` | the agent's token rates per million: input, cache read, 5-minute and 1-hour cache write, output |
 | `bounds_per_attempt` | the agent's `agent_input_tokens` and `agent_output_tokens` caps; in a thinking mode, those of `[agent]` and `[optimize]` together |
-| `cost_at_bounds_micro_usd` | `agent_tokens_per_attempt` and `total`, `max_attempts` attempts at their token bounds: the most the job can cost |
+| `cost_at_bounds_micro_usd` | `agent_tokens_per_attempt` and `total`, `max_attempts` attempts at their token bounds or their cost cap when that is lower: the most the job can cost |
+| `typical_micro_usd` | `low_micro_usd`, `high_micro_usd` and `jobs`: the middle half of recent charges of the mode, or null before enough jobs settled |
 | `minimum_micro_usd` | the balance a job of the request's mode needs to start, set by MarsCompute administrators; a `thinking-heavy` job needs at least $300 |
 | `available_micro_usd` | the workspace's available balance; negative while it owes for a job that ran past it, null without a spending limit |
 | `admissible`, `message` | whether a job would start now, and why not |

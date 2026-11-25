@@ -69,6 +69,7 @@ SET_FINAL = {"succeeded", "failed", "cancelled"}
 IDEMPOTENCY_KEY_PATTERN = re.compile(r"^[A-Za-z0-9._:-]{1,255}$")
 MAP_MAX_ATTEMPTS_DEFAULT = {"fast": 2, "thinking-light": 2, "thinking-heavy": 3}
 SET_THINKING_MODE = {"thinking-light", "thinking-heavy"}
+MAP_ATTEMPT_COST_DEFAULT = {"thinking-light": 250, "thinking-heavy": 1000}
 # the optimization stage's caps per tier: key -> (default, lowest, highest), as the spec's table
 MAP_OPTIMIZE_TIER = {
     "thinking-light": {
@@ -200,7 +201,10 @@ class RequestSchema:
         "tensors": Field([Field(str, pattern=UPLOAD_ID)], high=8, is_optional=True, default=[]),
         "files": Field([Field(str, pattern=UPLOAD_ID)], high=8, is_optional=True, default=[]),
     }
-    LIMITS = {"max_attempts": Field(int, low=1, high=3, is_optional=True)}
+    LIMITS = {
+        "max_attempts": Field(int, low=1, high=3, is_optional=True),
+        "max_attempt_cost_usd": Field(int, low=1, high=100000, is_optional=True),
+    }
     COMMAND = r"^[^\x00]*$"
     OPTIMIZE = {
         "build": Field(str, low=1, high=4096, pattern=COMMAND, is_optional=True),
@@ -364,6 +368,8 @@ class FakeState:
         self.do_refuse_admission = False
         # submissions to drop without an answer, to exercise the retry under one key
         self.drop_submissions = 0
+        # the quote's typical range, or None before enough jobs settled
+        self.typical_micro_usd: dict[str, Any] | None = None
         # API requests to refuse as rate_limited before serving any
         self.rate_limited_requests = 0
         # long polls a gateway answers 503 without an envelope, before serving any
@@ -778,6 +784,9 @@ class FakeService(http.server.BaseHTTPRequestHandler):
         minimum = state.minimum_for(mode)
         input_per_attempt = max(ceil_rate(input_tokens, int(rates[key]), MILLION) for key in LIST_INPUT_RATE)
         tokens_per_attempt = input_per_attempt + ceil_rate(output_tokens, int(rates["agent_output_micro_usd_per_million"]), MILLION)
+        cost_cap_usd = request["limits"].get("max_attempt_cost_usd", MAP_ATTEMPT_COST_DEFAULT.get(mode))
+        if cost_cap_usd is not None:
+            tokens_per_attempt = min(tokens_per_attempt, cost_cap_usd * 1_000_000)
         map_cost = {
             "agent_tokens_per_attempt": str(tokens_per_attempt),
             "total": str(attempts * tokens_per_attempt),
@@ -794,7 +803,10 @@ class FakeService(http.server.BaseHTTPRequestHandler):
             "minimum_micro_usd": str(minimum),
             "available_micro_usd": None if state.available_micro_usd is None else str(state.available_micro_usd),
             "admissible": state.is_admissible(mode),
+            "typical_micro_usd": state.typical_micro_usd,
         }
+        if cost_cap_usd is not None:
+            quote["max_attempt_cost_usd"] = cost_cap_usd
         if mode in SET_THINKING_MODE:
             quote["notes"] = [NETWORK_NOTE]
         if not quote["admissible"]:

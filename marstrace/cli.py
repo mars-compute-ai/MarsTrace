@@ -199,8 +199,22 @@ class JobCommands:
             f"{map_bounds['agent_input_tokens']} input and {map_bounds['agent_output_tokens']} output tokens; "
             f"{map_summary['max_attempts']} attempt(s)"
         )
+        if map_summary.get("typical"):
+            map_typical = map_summary["typical"]
+            print(
+                f"typical   {map_typical['low_usd']} to {map_typical['high_usd']} "
+                f"(the middle half of the last {map_typical['jobs']} {map_summary['mode']} jobs)"
+            )
+        at_most_basis = (
+            f"each attempt stops at its ${map_summary['max_attempt_cost_usd']} cost cap"
+            if map_summary.get("max_attempt_cost_usd")
+            else "every input token priced at the dearest input rate"
+        )
         print(
-            f"at most   {map_cost['total_usd']}: {map_cost['agent_tokens_per_attempt_usd']} of tokens per attempt"
+            f"at most   {map_cost['total_usd']}: {map_cost['agent_tokens_per_attempt_usd']} per attempt, "
+            f"{at_most_basis}; [limits] max_attempt_cost_usd changes it"
+            if map_summary.get("max_attempt_cost_usd")
+            else f"at most   {map_cost['total_usd']}: {map_cost['agent_tokens_per_attempt_usd']} per attempt, {at_most_basis}"
         )
         print(
             "charged   the tokens every attempt actually used, failed ones included; nothing if the trace is "

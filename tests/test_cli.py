@@ -83,7 +83,7 @@ class CommandLineTest(unittest.TestCase):
         self.assertIn("hardware  h200, H200 (sm_90a)", output)
         self.assertIn("cuda      13.0", output)
         self.assertIn("bounds    per attempt 4000000 input and 60000 output tokens; 2 attempt(s)", output)
-        self.assertIn("at most   $116.200000: $58.100000 of tokens per attempt", output)
+        self.assertIn("at most   $116.200000: $58.100000 per attempt, every input token priced at the dearest input rate", output)
         self.assertNotIn("GPU", output)
         self.assertIn("failed ones included", output)
         self.assertIn("balance   $118.250000 available, $100.000000 needed to start", output)
@@ -296,7 +296,7 @@ class CommandLineTest(unittest.TestCase):
         self.assertEqual(status, 0, error)
         self.assertIn("mode      thinking-light", output)
         self.assertIn("bounds    per attempt 44000000 input and 460000 output tokens; 2 attempt(s)", output)
-        self.assertIn("at most   $1264.200000: $632.100000 of tokens per attempt", output)
+        self.assertIn("at most   $500.000000: $250.000000 per attempt, each attempt stops at its $250 cost cap", output)
         self.assertIn("balance   $118.250000 available, $100.000000 needed to start a thinking-light job", output)
         self.assertIn("note      The build and run have no network access: include every dependency the image lacks in the source archive.", output)
         request = json.loads(self.fake.state.requests_to("POST", r"^/v1/quotes$")[-1]["body"])
@@ -305,6 +305,21 @@ class CommandLineTest(unittest.TestCase):
             ("thinking-light", {"build": "./build.sh", "run": "python3 run.py", "verify": "python3 verify.py", "kernel": "square_matrix_mul"}),
         )
         self.assertNotIn("note", self.run_cli("estimate", EXAMPLE_DIRECTORY)[1])
+
+    def test_estimate_prints_the_typical_range_and_takes_the_attempt_cost_cap(self) -> None:
+        thinking_job(self.directory)
+        manifest = os.path.join(self.directory, "marstrace.toml")
+        with open(manifest) as manifest_file:
+            text = manifest_file.read()
+        with open(manifest, "w") as manifest_file:
+            manifest_file.write(text.replace("[limits]\n", "[limits]\nmax_attempt_cost_usd = 100\n"))
+        self.fake.state.typical_micro_usd = {"low_micro_usd": "30000000", "high_micro_usd": "80000000", "jobs": 12}
+        status, output, error = self.run_cli("estimate", self.directory)
+        self.assertEqual(status, 0, error)
+        self.assertIn("typical   $30.000000 to $80.000000 (the middle half of the last 12 thinking-light jobs)", output)
+        self.assertIn("at most   $200.000000: $100.000000 per attempt, each attempt stops at its $100 cost cap", output)
+        request = json.loads(self.fake.state.requests_to("POST", r"^/v1/quotes$")[-1]["body"])
+        self.assertEqual(request["limits"]["max_attempt_cost_usd"], 100)
 
     def test_a_thinking_heavy_job_needs_its_own_minimum(self) -> None:
         thinking_job(self.directory, mode="thinking-heavy")

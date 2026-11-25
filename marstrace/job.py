@@ -20,10 +20,13 @@ class JobLimits:
 
     Args:
         max_attempts: the most attempts, or None for the service's default
+        max_attempt_cost_usd: the most one attempt may cost in USD, or None for the mode's default
     """
 
     ATTEMPTS_KEY = "max_attempts"
     ATTEMPTS_MAX = 3
+    COST_KEY = "max_attempt_cost_usd"
+    COST_USD_MAX = 100000
     # mode -> attempts the service gives a request that leaves max_attempts out
     MAP_ATTEMPTS_DEFAULT = {
         "fast": 2,
@@ -32,6 +35,7 @@ class JobLimits:
     }
 
     max_attempts: int | None = None
+    max_attempt_cost_usd: int | None = None
 
     @classmethod
     def from_table(cls, map_limits: Any) -> "JobLimits":
@@ -48,9 +52,16 @@ class JobLimits:
         """
         JobManifest.check_table(
             value=map_limits,
-            set_key={JobLimits.ATTEMPTS_KEY},
+            set_key={JobLimits.ATTEMPTS_KEY, JobLimits.COST_KEY},
             where="[limits]",
         )
+        if JobLimits.COST_KEY in map_limits:
+            JobManifest.check_integer(
+                value=map_limits[JobLimits.COST_KEY],
+                where=f"[limits] {JobLimits.COST_KEY}",
+                low=1,
+                high=JobLimits.COST_USD_MAX,
+            )
         if JobLimits.ATTEMPTS_KEY in map_limits:
             JobManifest.check_integer(
                 value=map_limits[JobLimits.ATTEMPTS_KEY],
@@ -58,7 +69,10 @@ class JobLimits:
                 low=1,
                 high=JobLimits.ATTEMPTS_MAX,
             )
-        return cls(max_attempts=map_limits.get(JobLimits.ATTEMPTS_KEY))
+        return cls(
+            max_attempts=map_limits.get(JobLimits.ATTEMPTS_KEY),
+            max_attempt_cost_usd=map_limits.get(JobLimits.COST_KEY),
+        )
 
     def attempts(self, mode: str) -> int:
         """The most attempts the job takes.
@@ -78,11 +92,15 @@ class JobLimits:
         """The limits the job request takes.
 
         Returns:
-            ``{"max_attempts": n}``, or None when the manifest leaves it to the service
+            ``max_attempts`` and ``max_attempt_cost_usd`` as the manifest sets them, or None when it
+            sets neither
         """
-        if self.max_attempts is None:
-            return None
-        return {JobLimits.ATTEMPTS_KEY: self.max_attempts}
+        map_limits = {
+            key: value
+            for key, value in ((JobLimits.ATTEMPTS_KEY, self.max_attempts), (JobLimits.COST_KEY, self.max_attempt_cost_usd))
+            if value is not None
+        }
+        return map_limits or None
 
 
 @dataclass
