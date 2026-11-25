@@ -133,8 +133,11 @@ MarsTrace is in early access: jobs run once MarsCompute enables your workspace. 
 issue or contact MarsCompute to ask for access.
 
 - Mode `fast`: a trace and its analysis.
-- Mode `thinking-light`: a trace, then an optimized kernel with its patch and reports.
-  `thinking-heavy`, the longer optimization, is not offered yet.
+- Modes `thinking-light` and `thinking-heavy`: a trace, then an optimized kernel with its patch
+  and reports; `thinking-heavy` runs up to five hours.
+- Very large persistent kernels (a launch of thousands of blocks of which one per SM runs, such
+  as FlashAttention 4): per-iteration timings may come out `partial`, because a trace keeps
+  100,000 records; per-tile timings are delivered.
 - GPUs: H200 and B200. `marstrace hardware` lists the hardware your account can use.
 - CUDA 13.0.
 - Inputs: up to 8 cubins (ELF cubins, not PTX), plus optional source, a launch manifest,

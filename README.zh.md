@@ -102,7 +102,8 @@ claude plugin install marstrace@marscompute
 MarsTrace 目前处于早期访问阶段：MarsCompute 为你的 workspace 开通之后，job 才会运行。需要开通请提 issue 或联系 MarsCompute。
 
 - 模式 fast：trace 加分析。
-- 模式 `thinking-light`：trace 之后优化 kernel，交付 patch 和报告。时间更长的 `thinking-heavy` 还未开放。
+- 模式 `thinking-light` 和 `thinking-heavy`：trace 之后优化 kernel，交付 patch 和报告；`thinking-heavy` 最长运行五小时。
+- 非常大的 persistent kernel（launch 几千个 block，但每个 SM 只跑一个，例如 FlashAttention 4）：按迭代的时间可能是 `partial`，因为一次 trace 最多保留 10 万条记录；按 tile 的时间会正常交付。
 - GPU：H200、B200。`marstrace hardware` 列出你的账号能用的硬件。
 - CUDA：13.0。
 - 输入：最多 8 个 cubin（必须是 ELF cubin，不接受 PTX）。另外可以附源码、launch 描述文件、safetensors 输入和其他文件，合计不超过 256 MiB。
