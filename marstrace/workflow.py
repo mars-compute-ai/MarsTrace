@@ -237,6 +237,8 @@ class MarsTraceWorkflow:
         directory: str,
         hardware: str | None = None,
         cuda_version: str | None = None,
+        mode: str | None = None,
+        map_optimize: dict[str, Any] | None = None,
     ) -> QuotedJob:
         """Translate a job directory, upload its workspace and price it.
 
@@ -244,6 +246,8 @@ class MarsTraceWorkflow:
             directory: the job directory, holding ``marstrace.toml``
             hardware: a hardware id overriding the manifest's ``hardware``
             cuda_version: a CUDA version overriding the manifest's ``cuda_version``
+            mode: a mode overriding the manifest's ``mode``
+            map_optimize: keys overriding those of the manifest's ``[optimize]``
 
         Returns:
             the priced job
@@ -251,7 +255,11 @@ class MarsTraceWorkflow:
         Raises:
             MarsTraceError: the manifest is wrong, or the service refused
         """
-        manifest = JobManifest.load(directory)
+        manifest = JobManifest.load(
+            directory=directory,
+            mode_override=mode,
+            map_optimize_override=map_optimize,
+        )
         if hardware is not None:
             manifest.hardware = hardware
         if cuda_version is not None:

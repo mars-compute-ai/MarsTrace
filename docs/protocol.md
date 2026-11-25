@@ -296,4 +296,11 @@ the service answers `api_key_missing` with the steps that give the user a key.
 `marstrace_submit` takes `accept_cost_at_bounds_usd`, the cost at the bounds the user
 agreed to, and refuses an estimate whose cost at the bounds is above it, since prices are
 read again at submission.
+`marstrace_estimate` and `marstrace_submit` take `mode`, which overrides the manifest's
+`mode`, and `optimize`, an object whose keys override those of `[optimize]`; the client checks
+the result as it checks `marstrace.toml`. The estimate answers `mode` and `notes`.
+`marstrace_job` answers the job with `progress.optimize` and `result.optimization`.
+`marstrace_fetch` answers `files` (`marstrace.json` and `result-manifest.json`), `analysis`,
+`analysis_text`, `optimization` (the section's `data` without the texts), `optimization_text`
+and `optimization_files`, the deliverables it wrote.
 `.mcp.json` registers the server for Claude Code.
