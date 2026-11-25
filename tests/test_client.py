@@ -281,6 +281,16 @@ class ServiceTest(unittest.TestCase):
             self.workflow.wait(job["job_id"])
         self.assertEqual(context.exception.status, 503)
 
+    def test_wait_says_why_a_queued_job_waits(self) -> None:
+        self.fake.state.queue_view = {"reason": "workspace_limit", "position": 1, "workspace_dispatched_limit": 2}
+        list_line: list[str] = []
+        workflow = MarsTraceWorkflow(client=self.workflow._client, progress=list_line.append)
+        job = workflow.submit(workflow.quote(self.directory))
+        list_line.clear()
+        self.assertEqual(workflow.wait(job["job_id"])["status"], "succeeded")
+        self.assertIn("queued: your workspace already runs its 2 jobs; number 1 in its queue", list_line[0])
+        self.assertTrue(list_line[1].endswith(" starting"))
+
     def test_wait_returns_at_the_timeout(self) -> None:
         self.fake.state.hold_status = "running"
         job = self.workflow.submit(self.workflow.quote(self.directory))

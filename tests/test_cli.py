@@ -8,7 +8,8 @@ import unittest
 import urllib.request
 from unittest import mock
 from fake_service import ADD_CREDIT_URL, API_KEY, EXAMPLE_DIRECTORY, FIXTURE_DIRECTORY, FakeServer, agent_job, thinking_job
-from marstrace.cli import CommandLine
+from marstrace.analysis import DeliveredAnalysis
+from marstrace.cli import CommandLine, JobCommands
 
 
 class CommandLineTest(unittest.TestCase):
@@ -230,8 +231,6 @@ class CommandLineTest(unittest.TestCase):
         self.assertEqual(json.loads(output)["summary"]["schema"], "xplain.summary/2")
 
     def test_the_analysis_prints_the_run_summary_and_each_later_runs_findings(self) -> None:
-        from marstrace.analysis import DeliveredAnalysis
-
         analysis = DeliveredAnalysis.from_document(
             {
                 "sections": [
@@ -254,8 +253,6 @@ class CommandLineTest(unittest.TestCase):
         self.assertIn("run 1 findings:\n  1. [LOOP] one iteration takes 1.18 us", text)
 
     def test_a_queued_job_says_why_it_waits(self) -> None:
-        from marstrace.cli import JobCommands
-
         self.assertEqual(
             JobCommands.queue_text({"reason": "workspace_limit", "position": 2, "workspace_dispatched_limit": 2}),
             "your workspace already runs its 2 jobs; number 2 in its queue",

@@ -473,6 +473,32 @@ class MarsTraceWorkflow:
         """
         return self._client.result(job_id)
 
+    MAP_QUEUE_REASON = {
+        "paused": "MarsTrace is not starting jobs right now",
+        "retry_wait": "waiting before the next attempt",
+        "service_capacity": "every GPU machine of MarsTrace is in use",
+        "workspace_limit": "your workspace already runs its {limit} jobs",
+        "dispatching": "starting now",
+    }
+
+    @staticmethod
+    def queue_text(map_queue: dict[str, Any]) -> str:
+        """Why a queued job waits and its place in the workspace's queue, in words."""
+        reason = MarsTraceWorkflow.MAP_QUEUE_REASON.get(str(map_queue.get("reason")), str(map_queue.get("reason") or "waiting"))
+        text = reason.format(limit=map_queue.get("workspace_dispatched_limit", 2))
+        if isinstance(map_queue.get("position"), int):
+            text += f"; number {map_queue['position']} in its queue"
+        if map_queue.get("next_attempt_at"):
+            text += f"; next attempt at {map_queue['next_attempt_at']}"
+        return text
+
+    @staticmethod
+    def status_text(map_job: dict[str, Any]) -> str:
+        """A job's status, with why it waits while it is queued."""
+        if map_job["status"] == "queued" and isinstance(map_job.get("queue"), dict):
+            return f"queued: {MarsTraceWorkflow.queue_text(map_job['queue'])}"
+        return map_job["status"]
+
     @staticmethod
     def is_transient(err: ServiceError) -> bool:
         """Whether a refusal is one the same read may get past later: no answer, a gateway, or
@@ -499,7 +525,7 @@ class MarsTraceWorkflow:
         """
         deadline = None if timeout_seconds is None else time.monotonic() + timeout_seconds
         map_job = self._client.get_job(job_id)
-        self._say(f"{time.strftime('%H:%M:%S')} {job_id} {map_job['status']}")
+        self._say(f"{time.strftime('%H:%M:%S')} {job_id} {MarsTraceWorkflow.status_text(map_job)}")
         failures = 0
         while map_job["status"] not in MarsTraceWorkflow.SET_JOB_FINAL_STATUS:
             wait_seconds = MarsTraceClient.WAIT_SECONDS_MAX
@@ -510,7 +536,7 @@ class MarsTraceWorkflow:
                 )
                 if wait_seconds < 1:
                     return map_job
-            last_status = map_job["status"]
+            last_status = MarsTraceWorkflow.status_text(map_job)
             last_optimize = MarsTraceWorkflow._optimize_progress(map_job)
             try:
                 map_job = self._client.wait_job(
@@ -528,8 +554,8 @@ class MarsTraceWorkflow:
                 time.sleep(MarsTraceWorkflow.WAIT_RETRY_SECONDS)
                 continue
             failures = 0
-            if map_job["status"] != last_status:
-                self._say(f"{time.strftime('%H:%M:%S')} {job_id} {map_job['status']}")
+            if MarsTraceWorkflow.status_text(map_job) != last_status:
+                self._say(f"{time.strftime('%H:%M:%S')} {job_id} {MarsTraceWorkflow.status_text(map_job)}")
             map_optimize = MarsTraceWorkflow._optimize_progress(map_job)
             if (
                 map_optimize is not None

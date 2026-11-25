@@ -374,6 +374,8 @@ class FakeState:
         self.rate_limited_requests = 0
         # long polls a gateway answers 503 without an envelope, before serving any
         self.unavailable_waits = 0
+        # the queue view a queued job carries, or None
+        self.queue_view: dict[str, Any] | None = None
 
     def requests_to(self, method: str, pattern: str) -> list[dict[str, Any]]:
         regex = re.compile(pattern)
@@ -568,6 +570,7 @@ class FakeService(http.server.BaseHTTPRequestHandler):
         job = FakeService.state.map_job.get(job_id)
         if job is None:
             raise ServiceError("not_found", "No such job")
+        job["queue"] = FakeService.state.queue_view if job["status"] == "queued" else None
         return job
 
     def _attempt(self, number: int) -> dict[str, Any]:
