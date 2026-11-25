@@ -1,6 +1,6 @@
 ---
 name: marstrace-remote
-description: Trace the timeline inside one CUDA kernel on an H200 or B200 with MarsTrace, without a local GPU. Gather the kernel's cubins (from nvcc, Triton, torch.compile, TileLang or CuTeDSL output), and optionally its source, a launch description, input data and a driver script, into a workspace that an agent on the GPU host traces within the caps you set. Then estimate the cost, submit, fetch marstrace.json and read it. A job starts once the workspace's balance reaches a minimum and is charged the agent tokens it actually used, failed attempts included, or nothing when its trace is unusable or it fails without a result. Works through the `marstrace` CLI or its stdio MCP server (`marstrace mcp`). Use when the user wants per-phase durations, pipeline bubbles or warp-role scheduling inside a kernel.
+description: Trace the timeline inside one CUDA kernel on an H200 or B200 with MarsTrace, without a local GPU. Gather the kernel's cubins (from nvcc, Triton, torch.compile, TileLang or CuTeDSL output), and optionally its source, a launch description, input data and a driver script, into a workspace that an agent on the GPU host traces within the caps you set. Then estimate the cost, submit, fetch marstrace.json and read it; or, in the thinking modes, have the agent optimize the kernel against your run and verify commands and fetch the patch and reports. A job starts once the workspace's balance reaches a minimum and is charged the agent tokens it actually used, failed attempts included, or nothing when its trace is unusable or it fails without a result. Works through the `marstrace` CLI or its stdio MCP server (`marstrace mcp`). Use when the user wants per-phase durations, pipeline bubbles or warp-role scheduling inside a kernel.
 ---
 
 # Tracing a kernel with MarsTrace
@@ -167,15 +167,56 @@ max_attempts = 2                  # 1 to 3, 2 when absent: how often a failed at
   less than the caps.
 
 A job's `mode` is `fast` (the default): it delivers the trace and the analyser's summary of
-it, with where each finding sits. `thinking-light` and `thinking-heavy`, which optimize the
-kernel, are not offered yet; the service refuses them as `mode_unavailable`.
+it, with where each finding sits. `thinking-light` and `thinking-heavy` trace the kernel the
+same way, then optimize it (section 4a).
+
+## 4a. Optimize a kernel
+
+Use `thinking-light` or `thinking-heavy` when the user wants the kernel faster, not only
+explained. The agent changes the source one measured iteration at a time and keeps a change
+only when it is faster and `verify` still passes. `thinking-heavy` has a larger budget and
+needs a larger minimum balance (section 5).
+
+```toml
+mode = "thinking-light"           # or thinking-heavy
+
+[workspace]
+cubins = ["k.cubin"]              # traced first, as in a fast job
+source = "src"                    # required: the tree the agent builds, runs and changes
+
+[optimize]                        # required in these modes, refused in fast
+build = "cmake -S . -B build && cmake --build build"   # optional
+run = "python3 bench.py"          # required: launches the target kernel at its workload
+verify = "python3 check.py"       # required: exits 0 when the results are correct
+kernel = "flash_fwd.*"            # optional: a regular expression of the target kernel's name
+max_turns = 400                   # optional caps of the optimization stage; light: 1 to 1,000
+max_input_tokens = 40000000       # light: 1 to 60,000,000; heavy: 1 to 250,000,000
+max_output_tokens = 400000        # light: 1 to 1,000,000; heavy: 1 to 3,000,000
+max_wall_seconds = 3600           # light: 600 to 3,600; heavy: 600 to 18,000
+```
+
+- **The commands run with `bash -lc` in the root of `source`**, each 1 to 4,096 characters.
+  Check them with the user: `run` must launch the shapes they care about, and `verify` must
+  fail on a wrong result, at edge sizes too. The agent trusts `verify` alone for correctness.
+- **There is no network at build or run time.** Every dependency the image lacks ships in
+  `source`: vendored headers, wheels, data. Say so to the user before the estimate; the
+  estimate repeats it as a note.
+- **The caps add up.** An attempt's bounds are `[agent]` (the trace) plus `[optimize]` (the
+  optimization); `[limits] max_attempts` defaults to 2 for light and 3 for heavy. Absent caps
+  take the tier's defaults: light 400 turns, 40M input, 400k output tokens, 3,600 s; heavy
+  2,000 turns, 150M, 1.5M, 18,000 s. Lower them when the task is small.
+- **`examples/matmul-optimize`** in the client's repository is a small working layout.
+
+With MCP, `marstrace_estimate` and `marstrace_submit` take `mode` and `optimize` (an object
+of the same keys) to override the manifest.
 
 ## 5. Estimate, then submit
 
 How MarsTrace charges, which the user must hear before the first submission:
 
 - **A job starts only while the workspace's available balance is at least the minimum**
-  that `marstrace credit` and the estimate show (set by MarsCompute, e.g. $100). While it
+  of its mode, which the estimate shows: $100 for `fast` and `thinking-light`, $300 for
+  `thinking-heavy` (set by MarsCompute; `marstrace credit` shows the base minimum). While it
   runs, the job holds that minimum, so a balance of $150 with a $100 minimum runs one job
   at a time. The minimum is not the price.
 - **The whole job is charged the agent tokens it actually used**: the input, output,
@@ -225,7 +266,10 @@ recorded request, and the service answers with the job it already started.
   attempts used up to the stop.
 
 Read the job with `marstrace job <id>`: each attempt's status and failure, the usage so
-far, the amount held, and once the job ends the charge with a line per dimension. When it
+far, the amount held, and once the job ends the charge with a line per dimension. A thinking
+job adds an `optimize` line once its first iteration is done (stage, iteration, changes kept
+and reverted, best speedup, seconds against the budget), and an `optimized` line when it
+succeeds; `marstrace_job` answers them as `progress.optimize` and `result.optimization`. When it
 fails, read its `error` (`code` and `message`) and each attempt's; a failed job without a
 result is not charged (`cost.not_charged_reason` is `failed_no_result`), so tell the user it
 cost nothing before submitting again.
@@ -236,7 +280,13 @@ cost nothing before submitting again.
 marstrace fetch <job>             # into marstrace-results/<job>/; --wait on submit does it; prints the analysis
 marstrace show marstrace-results/<job>/marstrace.json --analysis   # the delivered analysis again
 marstrace show marstrace-results/<job>/marstrace.json --stats
+marstrace show marstrace-results/<job>/marstrace.json --optimization   # a thinking job's result again
 ```
+
+A thinking job's fetch also writes `optimized.patch`, the reports and each iteration's files
+to `marstrace-results/<job>/optimization/`, and prints the speedup per configuration.
+`marstrace_fetch` answers them as `optimization`, `optimization_text` and
+`optimization_files`. Skill `marstrace-read`, section 2b, says how to read them.
 
 The user can also watch the job and read its trace in the console, at
 https://console.marscompute.ai/tenant/trace/jobs; a region marked there and copied with a

@@ -24,6 +24,8 @@ trace a kernel. An agent that only uses the client should read
 - `docs/protocol.md`: how `marstrace.toml` maps onto the MarsTrace API, and what the results hold.
 - `examples/matmul/`: a job built from `src/matmul.cu` with the command in its
   `marstrace.toml`; the tests copy it into every job they build.
+- `examples/matmul-optimize/`: a `thinking-light` job of the same kernel, with the build,
+  run and verify commands in its source tree.
 - `tests/`: unit tests, the fake service (`fake_service.py`) and fixtures.
 
 ## Running the tests

@@ -43,7 +43,7 @@ source = "src"              # 可选；有源码时，结果能对应到源码�
 - block 和 SM 之间负载是否均匀，一个 SM 上同时跑几个 block，grid 末尾的拖尾有多长；
 - producer 和 consumer warp 在哪里互相等待，以及各区间之间的空档。
 
-它测不到 DRAM 和 L2 流量、访存合并、stall 原因、bank conflict、tensor pipe 的使用情况。分析结果会为每一项写明，用哪个 profiler 指标可以确认。它也不会修改你的 kernel。
+它测不到 DRAM 和 L2 流量、访存合并、stall 原因、bank conflict、tensor pipe 的使用情况。分析结果会为每一项写明，用哪个 profiler 指标可以确认。fast job 不会修改你的 kernel，下面的 thinking 模式会。
 
 ## 怎么读结果
 
@@ -61,6 +61,31 @@ source = "src"              # 可选；有源码时，结果能对应到源码�
 - **假设**（列在 finding 下面）和**这次 trace 测不到的项目**：都是计时 trace 看不到的原因，每一项都写了用什么测量可以确认。在测量之前，假设不能当作原因。
 - **平衡**：SM 利用率、拖尾、每个 SM 平均驻留的 block 数、trace 覆盖的时长，以及不插桩时的 kernel 时间。
 
+## 优化 kernel
+
+`thinking-light` 和 `thinking-heavy` 两种模式先像 fast job 一样 trace kernel，然后由 agent 修改源码，每轮改动都会测量，只保留更快并且通过你的检查的改动。job 目录需要附上源码，并加一个 `[optimize]` 表，写明 agent 在源码根目录下运行的命令：
+
+```toml
+mode = "thinking-light"
+
+[workspace]
+cubins = ["matmul.cubin"]
+source = "src"                  # 必填：agent 编译和修改的源码
+
+[optimize]
+build = "./build.sh"            # 可选
+run = "python3 run.py"          # 必填：按实际关心的规模运行 kernel
+verify = "python3 verify.py"    # 必填：结果正确时以 0 退出
+kernel = "square_matrix_mul"    # 可选：目标 kernel 名字的正则表达式
+```
+
+```bash
+marstrace estimate examples/matmul-optimize
+marstrace submit examples/matmul-optimize --wait
+```
+
+编译和运行时没有网络，镜像里没有的依赖都必须放进源码包。`marstrace job` 会显示当前轮次、保留和回退的改动数、目前最好的加速比，以及已用时间和时间预算。`fetch` 会把 `optimized.patch`、性能报告、代码修改报告、过程报告和每轮的文件写到 `marstrace-results/<job>/optimization/` 下，并列出每个配置优化前后的时间。`marstrace show <file> --optimization` 可以再次查看。`thinking-heavy` 的预算比 `thinking-light` 大，两者的上限见 [docs/protocol.md](docs/protocol.md)。
+
 ## Agent：Claude Code 插件和 MCP
 
 插件会装上 `marstrace mcp` 服务和两个 skill：`marstrace-remote` 负责准备和提交 job，`marstrace-read` 负责读结果。
@@ -74,7 +99,8 @@ claude plugin install marstrace@marscompute
 
 ## 目前支持的范围
 
-- 模式：fast，即 trace 加分析。用来优化 kernel 的 `thinking-light` 和 `thinking-heavy` 还未开放。
+- 模式 fast：trace 加分析。
+- 模式 `thinking-light`：trace 之后优化 kernel，交付 patch 和报告。时间更长的 `thinking-heavy` 还未开放。
 - GPU：H200、B200。`marstrace hardware` 列出你的账号能用的硬件。
 - CUDA：13.0。
 - 输入：最多 8 个 cubin（必须是 ELF cubin，不接受 PTX）。另外可以附源码、launch 描述文件、safetensors 输入和其他文件，合计不超过 256 MiB。
@@ -82,7 +108,7 @@ claude plugin install marstrace@marscompute
 
 ## 计费
 
-按 agent 在所有 attempt 中实际使用的 token 收费，单价以 `marstrace hardware` 和 `marstrace estimate` 显示的为准。GPU 时间不另外收费。以下两种 job 不收费：交付的 trace 判为 `unusable`，或者 job 失败、没有交付结果。job 被取消时，按取消前已经用掉的 token 收费。余额达到 `marstrace credit` 显示的最低额度，job 才会开始运行；`marstrace estimate` 会显示这次 job 最多可能花多少钱。
+按 agent 在所有 attempt 中实际使用的 token 收费，单价以 `marstrace hardware` 和 `marstrace estimate` 显示的为准。GPU 时间不另外收费。以下两种 job 不收费：交付的 trace 判为 `unusable`，或者 job 失败、没有交付结果。job 被取消时，按取消前已经用掉的 token 收费。余额达到该模式的最低额度，job 才会开始运行：`fast` 和 `thinking-light` 为 $100，`thinking-heavy` 为 $300。`marstrace credit` 显示当前的最低额度，`marstrace estimate` 会显示这个 job 所属模式的最低额度，以及这次 job 最多可能花多少钱。
 
 ## 隐私与安全
 
