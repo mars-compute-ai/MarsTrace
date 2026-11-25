@@ -53,6 +53,7 @@ class DeliveredOptimization:
         "baseline us": 12,
         "best us": 10,
         "speedup": 9,
+        "noise": 8,
         "correct": 8,
     }
 
@@ -298,6 +299,13 @@ class DeliveredOptimization:
         number = DeliveredOptimization._number(time_us)
         return "-" if number is None else f"{number:.1f}"
 
+    @staticmethod
+    def noise_text(value: Any) -> str:
+        """A configuration's noise band, the spread of its repeated timings, as a percent; ``-`` when not given."""
+        if type(value) not in (int, float):
+            return "-"
+        return f"{value:.1f}%"
+
     def config_lines(self) -> list[str]:
         """The configuration table: each configuration's time before and after, and its check.
 
@@ -323,6 +331,7 @@ class DeliveredOptimization:
                 DeliveredOptimization._time_text(map_config.get("baseline_us")),
                 DeliveredOptimization._time_text(map_config.get("best_us")),
                 DeliveredOptimization.speedup_text(map_config.get("speedup")),
+                DeliveredOptimization.noise_text(map_config.get("noise_pct")),
                 "-" if correct is None else ("yes" if correct is True else "no"),
             ]
             list_line.append(

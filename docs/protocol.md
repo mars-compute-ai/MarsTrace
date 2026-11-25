@@ -181,7 +181,8 @@ A thinking job's `marstrace.json` also holds at most one section of `type`
 `marscompute.optimization`, after the trace sections. Its `data` holds `summary` (`status`:
 `improved`, `no_gain` or `incomplete`; `correctness`; `best_speedup`; the counts `configs`,
 `iterations`, `kept` and `reverted`), `list_config` (per configuration
-its `name`, `baseline_us`, `best_us`, `speedup` and `correct`), `list_iteration` (per
+its `name`, `baseline_us`, `best_us`, `speedup`, `correct` and, when measured, `noise_pct`, the spread of
+its repeated baseline timings as a percent of their median), `list_iteration` (per
 iteration its `name`, `verdict`, `speedup` and `summary`) and `list_file`, the deliverables as
 UTF-8 text, each with `path`, `sha256`, `size_bytes`, `media_type` and `text`:
 
