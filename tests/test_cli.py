@@ -5,8 +5,9 @@ import os
 import shutil
 import tempfile
 import unittest
+import urllib.request
 from unittest import mock
-from fake_service import ADD_CREDIT_URL, API_KEY, EXAMPLE_DIRECTORY, FakeServer, agent_job
+from fake_service import ADD_CREDIT_URL, API_KEY, EXAMPLE_DIRECTORY, FakeServer, agent_job, thinking_job
 from marstrace.cli import CommandLine
 
 
@@ -252,6 +253,64 @@ class CommandLineTest(unittest.TestCase):
         status, output, error = self.run_cli("estimate", self.directory)
         self.assertNotEqual(status, 0)
         self.assertIn("'mode' is one of fast, thinking-heavy, thinking-light", error + output)
+
+    def test_estimate_of_a_thinking_job_prints_its_mode_minimum_and_the_network_note(self) -> None:
+        thinking_job(self.directory)
+        status, output, error = self.run_cli("estimate", self.directory)
+        self.assertEqual(status, 0, error)
+        self.assertIn("mode      thinking-light", output)
+        self.assertIn("bounds    per attempt 44000000 input and 460000 output tokens; 2 attempt(s)", output)
+        self.assertIn("at most   $1264.200000: $632.100000 of tokens per attempt", output)
+        self.assertIn("balance   $118.250000 available, $100.000000 needed to start a thinking-light job", output)
+        self.assertIn("note      The build and run have no network access: include every dependency the image lacks in the source archive.", output)
+        request = json.loads(self.fake.state.requests_to("POST", r"^/v1/quotes$")[-1]["body"])
+        self.assertEqual(
+            (request["mode"], request["optimize"]),
+            ("thinking-light", {"build": "./build.sh", "run": "python3 run.py", "verify": "python3 verify.py", "kernel": "square_matrix_mul"}),
+        )
+        self.assertNotIn("note", self.run_cli("estimate", EXAMPLE_DIRECTORY)[1])
+
+    def test_a_thinking_heavy_job_needs_its_own_minimum(self) -> None:
+        thinking_job(self.directory, mode="thinking-heavy")
+        status, output, error = self.run_cli("submit", self.directory, "--yes")
+        self.assertEqual(status, 1)
+        self.assertIn("needed to start a thinking-heavy job", output)
+        self.assertIn("$300.000000 needed to start", output)
+        self.assertIn("refused   A thinking-heavy job needs at least $300 of available credit", output)
+        self.assertEqual(self.fake.state.requests_to("POST", r"^/v1/jobs$"), [])
+        self.fake.state.available_micro_usd = 400_000_000
+        status, output, error = self.run_cli("submit", self.directory, "--yes")
+        self.assertEqual(status, 0, error)
+        self.assertIn("held      $300.000000", output)
+
+    def test_job_and_submit_wait_print_the_optimization_progress(self) -> None:
+        thinking_job(self.directory)
+        self.fake.state.hold_status = "running"
+        status, output, error = self.run_cli("submit", self.directory, "--yes")
+        self.assertEqual(status, 0, error)
+        self.assertNotIn("optimize  ", output)
+        job_id = next(iter(self.fake.state.map_job))
+        for unused_step in range(3):
+            urllib.request.urlopen(
+                urllib.request.Request(
+                    f"{self.fake.api_url}/v1/jobs/{job_id}/wait?timeout_seconds=1",
+                    headers={"Authorization": f"Bearer {API_KEY}"},
+                )
+            ).close()
+        status, output, error = self.run_cli("job", job_id)
+        self.assertEqual(status, 0, error)
+        self.assertIn("status    running", output)
+        self.assertIn("optimize  optimizing, iteration 3: 2 kept, 1 reverted, best speedup 1.37x, 1820 s of 3600 s", output)
+        self.fake.reset()
+        status, output, error = self.run_cli("submit", self.directory, "--yes", "--wait")
+        self.assertEqual(status, 0, error)
+        self.assertIn("optimize optimizing, iteration 3", error)
+        self.assertIn("optimize writing, iteration 6", error)
+        self.assertIn("optimize  writing, iteration 6: 3 kept, 3 reverted, best speedup 1.41x, 3240 s of 3600 s", output)
+        self.assertIn(
+            "optimized improved, best speedup 1.41x over 2 configuration(s), correctness passed, 6 iteration(s): 3 kept, 3 reverted",
+            output,
+        )
 
     def test_cubin_find_copies_into_the_workspace(self) -> None:
         cache = os.path.join(self.directory, "cache")

@@ -44,7 +44,7 @@ class JobCommands:
 
     @staticmethod
     def print_job(map_job: dict[str, Any]) -> None:
-        """One job's status, hardware, CUDA version, attempts, progress and cost.
+        """One job's status, hardware, CUDA version, attempts, progress, optimization and cost.
 
         Args:
             map_job: the job
@@ -63,6 +63,11 @@ class JobCommands:
                 f"progress  agent turn {map_progress['agent_turn']}, "
                 f"{MarsTraceWorkflow.usd(map_progress['usage_micro_usd'])} used so far"
             )
+            if map_progress.get("optimize"):
+                print(f"optimize  {MarsTraceWorkflow.optimize_progress_text(map_progress['optimize'])}")
+        map_result = map_job["result"] or {}
+        if map_result.get("optimization"):
+            print(f"optimized {MarsTraceWorkflow.optimization_result_text(map_result['optimization'])}")
         for map_attempt in map_job["attempts"]:
             line = f"attempt   {map_attempt['number']} {map_attempt['status']}"
             if map_attempt["failure"]:
@@ -161,6 +166,7 @@ class JobCommands:
         map_cost = map_summary["cost_at_bounds"]
         print(f"hardware  {map_summary['hardware']}, {map_summary['gpu']} ({map_summary['architecture']})")
         print(f"cuda      {map_summary['cuda_version']}")
+        print(f"mode      {map_summary['mode']}")
         print(
             f"tokens    {map_rates['agent_model']}: {map_token['input']} input, "
             f"{map_token['cache_read']} cache read, {map_token['cache_write_5m']} 5-minute cache write, "
@@ -178,7 +184,12 @@ class JobCommands:
             "charged   the tokens every attempt actually used, failed ones included; nothing if the trace is "
             "unusable or the job fails without a result"
         )
-        print(f"balance   {map_summary['available_usd']} available, {map_summary['minimum_usd']} needed to start")
+        print(
+            f"balance   {map_summary['available_usd']} available, {map_summary['minimum_usd']} needed to start "
+            f"a {map_summary['mode']} job"
+        )
+        for note in map_summary["notes"]:
+            print(f"note      {note}")
         if not map_summary["admissible"]:
             print(f"refused   {map_summary['message'] or 'the available balance is below the minimum'}")
 

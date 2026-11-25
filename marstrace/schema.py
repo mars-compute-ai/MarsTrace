@@ -151,6 +151,28 @@ class ResponseSchema:
         "status": {"verified"},
         "expires_at": TIME,
     }
+    NUMBER = (
+        int,
+        float,
+    )
+    OPTIMIZE_PROGRESS = {
+        "stage": str,
+        "iteration": int,
+        "kept": int,
+        "reverted": int,
+        "best_speedup": (int, float, None),
+        "elapsed_seconds": NUMBER,
+        "budget_seconds": NUMBER,
+    }
+    OPTIMIZATION_RESULT = {
+        "status": str,
+        "best_speedup": (int, float, None),
+        "configs": int,
+        "correctness": str,
+        "iterations": int,
+        "kept": int,
+        "reverted": int,
+    }
     QUOTE = {
         "rate_card_version_id": str,
         "cuda_version": CUDA_VERSION,
@@ -167,6 +189,7 @@ class ResponseSchema:
         "available_micro_usd": (SIGNED_MONEY, None),
         "admissible": bool,
         "message?": str,
+        "notes?": [str],
     }
     JOB = {
         "job_id": JOB_ID,
@@ -178,11 +201,13 @@ class ResponseSchema:
         "hardware": str,
         "cuda_version": CUDA_VERSION,
         "agent": AGENT_LIMITS,
+        "optimize?": (dict, None),
         "limits": {"max_attempts": int},
         "progress": (
             {
                 "agent_turn": int,
                 "usage_micro_usd": MONEY,
+                "optimize?": (OPTIMIZE_PROGRESS, None),
             },
             None,
         ),
@@ -215,6 +240,7 @@ class ResponseSchema:
                 "size_bytes": int,
                 "download_url": str,
                 "expires_at": TIME,
+                "optimization?": (OPTIMIZATION_RESULT, None),
             },
             None,
         ),

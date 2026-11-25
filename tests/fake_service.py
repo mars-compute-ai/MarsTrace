@@ -138,6 +138,17 @@ def agent_job(directory: str) -> None:
         )
 
 
+def thinking_job(directory: str, mode: str = "thinking-light") -> None:
+    """Turn the example job copied into a directory into a thinking job of the mode."""
+    with open(os.path.join(directory, "marstrace.toml")) as manifest_file:
+        text = manifest_file.read()
+    with open(os.path.join(directory, "marstrace.toml"), "w") as manifest_file:
+        manifest_file.write(
+            f'mode = "{mode}"\n' + text
+            + '\n[optimize]\nbuild = "./build.sh"\nrun = "python3 run.py"\nverify = "python3 verify.py"\nkernel = "square_matrix_mul"\n'
+        )
+
+
 def ceil_rate(quantity: int, unit_micro_usd: int, denominator: int) -> int:
     """A quantity at a price, rounded up to whole micro-USD."""
     return -(-quantity * unit_micro_usd // denominator)
@@ -581,7 +592,7 @@ class FakeService(http.server.BaseHTTPRequestHandler):
             job["attempts"].append(self._attempt(1))
         if job["status"] in ("running", "finishing"):
             job["attempts"][-1]["status"] = job["status"]
-            job["progress"] = {"agent_turn": 14, "usage_micro_usd": "1958000"}
+            job["progress"] = {"agent_turn": 14, "usage_micro_usd": "1958000", "optimize": self._optimize_progress(job)}
         if job["status"] == "succeeded":
             with open(os.path.join(FIXTURE_DIRECTORY, "trace_sass_regions.json"), "rb") as trace_file:
                 trace = trace_file.read()
@@ -607,9 +618,25 @@ class FakeService(http.server.BaseHTTPRequestHandler):
             job["cost"]["lines"] = list_line
             if state.is_trace_unusable:
                 job["cost"].update(charged_micro_usd="0", lines=[], not_charged_reason="unusable_result")
-            job["result"] = self._result_summary(job)
+            job["result"] = {**self._result_summary(job), "optimization": self._optimization_result(job)}
             if state.available_micro_usd is not None:
                 state.available_micro_usd -= int(job["cost"]["charged_micro_usd"])
+
+    @staticmethod
+    def _optimize_progress(job: dict[str, Any]) -> dict[str, Any] | None:
+        """The latest checkpoint of a thinking job's optimization: mid-way while it runs, writing while it finishes."""
+        if job["optimize"] is None:
+            return None
+        budget = job["optimize"]["max_wall_seconds"]
+        if job["status"] == "running":
+            return {"iteration": 3, "kept": 2, "reverted": 1, "best_speedup": 1.37, "elapsed_seconds": 1820, "budget_seconds": budget, "stage": "optimizing"}
+        return {"iteration": 6, "kept": 3, "reverted": 3, "best_speedup": 1.41, "elapsed_seconds": 3240, "budget_seconds": budget, "stage": "writing"}
+
+    @staticmethod
+    def _optimization_result(job: dict[str, Any]) -> dict[str, Any] | None:
+        if job["optimize"] is None:
+            return None
+        return {"status": "improved", "best_speedup": 1.41, "configs": 2, "correctness": "passed", "iterations": 6, "kept": 3, "reverted": 3}
 
     def _result_summary(self, job: dict[str, Any]) -> dict[str, Any]:
         data = FakeService.state.map_object[job["job_id"]]

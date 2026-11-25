@@ -220,11 +220,12 @@ An estimate (`POST /v1/quotes`) answers:
 | --- | --- |
 | `cuda_version` | the CUDA version the job runs with |
 | `rates` | the agent's token rates per million: input, cache read, 5-minute and 1-hour cache write, output |
-| `bounds_per_attempt` | the agent's `agent_input_tokens` and `agent_output_tokens` caps |
+| `bounds_per_attempt` | the agent's `agent_input_tokens` and `agent_output_tokens` caps; in a thinking mode, those of `[agent]` and `[optimize]` together |
 | `cost_at_bounds_micro_usd` | `agent_tokens_per_attempt` and `total`, `max_attempts` attempts at their token bounds: the most the job can cost |
-| `minimum_micro_usd` | the balance a job needs to start, set by MarsCompute administrators |
+| `minimum_micro_usd` | the balance a job of the request's mode needs to start, set by MarsCompute administrators; a `thinking-heavy` job needs at least $300 |
 | `available_micro_usd` | the workspace's available balance; negative while it owes for a job that ran past it, null without a spending limit |
 | `admissible`, `message` | whether a job would start now, and why not |
+| `notes` (optional) | what the user should know before submitting; a thinking job's note says that the build and the run have no network access |
 
 Nothing is held against the cost at the bounds. Admission holds the minimum until the job
 settles (`cost.held_micro_usd` of the job), so a workspace runs as many jobs at once as its
@@ -233,8 +234,19 @@ settles, `cost.charged_micro_usd` and `cost.lines`, `{dimension, quantity,
 amount_micro_usd}` per token dimension of the rate card, hold the charge, which may exceed the hold.
 A job charged nothing says why in `cost.not_charged_reason`: `unusable_result`,
 `failed_no_result`, `not_started` or `cancelled_before_start`; it is `null` or absent otherwise.
-`marstrace submit` prints the CUDA version, the token rates, the cost at the bounds and the balance, refuses a job
+`marstrace estimate` and `submit` print the CUDA version, the mode, the token rates, the cost at
+the bounds, the balance against the mode's minimum and every note; `submit` refuses a job
 that is not admissible, and asks before it submits, unless `--yes`.
+
+A thinking job's view holds `optimize`, the request's block with the tier's defaults applied.
+Its `progress.optimize` is `null` until the first checkpoint of the optimization stage, then
+holds `stage` (`tracing`, `optimizing` or `writing`), `iteration`, `kept`, `reverted`,
+`best_speedup` (the geometric mean over the configurations of baseline time over best time,
+`null` before a kept iteration), `elapsed_seconds` and `budget_seconds`. Once it succeeds,
+`result.optimization` holds `status` (`improved`, `no_gain` or `incomplete`), `best_speedup`,
+`configs`, `correctness`, `iterations`, `kept` and `reverted`; it is `null` for a fast job.
+`marstrace job` prints both, and `job --wait` and `submit --wait` print a line each time the
+progress moves.
 
 ## 8. Local MCP server
 

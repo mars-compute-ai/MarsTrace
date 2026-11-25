@@ -46,9 +46,10 @@ class QuotedJob:
         it.
 
         Returns:
-            the hardware, the CUDA version, the token rates, the token bounds of one attempt,
-            the attempts, the cost at the bounds, the minimum balance a job needs, the available balance, and whether the
-            service admits the job now
+            the hardware, the CUDA version, the mode, the token rates, the token bounds of one
+            attempt, the attempts, the cost at the bounds, the minimum balance a job of the mode
+            needs, the available balance, whether the service admits the job now, and the
+            service's notes on the job
         """
         map_rates = self.map_quote["rates"]
         map_bounds = self.map_quote["bounds_per_attempt"]
@@ -59,6 +60,7 @@ class QuotedJob:
             "gpu": self.map_hardware_entry["gpu"],
             "architecture": self.map_hardware_entry["architecture"],
             "cuda_version": self.map_quote["cuda_version"],
+            "mode": self.manifest.mode,
             "rates": {
                 "agent_model": self.agent_model,
                 "agent_usd_per_million_tokens": {
@@ -79,6 +81,7 @@ class QuotedJob:
             "available_usd": "no limit" if available is None else MarsTraceWorkflow.usd(available),
             "admissible": self.map_quote["admissible"],
             "message": self.map_quote.get("message"),
+            "notes": list(self.map_quote.get("notes") or []),
         }
 
 
@@ -158,6 +161,66 @@ class MarsTraceWorkflow:
         if amount < 0:
             return f"-${-amount:.6f}"
         return f"${amount:.6f}"
+
+    @staticmethod
+    def speedup_text(speedup: Any) -> str:
+        """A speedup as a reader quotes it.
+
+        Args:
+            speedup: baseline time over optimized time, or None
+
+        Returns:
+            e.g. ``1.37x``, or ``none yet`` when there is none
+        """
+        if (
+            isinstance(
+                speedup,  # obj
+                bool,     # class_or_tuple
+            )
+            or not isinstance(
+                speedup,       # obj
+                (int, float),  # class_or_tuple
+            )
+        ):
+            return "none yet"
+        return f"{speedup:.2f}x"
+
+    @staticmethod
+    def optimize_progress_text(map_optimize: dict[str, Any]) -> str:
+        """The progress of a thinking job's optimization stage, on one line.
+
+        Args:
+            map_optimize: ``progress.optimize`` of the job
+
+        Returns:
+            the stage, the iteration, the changes kept and reverted, the best speedup, and the
+            time spent against the stage's budget
+        """
+        return (
+            f"{map_optimize['stage']}, iteration {map_optimize['iteration']}: "
+            f"{map_optimize['kept']} kept, {map_optimize['reverted']} reverted, "
+            f"best speedup {MarsTraceWorkflow.speedup_text(map_optimize['best_speedup'])}, "
+            f"{map_optimize['elapsed_seconds']:.0f} s of {map_optimize['budget_seconds']:.0f} s"
+        )
+
+    @staticmethod
+    def optimization_result_text(map_optimization: dict[str, Any]) -> str:
+        """The outcome of a thinking job's optimization, on one line.
+
+        Args:
+            map_optimization: ``result.optimization`` of the job
+
+        Returns:
+            the status, the best speedup over the configurations, the correctness, and the
+            iterations kept and reverted
+        """
+        return (
+            f"{map_optimization['status']}, best speedup "
+            f"{MarsTraceWorkflow.speedup_text(map_optimization['best_speedup'])} over "
+            f"{map_optimization['configs']} configuration(s), correctness "
+            f"{map_optimization['correctness']}, {map_optimization['iterations']} iteration(s): "
+            f"{map_optimization['kept']} kept, {map_optimization['reverted']} reverted"
+        )
 
     def _say(self, line: str) -> None:
         """Report a step of progress."""
@@ -452,6 +515,7 @@ class MarsTraceWorkflow:
                 if wait_seconds < 1:
                     return map_job
             last_status = map_job["status"]
+            last_optimize = MarsTraceWorkflow._optimize_progress(map_job)
             try:
                 map_job = self._client.wait_job(
                     job_id=job_id,
@@ -470,7 +534,22 @@ class MarsTraceWorkflow:
             failures = 0
             if map_job["status"] != last_status:
                 self._say(f"{time.strftime('%H:%M:%S')} {job_id} {map_job['status']}")
+            map_optimize = MarsTraceWorkflow._optimize_progress(map_job)
+            if (
+                map_optimize is not None
+                and map_optimize != last_optimize
+            ):
+                self._say(
+                    f"{time.strftime('%H:%M:%S')} {job_id} optimize "
+                    f"{MarsTraceWorkflow.optimize_progress_text(map_optimize)}"
+                )
         return map_job
+
+    @staticmethod
+    def _optimize_progress(map_job: dict[str, Any]) -> dict[str, Any] | None:
+        """The progress of a job's optimization stage, or None before its first checkpoint."""
+        map_progress = map_job["progress"] or {}
+        return map_progress.get("optimize")
 
     def fetch(
         self,
