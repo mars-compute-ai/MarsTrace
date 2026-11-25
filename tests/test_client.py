@@ -213,6 +213,19 @@ class ServiceTest(unittest.TestCase):
             self.workflow.submit(quoted=quoted, idempotency_key="limit-2")
         self.assertEqual((context.exception.status, context.exception.code), (402, "billing_suspended"))
 
+    def test_a_rate_limited_request_is_sent_again_after_the_wait(self) -> None:
+        self.fake.state.rate_limited_requests = 2
+        with mock.patch("marstrace.client.time.sleep") as sleep:
+            quoted = self.workflow.quote(self.directory)
+        self.assertEqual([call.args for call in sleep.call_args_list], [(11,), (11,)])
+        self.assertEqual({upload["status"] for upload in self.fake.state.map_upload.values()}, {"verified"})
+        self.fake.state.rate_limited_requests = MarsTraceClient.RATE_LIMITED_ATTEMPTS
+        with mock.patch("marstrace.client.time.sleep"), self.assertRaises(ServiceError) as context:
+            self.workflow.submit(quoted=quoted, idempotency_key="rate-1")
+        self.assertEqual((context.exception.status, context.exception.code), (429, "rate_limited"))
+        self.assertEqual(len(self.fake.state.requests_to("POST", r"^/v1/jobs$")), MarsTraceClient.RATE_LIMITED_ATTEMPTS)
+        self.assertEqual(self.fake.state.map_job, {})
+
     def test_too_many_jobs_names_the_wait(self) -> None:
         self.fake.state.available_micro_usd = None
         self.fake.state.max_queued = 1

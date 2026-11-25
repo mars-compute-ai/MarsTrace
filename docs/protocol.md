@@ -152,7 +152,8 @@ contract:
 | `upload_not_ready`, `job_not_cancellable`, `result_unavailable` | 409 | an upload is not verified or belongs to another job; the job has ended; the job has no result |
 | `limit_exceeded` | 413 | a size or count limit |
 | `hardware_unavailable` | 422 | the hardware is unknown, or MarsTrace has no published price |
-| `rate_limited`, `too_many_jobs` | 429 | retryable after `retry-after` seconds |
+| `rate_limited` | 429 | waits `retry-after` seconds (at most 60) and sends the same request again, up to 6 times in all |
+| `too_many_jobs` | 429 | retryable after `retry-after` seconds; the client reports it |
 | `service_unavailable` | 503 | retryable; a submission is retried under the same key |
 
 A failed job carries `error` with `code` and `message`, and each failed attempt its
