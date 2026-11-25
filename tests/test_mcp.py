@@ -195,6 +195,45 @@ class McpStdioTest(unittest.TestCase):
         self.assertEqual(submitted["structuredContent"]["job"]["status"], "queued")
         self.assertEqual(self.call("marstrace_cancel", job_id=submitted["structuredContent"]["job"]["job_id"])["structuredContent"]["status"], "cancelled")
 
+    def test_a_thinking_job_through_mcp(self) -> None:
+        self.initialize()
+        optimize = {"build": "./build.sh", "run": "python3 run.py", "verify": "python3 verify.py", "max_turns": 300}
+        quote = self.call("marstrace_estimate", directory=self.directory, mode="thinking-light", optimize=optimize)["structuredContent"]
+        self.assertEqual((quote["mode"], quote["minimum_usd"]), ("thinking-light", "$100.000000"))
+        self.assertEqual(quote["notes"], ["The build and run have no network access: include every dependency the image lacks in the source archive."])
+        self.assertEqual(json.loads(self.fake.state.requests_to("POST", r"^/v1/quotes$")[-1]["body"])["optimize"], optimize)
+        self.assertEqual(self.call("marstrace_estimate", directory=self.directory)["structuredContent"]["notes"], [])
+        refused = self.call("marstrace_estimate", directory=self.directory, optimize=optimize)
+        self.assertTrue(refused["isError"])
+        self.assertIn("[optimize] is taken only in mode thinking-light or thinking-heavy", refused["structuredContent"]["error"]["message"])
+        missing = self.call("marstrace_estimate", directory=self.directory, mode="thinking-heavy", optimize={"run": "python3 run.py"})
+        self.assertIn("[optimize] verify is required in mode thinking-heavy", missing["structuredContent"]["error"]["message"])
+        self.assertEqual(self.send("tools/call", {"name": "marstrace_estimate", "arguments": {"directory": self.directory, "optimize": "run"}})["error"]["code"], -32602)
+        total = float(quote["cost_at_bounds"]["total_usd"].lstrip("$"))
+        self.fake.state.hold_status = "running"
+        submitted = self.call("marstrace_submit", directory=self.directory, mode="thinking-light", optimize=optimize, accept_cost_at_bounds_usd=total)
+        self.assertFalse(submitted["isError"], submitted)
+        job_id = submitted["structuredContent"]["job"]["job_id"]
+        self.assertEqual(self.call("marstrace_wait", job_id=job_id, timeout_seconds=2)["structuredContent"]["status"], "running")
+        job = self.call("marstrace_job", job_id=job_id)["structuredContent"]
+        self.assertEqual(
+            job["progress"]["optimize"],
+            {"iteration": 3, "kept": 2, "reverted": 1, "best_speedup": 1.37, "elapsed_seconds": 1820, "budget_seconds": 3600, "stage": "optimizing"},
+        )
+        self.assertEqual(job["optimize"]["max_turns"], 300)
+        self.fake.state.hold_status = None
+        self.assertEqual(self.call("marstrace_wait", job_id=job_id, timeout_seconds=30)["structuredContent"]["status"], "succeeded")
+        self.assertEqual(self.call("marstrace_job", job_id=job_id)["structuredContent"]["result"]["optimization"]["status"], "improved")
+        fetched = self.call("marstrace_fetch", job_id=job_id)["structuredContent"]
+        self.assertEqual([os.path.basename(path) for path in fetched["files"]], ["marstrace.json", "result-manifest.json"])
+        self.assertEqual(fetched["optimization"]["best_speedup"], 1.41)
+        self.assertIn("optimization: improved, correctness passed, best speedup 1.41x", fetched["optimization_text"])
+        patch = os.path.join("marstrace-results", job_id, "optimization", "optimized.patch")
+        self.assertIn(patch, fetched["optimization_files"])
+        self.assertTrue(os.path.isfile(os.path.join(self.directory, patch)))
+        shown = self.call("marstrace_show", trace=fetched["files"][0], options=["--optimization"])
+        self.assertIn("n2048", shown["content"][0]["text"])
+
     def test_service_refusal_is_a_tool_error(self) -> None:
         self.initialize()
         self.fake.state.available_micro_usd = 0

@@ -5,8 +5,9 @@ import os
 import shutil
 import tempfile
 import unittest
+import urllib.request
 from unittest import mock
-from fake_service import ADD_CREDIT_URL, API_KEY, EXAMPLE_DIRECTORY, FakeServer, agent_job
+from fake_service import ADD_CREDIT_URL, API_KEY, EXAMPLE_DIRECTORY, FIXTURE_DIRECTORY, FakeServer, agent_job, thinking_job
 from marstrace.cli import CommandLine
 
 
@@ -82,7 +83,7 @@ class CommandLineTest(unittest.TestCase):
         self.assertIn("hardware  h200, H200 (sm_90a)", output)
         self.assertIn("cuda      13.0", output)
         self.assertIn("bounds    per attempt 4000000 input and 60000 output tokens; 2 attempt(s)", output)
-        self.assertIn("at most   $116.200000: $58.100000 of tokens per attempt", output)
+        self.assertIn("at most   $116.200000: $58.100000 per attempt, every input token priced at the dearest input rate", output)
         self.assertNotIn("GPU", output)
         self.assertIn("failed ones included", output)
         self.assertIn("balance   $118.250000 available, $100.000000 needed to start", output)
@@ -228,6 +229,42 @@ class CommandLineTest(unittest.TestCase):
         status, output, error = self.run_cli("show", trace, "--analysis", "--json")
         self.assertEqual(json.loads(output)["summary"]["schema"], "xplain.summary/2")
 
+    def test_the_analysis_prints_the_run_summary_and_each_later_runs_findings(self) -> None:
+        from marstrace.analysis import DeliveredAnalysis
+
+        analysis = DeliveredAnalysis.from_document(
+            {
+                "sections": [
+                    {
+                        "type": "marscompute.analysis",
+                        "data": {
+                            "status": "complete",
+                            "summary": {"findings": [{"code": "TILE-COST", "title": "tile cost"}]},
+                            "run_summary": "2 run(s) delivered with 1024 records at warp level",
+                            "run_summaries": [
+                                {"run": 1, "summary": {"findings": [{"code": "LOOP", "title": "one iteration takes 1.18 us"}]}}
+                            ],
+                        },
+                    }
+                ]
+            }
+        )
+        text = analysis.text()
+        self.assertIn("2 run(s) delivered with 1024 records", text)
+        self.assertIn("run 1 findings:\n  1. [LOOP] one iteration takes 1.18 us", text)
+
+    def test_a_queued_job_says_why_it_waits(self) -> None:
+        from marstrace.cli import JobCommands
+
+        self.assertEqual(
+            JobCommands.queue_text({"reason": "workspace_limit", "position": 2, "workspace_dispatched_limit": 2}),
+            "your workspace already runs its 2 jobs; number 2 in its queue",
+        )
+        self.assertIn(
+            "next attempt at 2026-11-25T05:00:00Z",
+            JobCommands.queue_text({"reason": "retry_wait", "next_attempt_at": "2026-11-25T05:00:00Z"}),
+        )
+
     def test_a_trace_without_an_analysis_says_so(self) -> None:
         status, output, error = self.run_cli("submit", self.directory, "--yes", "--wait")
         self.assertEqual(status, 0, error)
@@ -237,7 +274,7 @@ class CommandLineTest(unittest.TestCase):
         status, output, error = self.run_cli("show", trace, "--analysis")
         self.assertIn("analysis: this report carries none", output)
 
-    def test_an_optimizing_mode_is_refused_and_an_unknown_one_is_caught_locally(self) -> None:
+    def test_a_thinking_mode_needs_its_optimize_table_and_an_unknown_mode_is_caught_locally(self) -> None:
         manifest = os.path.join(self.directory, "marstrace.toml")
         with open(manifest) as manifest_file:
             text = manifest_file.read()
@@ -245,12 +282,126 @@ class CommandLineTest(unittest.TestCase):
             manifest_file.write('mode = "thinking-light"\n' + text)
         status, output, error = self.run_cli("submit", self.directory, "--yes")
         self.assertNotEqual(status, 0)
-        self.assertIn("This mode is not available yet; submit a fast job", error + output)
+        self.assertIn("[optimize] is required in mode thinking-light", error + output)
+        self.assertEqual(self.fake.state.requests_to("POST", r"^/v1/uploads$"), [])
         with open(manifest, "w") as manifest_file:
             manifest_file.write('mode = "thinking"\n' + text)
         status, output, error = self.run_cli("estimate", self.directory)
         self.assertNotEqual(status, 0)
         self.assertIn("'mode' is one of fast, thinking-heavy, thinking-light", error + output)
+
+    def test_estimate_of_a_thinking_job_prints_its_mode_minimum_and_the_network_note(self) -> None:
+        thinking_job(self.directory)
+        status, output, error = self.run_cli("estimate", self.directory)
+        self.assertEqual(status, 0, error)
+        self.assertIn("mode      thinking-light", output)
+        self.assertIn("bounds    per attempt 44000000 input and 460000 output tokens; 2 attempt(s)", output)
+        self.assertIn("at most   $500.000000: $250.000000 per attempt, each attempt stops at its $250 cost cap", output)
+        self.assertIn("balance   $118.250000 available, $100.000000 needed to start a thinking-light job", output)
+        self.assertIn("note      The build and run have no network access: include every dependency the image lacks in the source archive.", output)
+        request = json.loads(self.fake.state.requests_to("POST", r"^/v1/quotes$")[-1]["body"])
+        self.assertEqual(
+            (request["mode"], request["optimize"]),
+            ("thinking-light", {"build": "./build.sh", "run": "python3 run.py", "verify": "python3 verify.py", "kernel": "square_matrix_mul"}),
+        )
+        self.assertNotIn("note", self.run_cli("estimate", EXAMPLE_DIRECTORY)[1])
+
+    def test_estimate_prints_the_typical_range_and_takes_the_attempt_cost_cap(self) -> None:
+        thinking_job(self.directory)
+        manifest = os.path.join(self.directory, "marstrace.toml")
+        with open(manifest) as manifest_file:
+            text = manifest_file.read()
+        with open(manifest, "w") as manifest_file:
+            manifest_file.write(text.replace("[limits]\n", "[limits]\nmax_attempt_cost_usd = 100\n"))
+        self.fake.state.typical_micro_usd = {"low_micro_usd": "30000000", "high_micro_usd": "80000000", "jobs": 12}
+        status, output, error = self.run_cli("estimate", self.directory)
+        self.assertEqual(status, 0, error)
+        self.assertIn("typical   $30.000000 to $80.000000 (the middle half of the last 12 thinking-light jobs)", output)
+        self.assertIn("at most   $200.000000: $100.000000 per attempt, each attempt stops at its $100 cost cap", output)
+        request = json.loads(self.fake.state.requests_to("POST", r"^/v1/quotes$")[-1]["body"])
+        self.assertEqual(request["limits"]["max_attempt_cost_usd"], 100)
+
+    def test_a_thinking_heavy_job_needs_its_own_minimum(self) -> None:
+        thinking_job(self.directory, mode="thinking-heavy")
+        status, output, error = self.run_cli("submit", self.directory, "--yes")
+        self.assertEqual(status, 1)
+        self.assertIn("needed to start a thinking-heavy job", output)
+        self.assertIn("$300.000000 needed to start", output)
+        self.assertIn("refused   A thinking-heavy job needs at least $300 of available credit", output)
+        self.assertEqual(self.fake.state.requests_to("POST", r"^/v1/jobs$"), [])
+        self.fake.state.available_micro_usd = 400_000_000
+        status, output, error = self.run_cli("submit", self.directory, "--yes")
+        self.assertEqual(status, 0, error)
+        self.assertIn("held      $300.000000", output)
+
+    def test_job_and_submit_wait_print_the_optimization_progress(self) -> None:
+        thinking_job(self.directory)
+        self.fake.state.hold_status = "running"
+        status, output, error = self.run_cli("submit", self.directory, "--yes")
+        self.assertEqual(status, 0, error)
+        self.assertNotIn("optimize  ", output)
+        job_id = next(iter(self.fake.state.map_job))
+        for unused_step in range(3):
+            urllib.request.urlopen(
+                urllib.request.Request(
+                    f"{self.fake.api_url}/v1/jobs/{job_id}/wait?timeout_seconds=1",
+                    headers={"Authorization": f"Bearer {API_KEY}"},
+                )
+            ).close()
+        status, output, error = self.run_cli("job", job_id)
+        self.assertEqual(status, 0, error)
+        self.assertIn("status    running", output)
+        self.assertIn("optimize  optimizing, iteration 3: 2 kept, 1 reverted, best speedup 1.37x, 1820 s of 3600 s", output)
+        self.fake.reset()
+        status, output, error = self.run_cli("submit", self.directory, "--yes", "--wait")
+        self.assertEqual(status, 0, error)
+        self.assertIn("optimize optimizing, iteration 3", error)
+        self.assertIn("optimize writing, iteration 6", error)
+        self.assertIn("optimize  writing, iteration 6: 3 kept, 3 reverted, best speedup 1.41x, 3240 s of 3600 s", output)
+        self.assertIn(
+            "optimized improved, best speedup 1.41x over 2 configuration(s), correctness passed, 6 iteration(s): 3 kept, 3 reverted",
+            output,
+        )
+
+    def test_fetch_writes_the_optimization_and_show_prints_it(self) -> None:
+        thinking_job(self.directory)
+        status, output, error = self.run_cli("submit", self.directory, "--yes", "--wait")
+        self.assertEqual(status, 0, error)
+        job_id = next(iter(self.fake.state.map_job))
+        results = os.path.join(self.directory, "marstrace-results", job_id)
+        optimization = os.path.join(results, "optimization")
+        self.assertIn("optimization: improved, correctness passed, best speedup 1.41x", output)
+        self.assertRegex(output, r"n1024\s+812.4\s+590.1\s+1.38x\s+yes")
+        self.assertIn(f"patch     {os.path.join(optimization, 'optimized.patch')}", output)
+        self.assertIn(f"reports   {os.path.join(optimization, 'performance_report.md')}", output)
+        self.assertNotIn(f"saved     {os.path.join(optimization, 'optimized.patch')}", output)
+        self.assertEqual(
+            sorted(os.listdir(optimization)),
+            ["code_modification_report.md", "iterations", "optimization_process_report.md", "optimized.patch", "performance_report.md"],
+        )
+        status, output, error = self.run_cli("fetch", job_id, "-o", os.path.join(self.directory, "again"))
+        self.assertEqual(status, 0, error)
+        self.assertTrue(os.path.isfile(os.path.join(self.directory, "again", "optimization", "optimized.patch")))
+        trace = os.path.join(results, "marstrace.json")
+        status, output, error = self.run_cli("show", trace, "--optimization")
+        self.assertEqual(status, 0, error)
+        self.assertIn("kept      iter_001_shared_tiles 1.41x", output)
+        self.assertIn(os.path.join(optimization, "optimized.patch"), output)
+        status, output, error = self.run_cli("show", trace, "--optimization", "--json")
+        self.assertEqual(json.loads(output)["list_config"][1]["name"], "n2048")
+        self.assertIn("mainloop", self.run_cli("show", trace, "--stats")[1])
+        self.assertIn("optimization: this report carries none", self.run_cli("show", os.path.join(self.directory, "again", "marstrace.json").replace("again", "missing"), "--optimization")[1])
+
+    def test_fetch_refuses_an_unsafe_deliverable(self) -> None:
+        thinking_job(self.directory)
+        with open(os.path.join(FIXTURE_DIRECTORY, "optimization_section.json")) as section_file:
+            section = json.load(section_file)
+        section["data"]["list_file"][0]["path"] = "../../escape.md"
+        self.fake.state.optimization_section = section
+        status, output, error = self.run_cli("submit", self.directory, "--yes", "--wait")
+        self.assertEqual(status, 1)
+        self.assertIn("unsafe path '../../escape.md'; nothing was written", error)
+        self.assertFalse(os.path.exists(os.path.join(self.directory, "marstrace-results", "escape.md")))
 
     def test_cubin_find_copies_into_the_workspace(self) -> None:
         cache = os.path.join(self.directory, "cache")

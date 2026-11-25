@@ -8,6 +8,7 @@ from marstrace.binary import DslCache, KernelBinary
 from marstrace.error import MarsTraceError
 from marstrace.guide import AgentGuide
 from marstrace.mcp import McpServer
+from marstrace.optimization import DeliveredOptimization
 from marstrace.viewer.cli.show import ShowCommand
 from marstrace.workflow import MarsTraceWorkflow, QuotedJob
 
@@ -42,9 +43,28 @@ class JobCommands:
             )
         )
 
+    MAP_QUEUE_REASON = {
+        "paused": "MarsTrace is not starting jobs right now",
+        "retry_wait": "waiting before the next attempt",
+        "service_capacity": "every GPU machine of MarsTrace is in use",
+        "workspace_limit": "your workspace already runs its {limit} jobs",
+        "dispatching": "starting now",
+    }
+
+    @staticmethod
+    def queue_text(map_queue: dict[str, Any]) -> str:
+        """Why a queued job waits and its place in the workspace's queue, in words."""
+        reason = JobCommands.MAP_QUEUE_REASON.get(str(map_queue.get("reason")), str(map_queue.get("reason") or "waiting"))
+        text = reason.format(limit=map_queue.get("workspace_dispatched_limit", 2))
+        if isinstance(map_queue.get("position"), int):
+            text += f"; number {map_queue['position']} in its queue"
+        if map_queue.get("next_attempt_at"):
+            text += f"; next attempt at {map_queue['next_attempt_at']}"
+        return text
+
     @staticmethod
     def print_job(map_job: dict[str, Any]) -> None:
-        """One job's status, hardware, CUDA version, attempts, progress and cost.
+        """One job's status, hardware, CUDA version, attempts, progress, optimization and cost.
 
         Args:
             map_job: the job
@@ -58,11 +78,18 @@ class JobCommands:
         print(f"created   {map_job['created_at']}")
         if map_job["ended_at"]:
             print(f"ended     {map_job['ended_at']}")
+        if isinstance(map_job.get("queue"), dict):
+            print(f"queued    {JobCommands.queue_text(map_job['queue'])}")
         if map_progress:
             print(
                 f"progress  agent turn {map_progress['agent_turn']}, "
                 f"{MarsTraceWorkflow.usd(map_progress['usage_micro_usd'])} used so far"
             )
+            if map_progress.get("optimize"):
+                print(f"optimize  {MarsTraceWorkflow.optimize_progress_text(map_progress['optimize'])}")
+        map_result = map_job["result"] or {}
+        if map_result.get("optimization"):
+            print(f"optimized {MarsTraceWorkflow.optimization_result_text(map_result['optimization'])}")
         for map_attempt in map_job["attempts"]:
             line = f"attempt   {map_attempt['number']} {map_attempt['status']}"
             if map_attempt["failure"]:
@@ -161,6 +188,7 @@ class JobCommands:
         map_cost = map_summary["cost_at_bounds"]
         print(f"hardware  {map_summary['hardware']}, {map_summary['gpu']} ({map_summary['architecture']})")
         print(f"cuda      {map_summary['cuda_version']}")
+        print(f"mode      {map_summary['mode']}")
         print(
             f"tokens    {map_rates['agent_model']}: {map_token['input']} input, "
             f"{map_token['cache_read']} cache read, {map_token['cache_write_5m']} 5-minute cache write, "
@@ -171,14 +199,33 @@ class JobCommands:
             f"{map_bounds['agent_input_tokens']} input and {map_bounds['agent_output_tokens']} output tokens; "
             f"{map_summary['max_attempts']} attempt(s)"
         )
+        if map_summary.get("typical"):
+            map_typical = map_summary["typical"]
+            print(
+                f"typical   {map_typical['low_usd']} to {map_typical['high_usd']} "
+                f"(the middle half of the last {map_typical['jobs']} {map_summary['mode']} jobs)"
+            )
+        at_most_basis = (
+            f"each attempt stops at its ${map_summary['max_attempt_cost_usd']} cost cap"
+            if map_summary.get("max_attempt_cost_usd")
+            else "every input token priced at the dearest input rate"
+        )
         print(
-            f"at most   {map_cost['total_usd']}: {map_cost['agent_tokens_per_attempt_usd']} of tokens per attempt"
+            f"at most   {map_cost['total_usd']}: {map_cost['agent_tokens_per_attempt_usd']} per attempt, "
+            f"{at_most_basis}; [limits] max_attempt_cost_usd changes it"
+            if map_summary.get("max_attempt_cost_usd")
+            else f"at most   {map_cost['total_usd']}: {map_cost['agent_tokens_per_attempt_usd']} per attempt, {at_most_basis}"
         )
         print(
             "charged   the tokens every attempt actually used, failed ones included; nothing if the trace is "
             "unusable or the job fails without a result"
         )
-        print(f"balance   {map_summary['available_usd']} available, {map_summary['minimum_usd']} needed to start")
+        print(
+            f"balance   {map_summary['available_usd']} available, {map_summary['minimum_usd']} needed to start "
+            f"a {map_summary['mode']} job"
+        )
+        for note in map_summary["notes"]:
+            print(f"note      {note}")
         if not map_summary["admissible"]:
             print(f"refused   {map_summary['message'] or 'the available balance is below the minimum'}")
 
@@ -242,21 +289,27 @@ class JobCommands:
 
     @staticmethod
     def _print_saved(list_path: list[str]) -> None:
-        """The files a fetch wrote, the quality of the trace, and the analysis it carries."""
-        for path in list_path:
-            print(f"saved     {path}")
+        """The report and manifest a fetch wrote, the quality of the trace, the analysis it
+        carries, and a thinking job's optimization with where its deliverables were written."""
+        trace_path, manifest_path = list_path[:2]
+        print(f"saved     {trace_path}")
+        print(f"saved     {manifest_path}")
         with open(
-            file=list_path[-1],
+            file=manifest_path,
             mode="r",
             encoding="utf-8",
         ) as manifest_file:
             map_manifest = json.load(manifest_file)
         print(f"quality   {map_manifest['quality']} {', '.join(map_manifest['reason_codes'])}".rstrip())
-        for path in list_path:
-            if os.path.basename(path) == MarsTraceWorkflow.RESULT_FILE:
-                analysis = DeliveredAnalysis.from_file(path)
-                if analysis is not None:
-                    print(analysis.text(), end="")
+        analysis = DeliveredAnalysis.from_file(trace_path)
+        if analysis is not None:
+            print(analysis.text(), end="")
+        optimization = DeliveredOptimization.from_file(trace_path)
+        if optimization is not None:
+            print(
+                optimization.text(DeliveredOptimization.directory_of(trace_path)),
+                end="",
+            )
 
     @staticmethod
     def jobs(args: argparse.Namespace) -> None:
@@ -293,7 +346,8 @@ class JobCommands:
 
     @staticmethod
     def fetch(args: argparse.Namespace) -> None:
-        """Download a succeeded job's marstrace.json and its result manifest, and print the analysis it carries."""
+        """Download a succeeded job's marstrace.json and its result manifest, write a thinking
+        job's deliverables, and print the analysis and the optimization."""
         list_path = JobCommands._workflow().fetch(
             job_id=args.job,
             output_directory=args.output or os.path.join(
@@ -470,7 +524,7 @@ class CommandLine:
 
         fetch = subparsers.add_parser(
             name="fetch",
-            help="download a succeeded job's marstrace.json and its result manifest",
+            help="download a succeeded job's marstrace.json and its result manifest, and a thinking job's deliverables",
         )
         fetch.add_argument("job")
         fetch.add_argument(
@@ -556,6 +610,7 @@ class CommandLine:
         CommandLine._add_binary_commands(subparsers)
         ShowCommand().register(subparsers)
         DeliveredAnalysis.extend_show(subparsers)
+        DeliveredOptimization.extend_show(subparsers)
         return parser
 
     @staticmethod

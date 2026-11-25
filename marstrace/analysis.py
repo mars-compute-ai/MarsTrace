@@ -19,7 +19,9 @@ class DeliveredAnalysis:
         reason: why it was skipped
         analyser: the analyser's release
         notes: the agent's notes, or None
-        summary: the analyser's ``summary --json``
+        summary: the analyser's ``summary --json`` of the first delivered run
+        run_summary: one line on what the trace delivers, or None
+        list_run_summary: the analyser's summaries of the later runs, each ``{run, summary}``
     """
 
     SECTION_TYPE = "marscompute.analysis"
@@ -31,6 +33,8 @@ class DeliveredAnalysis:
     analyser: str | None = None
     notes: str | None = None
     summary: dict[str, Any] = field(default_factory=dict)
+    run_summary: str | None = None
+    list_run_summary: list[dict[str, Any]] = field(default_factory=list)
 
     @staticmethod
     def from_document(document: Any) -> "DeliveredAnalysis | None":
@@ -50,6 +54,12 @@ class DeliveredAnalysis:
                     analyser=data.get("analyser_release") if isinstance(data.get("analyser_release"), str) else None,
                     notes=data.get("notes") if isinstance(data.get("notes"), str) and data["notes"].strip() else None,
                     summary=data.get("summary") if isinstance(data.get("summary"), dict) else {},
+                    run_summary=data.get("run_summary") if isinstance(data.get("run_summary"), str) else None,
+                    list_run_summary=[
+                        item
+                        for item in data.get("run_summaries") or []
+                        if isinstance(item, dict) and isinstance(item.get("summary"), dict)
+                    ],
                 )
         return None
 
@@ -118,10 +128,29 @@ class DeliveredAnalysis:
         if self.status != DeliveredAnalysis.STATUS_COMPLETE:
             return f"analysis: none delivered ({self.reason or 'not completed'})\n"
         list_line = [f"analysis{f' (analyser {self.analyser})' if self.analyser else ''}"]
+        if self.run_summary:
+            list_line.append(f"  {self.run_summary}")
         for label, value in self.facts():
             list_line.append(f"  {label}: {value}")
-        list_finding = [finding for finding in self.summary.get("findings") or [] if isinstance(finding, dict)]
-        list_line.append("findings:" if list_finding else "findings: none flagged")
+        list_line.extend(DeliveredAnalysis.finding_lines(self.summary, "findings"))
+        for item in self.list_run_summary:
+            list_line.extend(DeliveredAnalysis.finding_lines(item["summary"], f"run {item.get('run')} findings"))
+        list_unmeasured = [entry for entry in self.summary.get("unmeasured") or [] if isinstance(entry, dict)]
+        if list_unmeasured:
+            list_line.append("what this trace cannot tell:")
+            for entry in list_unmeasured:
+                list_line.append(f"  - {entry.get('cause', '')}: {entry.get('verify_with', '')}")
+        if self.notes:
+            list_line.append("notes:")
+            list_line.extend(f"  {line}" for line in self.notes.strip().splitlines())
+        return "\n".join(list_line) + "\n"
+
+    @staticmethod
+    def finding_lines(summary: dict[str, Any], heading: str) -> list[str]:
+        """One summary's findings, each with where it sits, its evidence, next step and hypotheses."""
+        list_line: list[str] = []
+        list_finding = [finding for finding in summary.get("findings") or [] if isinstance(finding, dict)]
+        list_line.append(f"{heading}:" if list_finding else f"{heading}: none flagged")
         for index, finding in enumerate(list_finding, start=1):
             list_line.append(f"  {index}. [{finding.get('code', '')}] {finding.get('title', '')}")
             list_location = [location for location in finding.get("list_location") or [] if isinstance(location, dict)]
@@ -142,15 +171,7 @@ class DeliveredAnalysis:
             for hypothesis in finding.get("list_hypothesis") or []:
                 if isinstance(hypothesis, dict):
                     list_line.append(f"     - {hypothesis.get('cause', '')}: {hypothesis.get('verify_with', '')}")
-        list_unmeasured = [entry for entry in self.summary.get("unmeasured") or [] if isinstance(entry, dict)]
-        if list_unmeasured:
-            list_line.append("what this trace cannot tell:")
-            for entry in list_unmeasured:
-                list_line.append(f"  - {entry.get('cause', '')}: {entry.get('verify_with', '')}")
-        if self.notes:
-            list_line.append("notes:")
-            list_line.extend(f"  {line}" for line in self.notes.strip().splitlines())
-        return "\n".join(list_line) + "\n"
+        return list_line
 
     @staticmethod
     def extend_show(subparsers: argparse._SubParsersAction) -> None:
@@ -196,4 +217,6 @@ class DeliveredAnalysis:
             "analyser_release": self.analyser,
             "notes": self.notes,
             "summary": self.summary,
+            "run_summary": self.run_summary,
+            "run_summaries": self.list_run_summary,
         }

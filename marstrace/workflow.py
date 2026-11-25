@@ -9,6 +9,7 @@ from typing import Any
 from marstrace.client import Credentials, MarsTraceClient
 from marstrace.error import MarsTraceError, ServiceError
 from marstrace.job import JobInput, JobManifest
+from marstrace.optimization import DeliveredOptimization
 
 
 @dataclass
@@ -46,9 +47,10 @@ class QuotedJob:
         it.
 
         Returns:
-            the hardware, the CUDA version, the token rates, the token bounds of one attempt,
-            the attempts, the cost at the bounds, the minimum balance a job needs, the available balance, and whether the
-            service admits the job now
+            the hardware, the CUDA version, the mode, the token rates, the token bounds of one
+            attempt, the attempts, the cost at the bounds, the minimum balance a job of the mode
+            needs, the available balance, whether the service admits the job now, and the
+            service's notes on the job
         """
         map_rates = self.map_quote["rates"]
         map_bounds = self.map_quote["bounds_per_attempt"]
@@ -59,6 +61,7 @@ class QuotedJob:
             "gpu": self.map_hardware_entry["gpu"],
             "architecture": self.map_hardware_entry["architecture"],
             "cuda_version": self.map_quote["cuda_version"],
+            "mode": self.manifest.mode,
             "rates": {
                 "agent_model": self.agent_model,
                 "agent_usd_per_million_tokens": {
@@ -70,7 +73,7 @@ class QuotedJob:
                 "agent_input_tokens": map_bounds["agent_input_tokens"],
                 "agent_output_tokens": map_bounds["agent_output_tokens"],
             },
-            "max_attempts": self.manifest.limits.attempts(),
+            "max_attempts": self.manifest.limits.attempts(self.manifest.mode),
             "cost_at_bounds": {
                 "agent_tokens_per_attempt_usd": MarsTraceWorkflow.usd(map_cost["agent_tokens_per_attempt"]),
                 "total_usd": MarsTraceWorkflow.usd(map_cost["total"]),
@@ -79,6 +82,17 @@ class QuotedJob:
             "available_usd": "no limit" if available is None else MarsTraceWorkflow.usd(available),
             "admissible": self.map_quote["admissible"],
             "message": self.map_quote.get("message"),
+            "notes": list(self.map_quote.get("notes") or []),
+            "max_attempt_cost_usd": self.map_quote.get("max_attempt_cost_usd"),
+            "typical": (
+                None
+                if not isinstance(self.map_quote.get("typical_micro_usd"), dict)
+                else {
+                    "low_usd": MarsTraceWorkflow.usd(self.map_quote["typical_micro_usd"]["low_micro_usd"]),
+                    "high_usd": MarsTraceWorkflow.usd(self.map_quote["typical_micro_usd"]["high_micro_usd"]),
+                    "jobs": self.map_quote["typical_micro_usd"]["jobs"],
+                }
+            ),
         }
 
 
@@ -159,6 +173,43 @@ class MarsTraceWorkflow:
             return f"-${-amount:.6f}"
         return f"${amount:.6f}"
 
+    @staticmethod
+    def optimize_progress_text(map_optimize: dict[str, Any]) -> str:
+        """The progress of a thinking job's optimization stage, on one line.
+
+        Args:
+            map_optimize: ``progress.optimize`` of the job
+
+        Returns:
+            the stage, the iteration, the changes kept and reverted, the best speedup, and the
+            time spent against the stage's budget
+        """
+        return (
+            f"{map_optimize['stage']}, iteration {map_optimize['iteration']}: "
+            f"{map_optimize['kept']} kept, {map_optimize['reverted']} reverted, "
+            f"best speedup {DeliveredOptimization.speedup_text(map_optimize['best_speedup'])}, "
+            f"{map_optimize['elapsed_seconds']:.0f} s of {map_optimize['budget_seconds']:.0f} s"
+        )
+
+    @staticmethod
+    def optimization_result_text(map_optimization: dict[str, Any]) -> str:
+        """The outcome of a thinking job's optimization, on one line.
+
+        Args:
+            map_optimization: ``result.optimization`` of the job
+
+        Returns:
+            the status, the best speedup over the configurations, the correctness, and the
+            iterations kept and reverted
+        """
+        return (
+            f"{map_optimization['status']}, best speedup "
+            f"{DeliveredOptimization.speedup_text(map_optimization['best_speedup'])} over "
+            f"{map_optimization['configs']} configuration(s), correctness "
+            f"{map_optimization['correctness']}, {map_optimization['iterations']} iteration(s): "
+            f"{map_optimization['kept']} kept, {map_optimization['reverted']} reverted"
+        )
+
     def _say(self, line: str) -> None:
         """Report a step of progress."""
         if self._progress is not None:
@@ -196,6 +247,8 @@ class MarsTraceWorkflow:
         directory: str,
         hardware: str | None = None,
         cuda_version: str | None = None,
+        mode: str | None = None,
+        map_optimize: dict[str, Any] | None = None,
     ) -> QuotedJob:
         """Translate a job directory, upload its workspace and price it.
 
@@ -203,6 +256,8 @@ class MarsTraceWorkflow:
             directory: the job directory, holding ``marstrace.toml``
             hardware: a hardware id overriding the manifest's ``hardware``
             cuda_version: a CUDA version overriding the manifest's ``cuda_version``
+            mode: a mode overriding the manifest's ``mode``
+            map_optimize: keys overriding those of the manifest's ``[optimize]``
 
         Returns:
             the priced job
@@ -210,7 +265,11 @@ class MarsTraceWorkflow:
         Raises:
             MarsTraceError: the manifest is wrong, or the service refused
         """
-        manifest = JobManifest.load(directory)
+        manifest = JobManifest.load(
+            directory=directory,
+            mode_override=mode,
+            map_optimize_override=map_optimize,
+        )
         if hardware is not None:
             manifest.hardware = hardware
         if cuda_version is not None:
@@ -452,6 +511,7 @@ class MarsTraceWorkflow:
                 if wait_seconds < 1:
                     return map_job
             last_status = map_job["status"]
+            last_optimize = MarsTraceWorkflow._optimize_progress(map_job)
             try:
                 map_job = self._client.wait_job(
                     job_id=job_id,
@@ -470,24 +530,42 @@ class MarsTraceWorkflow:
             failures = 0
             if map_job["status"] != last_status:
                 self._say(f"{time.strftime('%H:%M:%S')} {job_id} {map_job['status']}")
+            map_optimize = MarsTraceWorkflow._optimize_progress(map_job)
+            if (
+                map_optimize is not None
+                and map_optimize != last_optimize
+            ):
+                self._say(
+                    f"{time.strftime('%H:%M:%S')} {job_id} optimize "
+                    f"{MarsTraceWorkflow.optimize_progress_text(map_optimize)}"
+                )
         return map_job
+
+    @staticmethod
+    def _optimize_progress(map_job: dict[str, Any]) -> dict[str, Any] | None:
+        """The progress of a job's optimization stage, or None before its first checkpoint."""
+        map_progress = map_job["progress"] or {}
+        return map_progress.get("optimize")
 
     def fetch(
         self,
         job_id: str,
         output_directory: str,
     ) -> list[str]:
-        """Download a succeeded job's ``marstrace.json`` and write its result manifest beside it.
+        """Download a succeeded job's ``marstrace.json``, write its result manifest beside it,
+        and write a thinking job's deliverables under ``optimization/``.
 
         Args:
             job_id: the job
             output_directory: the directory the files land in
 
         Returns:
-            the paths written
+            the paths written: ``marstrace.json``, ``result-manifest.json``, then the
+            deliverables
 
         Raises:
-            ServiceError: the job has no result, or the file's bytes differ from its manifest
+            ServiceError: the job has no result, the file's bytes differ from its manifest, or
+                a deliverable's path is unsafe or its bytes differ from its digest
         """
         map_result = self._client.result(job_id)
         map_manifest = map_result["manifest"]
@@ -523,7 +601,15 @@ class MarsTraceWorkflow:
                 manifest_file,
                 indent=MarsTraceWorkflow.JSON_INDENT,
             )
-        return [
+        list_path = [
             trace_path,
             manifest_path,
         ]
+        try:
+            document = json.loads(data)
+        except ValueError:
+            document = None
+        optimization = DeliveredOptimization.from_document(document)
+        if optimization is not None:
+            list_path.extend(optimization.write_files(output_directory))
+        return list_path

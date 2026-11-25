@@ -16,7 +16,7 @@ local GPU.
 2. Install the client and trace the bundled example:
 
 ```bash
-pip install 'git+https://github.com/mars-compute-ai/MarsTrace@v0.2.1'
+pip install 'git+https://github.com/mars-compute-ai/MarsTrace@v0.3.0'
 export MARSTRACE_API_KEY=mt_live_...
 
 marstrace estimate examples/matmul        # token rates, the most the job can cost, your balance
@@ -56,7 +56,7 @@ about, so it measures time between points inside the kernel:
 
 It does not measure DRAM or L2 traffic, coalescing, stall reasons, bank conflicts or
 tensor-pipe use. The analysis names the profiler metric that would settle each of those.
-It does not change your kernel either.
+A fast job does not change your kernel; the thinking modes below do.
 
 ## Reading the result
 
@@ -78,6 +78,41 @@ The analysis comes from a deterministic analyser; no model writes it. It holds:
 - **Balance**: SM utilization, the tail, blocks resident per SM, the traced span and the
   kernel time without instrumentation.
 
+## Optimizing a kernel
+
+The modes `thinking-light` and `thinking-heavy` trace the kernel as a fast job does, then
+let the agent change its source, one measured iteration at a time, and keep only the changes
+that make it faster and still pass your check. The job directory adds the source tree and an
+`[optimize]` table with the commands the agent runs in its root:
+
+```toml
+mode = "thinking-light"
+
+[workspace]
+cubins = ["matmul.cubin"]
+source = "src"                  # required: the tree the agent builds and changes
+
+[optimize]
+build = "./build.sh"            # optional
+run = "python3 run.py"          # required: launches the kernel at the workload that matters
+verify = "python3 verify.py"    # required: exits 0 when the results are correct
+kernel = "square_matrix_mul"    # optional: a regular expression of the target kernel's name
+```
+
+```bash
+marstrace estimate examples/matmul-optimize
+marstrace submit examples/matmul-optimize --wait
+```
+
+The build and the run have no network access, so every dependency the image lacks must ship
+in the source archive. `marstrace job` shows the iteration, the changes kept and reverted,
+the best speedup so far and the time spent against the budget. `fetch` writes
+`optimized.patch`, the performance, code-change and process reports, and each iteration's
+files under `marstrace-results/<job>/optimization/`, and prints each configuration's time
+before and after. `marstrace show <file> --optimization` prints it again.
+`thinking-heavy` has a larger budget than `thinking-light`; the caps of each are in
+[docs/protocol.md](docs/protocol.md).
+
 ## Agents: Claude Code plugin and MCP
 
 The plugin adds the `marstrace mcp` server and two skills, `marstrace-remote` (prepare and
@@ -94,8 +129,12 @@ environment, as [.mcp.json](.mcp.json) does, and load the skills from
 
 ## What is supported now
 
-- Mode `fast`: a trace and its analysis. The modes `thinking-light` and `thinking-heavy`,
-  which will optimize a kernel, are not offered yet.
+MarsTrace is in early access: jobs run once MarsCompute enables your workspace. Open an
+issue or contact MarsCompute to ask for access.
+
+- Mode `fast`: a trace and its analysis.
+- Mode `thinking-light`: a trace, then an optimized kernel with its patch and reports.
+  `thinking-heavy`, the longer optimization, is not offered yet.
 - GPUs: H200 and B200. `marstrace hardware` lists the hardware your account can use.
 - CUDA 13.0.
 - Inputs: up to 8 cubins (ELF cubins, not PTX), plus optional source, a launch manifest,
@@ -110,7 +149,16 @@ A job is charged the agent's tokens over all its attempts, at the rates `marstra
 and `marstrace estimate` show. GPU time is not charged separately. A job whose trace is
 `unusable`, or that fails without delivering a result, is not charged. A cancelled job pays
 for the tokens used up to the stop. A job starts only while your balance reaches the
-minimum that `marstrace credit` shows, and `marstrace estimate` shows the most it can cost.
+minimum of its mode: $100 for `fast` and `thinking-light`, and $300 for `thinking-heavy`.
+`marstrace credit` shows the current minimum.
+
+`marstrace estimate` shows two figures. **Typical** is the middle half of what recent jobs of
+the same mode were charged, a guide rather than a bound. **At most** is a ceiling the service
+enforces. In the thinking modes each attempt stops at its cost cap, $250 for
+`thinking-light` and $1,000 for `thinking-heavy` by default, so a default job costs at most
+$500 or $3,000. Set `max_attempt_cost_usd` in `[limits]` to change the cap. A fast job's
+ceiling prices every input token at the dearest input rate, well above what its mostly cached
+calls cost.
 
 ## Privacy and security
 

@@ -1,0 +1,102 @@
+{
+  "title": "Kernel optimization",
+  "type": "marscompute.optimization",
+  "data": {
+    "schema": "marscompute.optimization.v1",
+    "summary": {
+      "status": "improved",
+      "best_speedup": 1.41,
+      "configs": 2,
+      "correctness": "passed",
+      "iterations": 2,
+      "kept": 1,
+      "reverted": 1
+    },
+    "playbook": {
+      "name": "kernel-optimization",
+      "version": "1.0.0",
+      "sha256": "9faf8344f7cc9262b3ccae02fe94343a2c2de58084d229e7e9c3bb09f2306963"
+    },
+    "list_config": [
+      {
+        "name": "n1024",
+        "baseline_us": 812.4,
+        "best_us": 590.1,
+        "speedup": 1.377,
+        "correct": true
+      },
+      {
+        "name": "n2048",
+        "baseline_us": 6400.0,
+        "best_us": 4400.0,
+        "speedup": 1.455,
+        "correct": true
+      }
+    ],
+    "list_iteration": [
+      {
+        "name": "iter_001_shared_tiles",
+        "verdict": "kept",
+        "speedup": 1.41,
+        "summary": "stage 16 x 16 tiles of a and b in shared memory"
+      },
+      {
+        "name": "iter_002_unroll_inner",
+        "verdict": "reverted",
+        "speedup": 0.98,
+        "summary": "unroll the tile loop by 4; no gain"
+      }
+    ],
+    "list_file": [
+      {
+        "path": "performance_report.md",
+        "sha256": "98d953153fdb77ebd999924d39c5f7313bc37b5fcda8de5dcf1f9bf7ed231a28",
+        "size_bytes": 239,
+        "media_type": "text/markdown",
+        "text": "# Performance report\n\nThe kernel runs 1.41x faster over the two configurations (geometric mean).\n\n| config | baseline us | best us | speedup |\n| --- | --- | --- | --- |\n| n1024 | 812.4 | 590.1 | 1.38x |\n| n2048 | 6400.0 | 4400.0 | 1.45x |\n"
+      },
+      {
+        "path": "code_modification_report.md",
+        "sha256": "9799a8deb277402356c5b6e5f18cb897b66f8671efe8820f169fda5312834905",
+        "size_bytes": 140,
+        "media_type": "text/markdown",
+        "text": "# Code modification report\n\n`matmul.cu` stages 16 x 16 tiles of `a` and `b` in shared memory, so each global element is read once per tile.\n"
+      },
+      {
+        "path": "optimization_process_report.md",
+        "sha256": "fe8a7c5a62833ec0bbf2980bdc6040dc8bae7c81925f29c5e71241158069024c",
+        "size_bytes": 193,
+        "media_type": "text/markdown",
+        "text": "# Optimization process report\n\nThe trace showed every thread waiting on global loads in the dot-product loop. Iteration 1 tiled the loads; iteration 2 unrolled the inner loop and was reverted.\n"
+      },
+      {
+        "path": "optimized.patch",
+        "sha256": "6b27c7f95673d343ff9d7032e5572d3c46e94f8c08b3689c5872c67e95910119",
+        "size_bytes": 1154,
+        "media_type": "text/x-diff",
+        "text": "diff --git a/matmul.cu b/matmul.cu\n--- a/matmul.cu\n+++ b/matmul.cu\n@@ -1,12 +1,25 @@\n+#define TILE 16\n extern \"C\" __global__ void square_matrix_mul(const int* a, const int* b, int* c, int n) {\n+    __shared__ int tile_a[TILE][TILE];\n+    __shared__ int tile_b[TILE][TILE];\n     int row = blockIdx.y * blockDim.y + threadIdx.y;\n     int column = blockIdx.x * blockDim.x + threadIdx.x;\n-    if (row >= n || column >= n) {\n-        return;\n-    }\n     int sum = 0;\n-    for (int k = 0; k < n; ++k) {\n-        sum += a[row * n + k] * b[k * n + column];\n+    for (int base = 0; base < n; base += TILE) {\n+        int k_a = base + threadIdx.x;\n+        int k_b = base + threadIdx.y;\n+        tile_a[threadIdx.y][threadIdx.x] = (row < n && k_a < n) ? a[row * n + k_a] : 0;\n+        tile_b[threadIdx.y][threadIdx.x] = (k_b < n && column < n) ? b[k_b * n + column] : 0;\n+        __syncthreads();\n+        for (int k = 0; k < TILE; ++k) {\n+            sum += tile_a[threadIdx.y][k] * tile_b[k][threadIdx.x];\n+        }\n+        __syncthreads();\n+    }\n+    if (row < n && column < n) {\n+        c[row * n + column] = sum;\n     }\n-    c[row * n + column] = sum;\n }\n"
+      },
+      {
+        "path": "iterations/iter_001_shared_tiles/hypothesis.md",
+        "sha256": "ffa4398186185170e1a984b9376d0002ef4a0d293011ebde98d1bd8d872773dd",
+        "size_bytes": 155,
+        "media_type": "text/markdown",
+        "text": "# Hypothesis\n\nEach thread reads a row of `a` and a column of `b` from global memory; tiling them in shared memory cuts the global reads by the tile width.\n"
+      },
+      {
+        "path": "iterations/iter_001_shared_tiles/code.patch",
+        "sha256": "6b27c7f95673d343ff9d7032e5572d3c46e94f8c08b3689c5872c67e95910119",
+        "size_bytes": 1154,
+        "media_type": "text/x-diff",
+        "text": "diff --git a/matmul.cu b/matmul.cu\n--- a/matmul.cu\n+++ b/matmul.cu\n@@ -1,12 +1,25 @@\n+#define TILE 16\n extern \"C\" __global__ void square_matrix_mul(const int* a, const int* b, int* c, int n) {\n+    __shared__ int tile_a[TILE][TILE];\n+    __shared__ int tile_b[TILE][TILE];\n     int row = blockIdx.y * blockDim.y + threadIdx.y;\n     int column = blockIdx.x * blockDim.x + threadIdx.x;\n-    if (row >= n || column >= n) {\n-        return;\n-    }\n     int sum = 0;\n-    for (int k = 0; k < n; ++k) {\n-        sum += a[row * n + k] * b[k * n + column];\n+    for (int base = 0; base < n; base += TILE) {\n+        int k_a = base + threadIdx.x;\n+        int k_b = base + threadIdx.y;\n+        tile_a[threadIdx.y][threadIdx.x] = (row < n && k_a < n) ? a[row * n + k_a] : 0;\n+        tile_b[threadIdx.y][threadIdx.x] = (k_b < n && column < n) ? b[k_b * n + column] : 0;\n+        __syncthreads();\n+        for (int k = 0; k < TILE; ++k) {\n+            sum += tile_a[threadIdx.y][k] * tile_b[k][threadIdx.x];\n+        }\n+        __syncthreads();\n+    }\n+    if (row < n && column < n) {\n+        c[row * n + column] = sum;\n     }\n-    c[row * n + column] = sum;\n }\n"
+      },
+      {
+        "path": "iterations/iter_001_shared_tiles/post_bench.json",
+        "sha256": "9024a72cbfdb247b396fa6eeca543d09468785e743d5449beb61fc9d31044bd0",
+        "size_bytes": 124,
+        "media_type": "application/json",
+        "text": "{\n  \"n1024\": {\n    \"time_us\": 590.1,\n    \"correct\": true\n  },\n  \"n2048\": {\n    \"time_us\": 4400.0,\n    \"correct\": true\n  }\n}\n"
+      }
+    ]
+  }
+}

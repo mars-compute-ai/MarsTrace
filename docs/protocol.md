@@ -54,18 +54,22 @@ max_attempts = 2
 | `hardware` (required) | `hardware`, an `id` of `GET /v1/hardware` that is `available`; every cubin must target its `architecture` |
 | `cuda_version` (optional, `M.m` such as `13.0`) | `cuda_version`, one of the hardware's `cuda_versions` in `GET /v1/hardware`; absent, the request has no `cuda_version` and the job runs the hardware's `default_cuda_version`. The agent's CUDA toolkit is that version, and the result manifest's `device.cuda_toolkit_version` names it |
 | `intent` (required, 1 to 32,000 characters, no NUL) | `prompt` |
-| `mode` (optional: `fast`, `thinking-light` or `thinking-heavy`; `fast` when absent) | `mode`. A fast job delivers the trace and the analyser's summary of it (section 5). `thinking-light` and `thinking-heavy`, which optimize the kernel, are not offered yet: the service answers `mode_unavailable` |
+| `mode` (optional: `fast`, `thinking-light` or `thinking-heavy`; `fast` when absent) | `mode`, always sent. A fast job delivers the trace and the analyser's summary of it (section 5). `thinking-light` and `thinking-heavy` trace the kernel as a fast job does, then optimize it within `[optimize]` (section 3.1) |
 | `[workspace] cubins` (1 to 8, each at most 64 MiB) | uploads of role `cubin` → `inputs.cubins` |
 | `[workspace] source` (a directory) | archived as `source.tar.gz` (at most 256 MiB) → role `source_archive` → `inputs.source_archive` |
 | `[workspace] manifest` (a `marscompute.kernel-launch` file, at most 1 MiB) | role `launch_manifest` → `inputs.launch_manifest` |
 | `[workspace] tensors` (0 to 8 safetensors files, each at most 128 MiB) | role `tensor` → `inputs.tensors` |
 | `[workspace] files` (0 to 8 files, each at most 16 MiB) | role `file` → `inputs.files` |
 | `[agent] max_turns` (1 to 500), `max_input_tokens` (1 to 50,000,000), `max_output_tokens` (1 to 1,000,000), `max_wall_seconds` (60 to 2,580) | `agent`; an absent key takes `agent.defaults` of `GET /v1/hardware`, and none may exceed `agent.maximums` |
-| `[limits] max_attempts` (1 to 3) | `limits.max_attempts`; absent, the request has no `limits` and the service takes 2 |
+| `[optimize] build`, `run`, `verify`, `kernel` and caps (thinking modes only) | `optimize` (section 3.1) |
+| `[limits] max_attempts` (1 to 3) | `limits.max_attempts`; absent, the request has no `limits` and the service takes 2, or 3 for `thinking-heavy` |
+| `[limits] max_attempt_cost_usd` (1 to 100000) | `limits.max_attempt_cost_usd`: the most one attempt may cost; absent, the service takes 250 for `thinking-light`, 1000 for `thinking-heavy`, and none for `fast` |
 
 `[workspace]` is required, `cuda_version`, `mode`, `[agent]` and `[limits]` are optional, and any
-other key or table is refused. `marstrace estimate` and `submit` take `--cuda-version` to
-override `cuda_version`, and the MCP tools take `cuda_version`; the client checks the
+other key or table is refused. In `thinking-light` and `thinking-heavy`, `[optimize]` and
+`[workspace] source` are required as well; in `fast`, `[optimize]` is refused.
+`marstrace estimate` and `submit` take `--cuda-version` to override `cuda_version`, and the
+MCP tools take `cuda_version`; the client checks the
 version against the hardware before it uploads anything. The request carries no amount of
 money: a job is charged the agent tokens it actually used, or nothing when its trace is
 unusable (section 7). The agent's
@@ -79,6 +83,51 @@ ELF cubin; PTX is refused. A launch manifest is JSON whose `schema_version` is
 The source archive is a gzip-compressed tar of the directory's files and subdirectories,
 paths relative to it, with owners, times and modes normalized, so the same tree gives the
 same archive. It leaves out every `.git` and `marstrace-results` entry.
+
+### 3.1 Optimizing a kernel
+
+A thinking job's `[optimize]` table says how the agent builds, runs and checks the kernel, and
+bounds the stage that optimizes it. The client checks it locally and sends it as the
+request's `optimize` object, with the keys the manifest sets:
+
+```toml
+mode = "thinking-light"
+
+[workspace]
+cubins = ["matmul.cubin"]
+source = "src"
+
+[optimize]
+build = "./build.sh"
+run = "python3 run.py"
+verify = "python3 verify.py"
+kernel = "square_matrix_mul"
+max_turns = 400
+max_input_tokens = 40000000
+max_output_tokens = 400000
+max_wall_seconds = 3600
+```
+
+| `[optimize]` | Holds |
+| --- | --- |
+| `build` (optional) | the shell command that builds the source tree |
+| `run` (required) | the shell command that launches the target kernel at its workload |
+| `verify` (required) | the shell command that exits 0 when the results are correct |
+| `kernel` (optional, a regular expression of 1 to 256 characters) | selects the target kernel by name |
+| `max_turns`, `max_input_tokens`, `max_output_tokens`, `max_wall_seconds` (optional) | the optimization stage's caps; an absent one takes the tier's default |
+
+Each command is 1 to 4,096 characters, with no NUL. The service runs it with `bash -lc` in
+the root of the unpacked source archive. The build and the run have no network access, so
+every dependency the image lacks ships in `[workspace] source`. The first stage traces the
+cubins as a fast job does, within `[agent]`; the optimization stage then runs within
+`[optimize]`, and an attempt's caps are the sum of the two.
+
+| Cap | `thinking-light` default, range | `thinking-heavy` default, range |
+| --- | --- | --- |
+| `max_turns` | 400, 1 to 1,000 | 2,000, 1 to 4,000 |
+| `max_input_tokens` | 40,000,000, 1 to 60,000,000 | 150,000,000, 1 to 250,000,000 |
+| `max_output_tokens` | 400,000, 1 to 1,000,000 | 1,500,000, 1 to 3,000,000 |
+| `max_wall_seconds` | 3,600, 600 to 3,600 | 18,000, 600 to 18,000 |
 
 ## 4. Calls
 
@@ -128,6 +177,37 @@ digest and size of the result manifest's `file`, and writes it next to
 `marstrace show <marstrace.json> --analysis` prints it again, and with `--json` gives its
 `data`. The MCP tool `marstrace_fetch` answers it as `analysis` and `analysis_text`.
 
+A thinking job's `marstrace.json` also holds at most one section of `type`
+`marscompute.optimization`, after the trace sections. Its `data` holds `summary` (`status`:
+`improved`, `no_gain` or `incomplete`; `correctness`; `best_speedup`; the counts `configs`,
+`iterations`, `kept` and `reverted`), `list_config` (per configuration
+its `name`, `baseline_us`, `best_us`, `speedup` and `correct`), `list_iteration` (per
+iteration its `name`, `verdict`, `speedup` and `summary`) and `list_file`, the deliverables as
+UTF-8 text, each with `path`, `sha256`, `size_bytes`, `media_type` and `text`:
+
+| Deliverable | Holds |
+| --- | --- |
+| `performance_report.md` | the time of every configuration before and after |
+| `code_modification_report.md` | what changed in the source |
+| `optimization_process_report.md` | how the agent got there |
+| `optimized.patch` | a unified diff against the uploaded tree, paths `a/` and `b/` |
+| `iterations/<iter>/hypothesis.md`, `code.patch`, `post_*.json` | each iteration's hypothesis, change and measurements |
+
+`marstrace fetch` writes every deliverable to `marstrace-results/<job>/optimization/<path>`.
+It refuses a path outside `[A-Za-z0-9._/-]{1,200}`, a path holding `..` or starting with
+`/`, and a text whose UTF-8 bytes differ from its `sha256` or `size_bytes`; then it writes
+none of them. It prints the status, the correctness, the best speedup, a table of the
+configurations, the iterations, and where `optimized.patch` and the reports were written.
+`marstrace show <marstrace.json> --optimization` prints the same again, and with `--json`
+gives the section's `data` without the texts.
+
+A thinking job's result is `usable` when every deliverable is present, every configuration
+passed `verify`, `optimized.patch` applies to the original tree and `best_speedup` is above
+1.0. It is `partial` otherwise, with the reason codes `no_speedup`,
+`deliverables_incomplete`, `patch_not_applicable`, `correctness_failed` (the patch is then
+dropped and the status is `incomplete`) and `optimize_time_limit_reached`. It is `unusable`
+when it holds neither a trace nor an optimization, and such a job is not charged.
+
 A job that ends without a usable trace still succeeds with `marstrace.json`, its
 `quality` `unusable` and reason codes that say why. A download URL lasts 10 minutes, and
 a result can be fetched for 30 days after the job ends.
@@ -172,11 +252,13 @@ An estimate (`POST /v1/quotes`) answers:
 | --- | --- |
 | `cuda_version` | the CUDA version the job runs with |
 | `rates` | the agent's token rates per million: input, cache read, 5-minute and 1-hour cache write, output |
-| `bounds_per_attempt` | the agent's `agent_input_tokens` and `agent_output_tokens` caps |
-| `cost_at_bounds_micro_usd` | `agent_tokens_per_attempt` and `total`, `max_attempts` attempts at their token bounds: the most the job can cost |
-| `minimum_micro_usd` | the balance a job needs to start, set by MarsCompute administrators |
+| `bounds_per_attempt` | the agent's `agent_input_tokens` and `agent_output_tokens` caps; in a thinking mode, those of `[agent]` and `[optimize]` together |
+| `cost_at_bounds_micro_usd` | `agent_tokens_per_attempt` and `total`, `max_attempts` attempts at their token bounds or their cost cap when that is lower: the most the job can cost |
+| `typical_micro_usd` | `low_micro_usd`, `high_micro_usd` and `jobs`: the middle half of recent charges of the mode, or null before enough jobs settled |
+| `minimum_micro_usd` | the balance a job of the request's mode needs to start, set by MarsCompute administrators; a `thinking-heavy` job needs at least $300 |
 | `available_micro_usd` | the workspace's available balance; negative while it owes for a job that ran past it, null without a spending limit |
 | `admissible`, `message` | whether a job would start now, and why not |
+| `notes` (optional) | what the user should know before submitting; a thinking job's note says that the build and the run have no network access |
 
 Nothing is held against the cost at the bounds. Admission holds the minimum until the job
 settles (`cost.held_micro_usd` of the job), so a workspace runs as many jobs at once as its
@@ -185,8 +267,19 @@ settles, `cost.charged_micro_usd` and `cost.lines`, `{dimension, quantity,
 amount_micro_usd}` per token dimension of the rate card, hold the charge, which may exceed the hold.
 A job charged nothing says why in `cost.not_charged_reason`: `unusable_result`,
 `failed_no_result`, `not_started` or `cancelled_before_start`; it is `null` or absent otherwise.
-`marstrace submit` prints the CUDA version, the token rates, the cost at the bounds and the balance, refuses a job
+`marstrace estimate` and `submit` print the CUDA version, the mode, the token rates, the cost at
+the bounds, the balance against the mode's minimum and every note; `submit` refuses a job
 that is not admissible, and asks before it submits, unless `--yes`.
+
+A thinking job's view holds `optimize`, the request's block with the tier's defaults applied.
+Its `progress.optimize` is `null` until the first checkpoint of the optimization stage, then
+holds `stage` (`tracing`, `optimizing` or `writing`), `iteration`, `kept`, `reverted`,
+`best_speedup` (the geometric mean over the configurations of baseline time over best time,
+`null` before a kept iteration), `elapsed_seconds` and `budget_seconds`. Once it succeeds,
+`result.optimization` holds `status` (`improved`, `no_gain` or `incomplete`), `best_speedup`,
+`configs`, `correctness`, `iterations`, `kept` and `reverted`; it is `null` for a fast job.
+`marstrace job` prints both, and `job --wait` and `submit --wait` print a line each time the
+progress moves.
 
 ## 8. Local MCP server
 
@@ -206,4 +299,11 @@ the service answers `api_key_missing` with the steps that give the user a key.
 `marstrace_submit` takes `accept_cost_at_bounds_usd`, the cost at the bounds the user
 agreed to, and refuses an estimate whose cost at the bounds is above it, since prices are
 read again at submission.
+`marstrace_estimate` and `marstrace_submit` take `mode`, which overrides the manifest's
+`mode`, and `optimize`, an object whose keys override those of `[optimize]`; the client checks
+the result as it checks `marstrace.toml`. The estimate answers `mode` and `notes`.
+`marstrace_job` answers the job with `progress.optimize` and `result.optimization`.
+`marstrace_fetch` answers `files` (`marstrace.json` and `result-manifest.json`), `analysis`,
+`analysis_text`, `optimization` (the section's `data` without the texts), `optimization_text`
+and `optimization_files`, the deliverables it wrote.
 `.mcp.json` registers the server for Claude Code.

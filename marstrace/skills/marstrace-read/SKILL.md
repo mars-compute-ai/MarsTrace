@@ -1,6 +1,6 @@
 ---
 name: marstrace-read
-description: Read a MarsTrace trace report of a CUDA kernel in the terminal with `marstrace show` — the analysis the job delivered (findings with where they sit in the SASS, what the trace cannot tell, the grid's balance), per-region statistics, per-thread timelines, pipeline bubbles, concurrency over time, outlier threads, the longest instances, and the region a selection token names. Use whenever there is a marstrace.json from a MarsTrace job to analyse, or its result-manifest.json to judge, or when the user pastes a selection token starting with mtrace/1.
+description: Read a MarsTrace trace report of a CUDA kernel in the terminal with `marstrace show` — the analysis the job delivered (findings with where they sit in the SASS, what the trace cannot tell, the grid's balance), the optimization a thinking job delivered (speedup per configuration, correctness, the patch and the reports), per-region statistics, per-thread timelines, pipeline bubbles, concurrency over time, outlier threads, the longest instances, and the region a selection token names. Use whenever there is a marstrace.json from a MarsTrace job to analyse, or its result-manifest.json to judge, or when the user pastes a selection token starting with mtrace/1.
 ---
 
 # Reading a MarsTrace report
@@ -105,6 +105,28 @@ fetch` prints it; `marstrace show <marstrace.json> --analysis` prints it again, 
 - **Traced span against the uninstrumented kernel time**: a span much shorter than the
   kernel time means work outside the traced sites, or launch overhead; the UNSEEN finding
   says how much.
+
+## 2b. Read a delivered optimization
+
+A `thinking-light` or `thinking-heavy` job adds an optimization after the trace. `marstrace
+fetch` writes its files to `marstrace-results/<job>/optimization/` and prints its summary;
+`marstrace show <marstrace.json> --optimization` prints it again, and adds `--json` for its
+data. Gate it as you gate the trace:
+
+- **Quality first.** `usable` means every deliverable is present, every configuration passed
+  `verify`, `optimized.patch` applies to the uploaded tree and the best speedup is above 1.0.
+  `partial` names why in its reason codes: `no_speedup`, `deliverables_incomplete`,
+  `patch_not_applicable`, `correctness_failed` (the patch is then dropped) or
+  `optimize_time_limit_reached`. Say which one before any number.
+- **Quote the speedups per configuration** from the table: the baseline and best time of
+  each, and the best speedup, their geometric mean. A speedup holds for the workload `run`
+  launched, not for other shapes.
+- **Correctness is what `verify` checks**, no more. When `verify` covers few sizes or no edge
+  cases, say so before the user applies the patch.
+- **Hand over the patch, do not apply it unasked.** `optimized.patch` is a unified diff
+  against the uploaded tree (`git apply` from its root). The reports beside it say what
+  changed and why; each iteration's directory holds its hypothesis, its patch and its
+  measurements, kept or reverted.
 
 ## 3. Find the bubbles
 

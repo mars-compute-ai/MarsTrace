@@ -11,8 +11,10 @@ from marstrace.analysis import DeliveredAnalysis
 from marstrace.binary import DslCache, KernelBinary
 from marstrace.error import MarsTraceError, ServiceError, ToolArgumentError
 from marstrace.guide import AgentGuide
+from marstrace.job import JobManifest
+from marstrace.optimization import DeliveredOptimization
 from marstrace.viewer.cli.show import ShowCommand
-from marstrace.workflow import MarsTraceWorkflow
+from marstrace.workflow import MarsTraceWorkflow, QuotedJob
 
 
 @dataclass
@@ -33,6 +35,7 @@ class McpTool:
         "number": (int, float),
         "boolean": (bool,),
         "array": (list,),
+        "object": (dict,),
     }
 
     name: str
@@ -105,7 +108,7 @@ class McpServer:
         "2025-11-25",
     )
     SERVER_NAME = "marstrace"
-    SERVER_VERSION = "0.2.1"
+    SERVER_VERSION = "0.3.0"
     INSTRUCTIONS = (
         "Trace the timeline inside a CUDA kernel on a cloud GPU with MarsTrace. Before the first job, "
         "read marstrace_guide with topic remote, and before reading a trace, topic read: they hold "
@@ -115,6 +118,9 @@ class McpServer:
         "marstrace_hardware), intent (what the trace should answer, with the problem size), "
         "[workspace] cubins (1 to 8 cubins built for the hardware's architecture) and optionally "
         "source, manifest, tensors and files, [agent] caps, cuda_version and [limits] max_attempts. "
+        "mode fast traces the kernel; thinking-light and thinking-heavy then optimize it, and need "
+        "[workspace] source and an [optimize] table with the run and verify commands (the tools "
+        "take mode and optimize to override them); the build and run have no network access. "
         "A job starts only while the available balance reaches the minimum the estimate names, and "
         "is charged the agent tokens it actually used over every attempt, failed ones included, even "
         "past the balance; a job whose trace is unusable, or that fails without a result, is not "
@@ -397,6 +403,37 @@ class McpServer:
             "type": "string",
             "description": "the job id",
         }
+        map_mode = {
+            "type": "string",
+            "enum": sorted(JobManifest.SET_MODE),
+            "description": "a mode overriding the manifest's mode: fast traces the kernel; "
+            "thinking-light and thinking-heavy trace it, then optimize it",
+        }
+        map_command = {
+            "type": "string",
+            "description": "a shell command, run with bash -lc in the root of the source tree, with no network",
+        }
+        map_cap = {
+            "type": "integer",
+        }
+        map_optimize = {
+            "type": "object",
+            "description": "keys overriding those of the manifest's [optimize] table of a thinking job: "
+            "run launches the target kernel at its workload, verify exits 0 when the results are "
+            "correct, build builds the tree, kernel is a regular expression of the target kernel's "
+            "name, and the caps bound the optimization stage",
+            "properties": {
+                "build": map_command,
+                "run": map_command,
+                "verify": map_command,
+                "kernel": {"type": "string"},
+                "max_turns": map_cap,
+                "max_input_tokens": map_cap,
+                "max_output_tokens": map_cap,
+                "max_wall_seconds": map_cap,
+            },
+            "additionalProperties": False,
+        }
         return [
             McpTool(
                 name="marstrace_guide",
@@ -474,21 +511,20 @@ class McpServer:
                 description="Upload a job directory's workspace and price it; nothing is held. Returns "
                 "the CUDA version, the token rates, the token bounds of one attempt, the cost at those bounds over every "
                 "attempt (cost_at_bounds.total_usd, the most the job can cost), the minimum balance a job "
-                "needs, the available balance, and whether the job would start now. Show the rates and "
-                "the cost at the bounds to the user before submitting.",
+                "needs, the available balance, whether the job would start now, and notes such as a "
+                "thinking job's: its build and run have no network access. Show the rates, "
+                "the cost at the bounds and the notes to the user before submitting.",
                 map_input_schema=McpServer._schema(
                     map_property={
                         "directory": map_directory,
                         "hardware": map_hardware,
                         "cuda_version": map_cuda_version,
+                        "mode": map_mode,
+                        "optimize": map_optimize,
                     },
                     list_required=["directory"],
                 ),
-                handler=lambda map_arguments: self._workflow().quote(
-                    directory=map_arguments["directory"],
-                    hardware=map_arguments.get("hardware"),
-                    cuda_version=map_arguments.get("cuda_version"),
-                ).summary(),
+                handler=lambda map_arguments: self._quote(map_arguments).summary(),
             ),
             McpTool(
                 name="marstrace_submit",
@@ -508,6 +544,8 @@ class McpServer:
                         },
                         "hardware": map_hardware,
                         "cuda_version": map_cuda_version,
+                        "mode": map_mode,
+                        "optimize": map_optimize,
                         "idempotency_key": {
                             "type": "string",
                             "description": "reuse it when retrying a submission whose answer was lost",
@@ -538,8 +576,10 @@ class McpServer:
             McpTool(
                 name="marstrace_job",
                 description="One job: its status, attempts with their failures, progress with the "
-                "usage so far, the amount held at admission, the charge and its lines once settled, "
-                "and its error.",
+                "usage so far and, for a thinking job, progress.optimize (stage, iteration, changes "
+                "kept and reverted, best speedup, seconds spent against the budget), the amount held "
+                "at admission, the charge and its lines once settled, result.optimization once it "
+                "succeeds, and its error.",
                 map_input_schema=McpServer._schema(
                     map_property={"job_id": map_job_id},
                     list_required=["job_id"],
@@ -589,7 +629,11 @@ class McpServer:
                 description="Download a succeeded job's marstrace.json and its result manifest into a "
                 "local directory, and answer the analysis it carries: the analyser's findings, each "
                 "with where its sites sit (SASS index, opcode, source line), the causes the trace "
-                "cannot settle with the measurement that would, and the grid's balance.",
+                "cannot settle with the measurement that would, and the grid's balance. For a "
+                "thinking job it also writes the deliverables (optimized.patch, the reports, each "
+                "iteration's files) under optimization/ and answers the optimization: status, "
+                "correctness, best speedup, each configuration's time before and after, and the "
+                "paths written.",
                 map_input_schema=McpServer._schema(
                     map_property={
                         "job_id": map_job_id,
@@ -638,8 +682,18 @@ class McpServer:
         if cost > decimal.Decimal(str(accepted_usd)) * MarsTraceWorkflow.MICRO_PER_UNIT:
             raise MarsTraceError(
                 f"the cost at the bounds is {MarsTraceWorkflow.usd(cost)}, above the accepted ${accepted_usd}; "
-                "ask the user, or lower [agent] or [limits] max_attempts"
+                "ask the user, or lower [agent], [optimize] or [limits] max_attempts"
             )
+
+    def _quote(self, map_arguments: dict[str, Any]) -> QuotedJob:
+        """Price the job directory of a tool call, with the call's overrides."""
+        return self._workflow().quote(
+            directory=map_arguments["directory"],
+            hardware=map_arguments.get("hardware"),
+            cuda_version=map_arguments.get("cuda_version"),
+            mode=map_arguments.get("mode"),
+            map_optimize=map_arguments.get("optimize"),
+        )
 
     def _submit(self, map_arguments: dict[str, Any]) -> dict[str, Any]:
         """Price, check the cost at the bounds against what the user accepted, and submit; a
@@ -655,11 +709,7 @@ class McpServer:
                     "estimate": None,
                     "job": map_job,
                 }
-        quoted = self._workflow().quote(
-            directory=map_arguments["directory"],
-            hardware=map_arguments.get("hardware"),
-            cuda_version=map_arguments.get("cuda_version"),
-        )
+        quoted = self._quote(map_arguments)
         self._workflow().check_admissible(quoted)
         McpServer._check_accepted(
             cost_micro_usd=quoted.map_quote["cost_at_bounds_micro_usd"]["total"],
@@ -674,7 +724,8 @@ class McpServer:
         }
 
     def _fetch(self, map_arguments: dict[str, Any]) -> dict[str, Any]:
-        """The files a fetch wrote, and the analysis the trace carries."""
+        """The files a fetch wrote, the analysis the trace carries, and a thinking job's
+        optimization with the paths of its deliverables."""
         list_path = self._workflow().fetch(
             job_id=map_arguments["job_id"],
             output_directory=map_arguments.get("output") or os.path.join(
@@ -682,18 +733,20 @@ class McpServer:
                 map_arguments["job_id"],
             ),
         )
-        analysis = next(
-            (
-                DeliveredAnalysis.from_file(path)
-                for path in list_path
-                if os.path.basename(path) == MarsTraceWorkflow.RESULT_FILE
-            ),
-            None,
-        )
+        trace_path = list_path[0]
+        analysis = DeliveredAnalysis.from_file(trace_path)
+        optimization = DeliveredOptimization.from_file(trace_path)
         return {
-            "files": list_path,
+            "files": list_path[:2],
             "analysis": None if analysis is None else analysis.to_json(),
             "analysis_text": None if analysis is None else analysis.text(),
+            "optimization": None if optimization is None else optimization.to_json(),
+            "optimization_text": (
+                None
+                if optimization is None
+                else optimization.text(DeliveredOptimization.directory_of(trace_path))
+            ),
+            "optimization_files": list_path[2:],
         }
 
     def _show(self, map_arguments: dict[str, Any]) -> str:
@@ -702,6 +755,7 @@ class McpServer:
         subparsers = parser.add_subparsers()
         ShowCommand().register(subparsers)
         DeliveredAnalysis.extend_show(subparsers)
+        DeliveredOptimization.extend_show(subparsers)
         list_option = map_arguments.get("options", [])
         output = io.StringIO()
         notes = io.StringIO()

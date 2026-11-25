@@ -42,6 +42,10 @@ AGENT = (
     "max_output_tokens = 200000\nmax_wall_seconds = 2400\n"
 )
 LIMITS = "[limits]\nmax_attempts = 3\n"
+OPTIMIZE = (
+    '[optimize]\nbuild = "./build.sh"\nrun = "python3 run.py"\nverify = "python3 verify.py"\n'
+    'kernel = "square_matrix_.*"\nmax_turns = 300\n'
+)
 
 
 class TranslationTest(unittest.TestCase):
@@ -92,6 +96,19 @@ class TranslationTest(unittest.TestCase):
         self.assertEqual(request["hardware"], "h200")
         self.assertIn("square_matrix_mul", request["prompt"])
         self.assertEqual(request["limits"], {"max_attempts": 2})
+
+    def test_optimize_example_translates(self) -> None:
+        manifest = JobManifest.load(os.path.join(os.path.dirname(EXAMPLE_DIRECTORY), "matmul-optimize"))
+        request = self.request(manifest)
+        self.assertEqual((request["mode"], request["limits"]), ("thinking-light", {"max_attempts": 1}))
+        self.assertEqual(
+            request["optimize"],
+            {"build": "./build.sh", "run": "python3 run.py", "verify": "python3 verify.py", "kernel": "square_matrix_mul"},
+        )
+        with tarfile.open(fileobj=io.BytesIO(manifest.workspace.archive_source(manifest.directory)), mode="r:gz") as tar:
+            map_member = {member.name: member for member in tar.getmembers()}
+        self.assertTrue({"build.sh", "driver.cu", "matmul.cu", "run.py", "verify.py"} <= set(map_member))
+        self.assertEqual(map_member["build.sh"].mode, 0o755)
 
     def test_workspace_and_agent_are_the_inputs_and_agent(self) -> None:
         manifest = self.load()
@@ -173,7 +190,7 @@ class TranslationTest(unittest.TestCase):
     def test_limits_hold_only_the_attempts(self) -> None:
         manifest = self.load(AGENT_TOP + WORKSPACE + AGENT)
         self.assertNotIn("limits", self.request(manifest))
-        self.assertEqual(manifest.limits.attempts(), 2)
+        self.assertEqual(manifest.limits.attempts("fast"), 2)
         self.assertNotIn("limits", self.request(self.load(AGENT_TOP + WORKSPACE + AGENT + "[limits]\n")))
         self.assertEqual(self.request(self.load(AGENT_TOP + WORKSPACE + AGENT + "[limits]\nmax_attempts = 1\n"))["limits"], {"max_attempts": 1})
         for limits, message in (
@@ -184,6 +201,64 @@ class TranslationTest(unittest.TestCase):
         ):
             with self.subTest(limits=limits), self.assertRaisesRegex(ManifestError, message):
                 self.load(AGENT_TOP + WORKSPACE + AGENT + limits)
+
+    def test_a_thinking_mode_translates_its_optimize_table(self) -> None:
+        manifest = self.load('mode = "thinking-light"\n' + AGENT_TOP + WORKSPACE + AGENT + OPTIMIZE)
+        request = self.request(manifest)
+        self.assertEqual(request["mode"], "thinking-light")
+        self.assertEqual(
+            request["optimize"],
+            {"build": "./build.sh", "run": "python3 run.py", "verify": "python3 verify.py", "kernel": "square_matrix_.*", "max_turns": 300},
+        )
+        self.assertEqual(manifest.limits.attempts(manifest.mode), 2)
+        manifest = self.load('mode = "thinking-heavy"\n' + AGENT_TOP + WORKSPACE + '[optimize]\nrun = "python3 run.py"\nverify = "python3 verify.py"\n')
+        request = self.request(manifest)
+        self.assertEqual(request["optimize"], {"run": "python3 run.py", "verify": "python3 verify.py"})
+        self.assertEqual(manifest.limits.attempts(manifest.mode), 3)
+        self.assertEqual(RequestSchema.job(request)["optimize"]["max_wall_seconds"], 18000)
+        self.assertNotIn("optimize", self.request(self.load()))
+        self.assertEqual(self.request(self.load())["mode"], "fast")
+
+    def test_overrides_replace_the_mode_and_merge_into_optimize(self) -> None:
+        directory = self.directory(AGENT_TOP + WORKSPACE + AGENT)
+        manifest = JobManifest.load(
+            directory,
+            mode_override="thinking-light",
+            map_optimize_override={"run": "python3 run.py", "verify": "python3 verify.py"},
+        )
+        self.assertEqual((manifest.mode, self.request(manifest)["optimize"]), ("thinking-light", {"run": "python3 run.py", "verify": "python3 verify.py"}))
+        directory = self.directory('mode = "thinking-light"\n' + AGENT_TOP + WORKSPACE + OPTIMIZE)
+        manifest = JobManifest.load(directory, map_optimize_override={"run": "./bench --size 4096", "max_turns": 500})
+        self.assertEqual((manifest.optimize.map_command["run"], manifest.optimize.map_cap["max_turns"]), ("./bench --size 4096", 500))
+        self.assertEqual(manifest.optimize.map_command["verify"], "python3 verify.py")
+
+    def test_optimize_is_checked_locally_per_mode(self) -> None:
+        light = 'mode = "thinking-light"\n' + AGENT_TOP
+        heavy = 'mode = "thinking-heavy"\n' + AGENT_TOP
+        for manifest, message in (
+            (light + WORKSPACE, r"\[optimize\] is required in mode thinking-light"),
+            (light + WORKSPACE.replace('source = "src"\n', "") + OPTIMIZE, r"\[workspace\] source is required in mode thinking-light"),
+            (AGENT_TOP + WORKSPACE + OPTIMIZE, r"\[optimize\] is taken only in mode thinking-light or thinking-heavy, not in mode fast"),
+            ('mode = "fast"\n' + AGENT_TOP + WORKSPACE + OPTIMIZE, "not in mode fast"),
+            (light + WORKSPACE + OPTIMIZE.replace('run = "python3 run.py"\n', ""), r"\[optimize\] run is required in mode thinking-light: the shell command that launches"),
+            (light + WORKSPACE + OPTIMIZE.replace('verify = "python3 verify.py"\n', ""), r"\[optimize\] verify is required .* exits 0 when the results are correct"),
+            (light + WORKSPACE + OPTIMIZE.replace('"python3 run.py"', '""'), r"\[optimize\] run must be a non-empty string"),
+            (light + WORKSPACE + OPTIMIZE.replace('"python3 run.py"', "3"), r"\[optimize\] run must be a non-empty string"),
+            (light + WORKSPACE + OPTIMIZE.replace('"python3 run.py"', '"' + "x" * 4097 + '"'), r"\[optimize\] run holds at most 4096 characters"),
+            (light + WORKSPACE + OPTIMIZE.replace('"./build.sh"', '"a\\u0000b"'), r"\[optimize\] build may not hold a NUL character"),
+            (light + WORKSPACE + OPTIMIZE.replace('"square_matrix_.*"', '"' + "k" * 257 + '"'), r"\[optimize\] kernel holds at most 256 characters"),
+            (light + WORKSPACE + OPTIMIZE.replace('"square_matrix_.*"', '"square_(matrix"'), r"\[optimize\] kernel is not a regular expression"),
+            (light + WORKSPACE + OPTIMIZE + "timeout = 60\n", r"\[optimize\]: unknown key\(s\) timeout"),
+            (light + WORKSPACE + OPTIMIZE.replace("max_turns = 300", "max_turns = 1001"), r"max_turns in mode thinking-light must be an integer in \[1, 1000\]"),
+            (light + WORKSPACE + OPTIMIZE + "max_wall_seconds = 3601\n", r"max_wall_seconds in mode thinking-light must be an integer in \[600, 3600\]"),
+            (light + WORKSPACE + OPTIMIZE + "max_input_tokens = 60000001\n", r"max_input_tokens in mode thinking-light must be an integer in \[1, 60000000\]"),
+            (heavy + WORKSPACE + OPTIMIZE + "max_output_tokens = 3000001\n", r"max_output_tokens in mode thinking-heavy must be an integer in \[1, 3000000\]"),
+            (heavy + WORKSPACE + OPTIMIZE + "max_wall_seconds = 599\n", r"max_wall_seconds in mode thinking-heavy must be an integer in \[600, 18000\]"),
+            ('optimize = "python3 run.py"\n' + light + WORKSPACE, "each \\[optimize\\] entry must be a table"),
+        ):
+            with self.subTest(message=message), self.assertRaisesRegex(ManifestError, message):
+                self.load(manifest)
+        self.assertEqual(self.load(heavy + WORKSPACE + OPTIMIZE + "max_wall_seconds = 18000\n").optimize.map_cap["max_wall_seconds"], 18000)
 
     def test_inputs_are_held_to_the_size_limits(self) -> None:
         manifest = self.load()

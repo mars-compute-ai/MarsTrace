@@ -67,7 +67,22 @@ HARDWARE = {
 LIST_JOB_STEP = ["queued", "starting", "running", "finishing", "succeeded"]
 SET_FINAL = {"succeeded", "failed", "cancelled"}
 IDEMPOTENCY_KEY_PATTERN = re.compile(r"^[A-Za-z0-9._:-]{1,255}$")
-MAX_ATTEMPTS_DEFAULT = 2
+MAP_MAX_ATTEMPTS_DEFAULT = {"fast": 2, "thinking-light": 2, "thinking-heavy": 3}
+SET_THINKING_MODE = {"thinking-light", "thinking-heavy"}
+MAP_ATTEMPT_COST_DEFAULT = {"thinking-light": 250, "thinking-heavy": 1000}
+# the optimization stage's caps per tier: key -> (default, lowest, highest), as the spec's table
+MAP_OPTIMIZE_TIER = {
+    "thinking-light": {
+        "max_turns": (400, 1, 1000), "max_input_tokens": (40_000_000, 1, 60_000_000),
+        "max_output_tokens": (400_000, 1, 1_000_000), "max_wall_seconds": (3600, 600, 3600),
+    },
+    "thinking-heavy": {
+        "max_turns": (2000, 1, 4000), "max_input_tokens": (150_000_000, 1, 250_000_000),
+        "max_output_tokens": (1_500_000, 1, 3_000_000), "max_wall_seconds": (18000, 600, 18000),
+    },
+}
+HEAVY_MINIMUM_MICRO_USD = 300_000_000
+NETWORK_NOTE = "The build and run have no network access: include every dependency the image lacks in the source archive."
 # HTTP status and retryability of each error code, as errors.ts maps them
 MAP_ERROR_STATUS = {
     "invalid_request": 400,
@@ -124,6 +139,17 @@ def agent_job(directory: str) -> None:
         )
 
 
+def thinking_job(directory: str, mode: str = "thinking-light") -> None:
+    """Turn the example job copied into a directory into a thinking job of the mode."""
+    with open(os.path.join(directory, "marstrace.toml")) as manifest_file:
+        text = manifest_file.read()
+    with open(os.path.join(directory, "marstrace.toml"), "w") as manifest_file:
+        manifest_file.write(
+            f'mode = "{mode}"\n' + text
+            + '\n[optimize]\nbuild = "./build.sh"\nrun = "python3 run.py"\nverify = "python3 verify.py"\nkernel = "square_matrix_mul"\n'
+        )
+
+
 def ceil_rate(quantity: int, unit_micro_usd: int, denominator: int) -> int:
     """A quantity at a price, rounded up to whole micro-USD."""
     return -(-quantity * unit_micro_usd // denominator)
@@ -175,7 +201,21 @@ class RequestSchema:
         "tensors": Field([Field(str, pattern=UPLOAD_ID)], high=8, is_optional=True, default=[]),
         "files": Field([Field(str, pattern=UPLOAD_ID)], high=8, is_optional=True, default=[]),
     }
-    LIMITS = {"max_attempts": Field(int, low=1, high=3, is_optional=True, default=MAX_ATTEMPTS_DEFAULT)}
+    LIMITS = {
+        "max_attempts": Field(int, low=1, high=3, is_optional=True),
+        "max_attempt_cost_usd": Field(int, low=1, high=100000, is_optional=True),
+    }
+    COMMAND = r"^[^\x00]*$"
+    OPTIMIZE = {
+        "build": Field(str, low=1, high=4096, pattern=COMMAND, is_optional=True),
+        "run": Field(str, low=1, high=4096, pattern=COMMAND),
+        "verify": Field(str, low=1, high=4096, pattern=COMMAND),
+        "kernel": Field(str, low=1, high=256, is_optional=True),
+        **{
+            name: Field(int, low=1, high=MAP_OPTIMIZE_TIER["thinking-heavy"][name][2], is_optional=True)
+            for name in MAP_OPTIMIZE_TIER["thinking-heavy"]
+        },
+    }
     JOB = {
         "hardware": Field(str, low=1, high=32),
         "cuda_version": Field(str, pattern=r"^[1-9][0-9]*\.[0-9]+$", is_optional=True),
@@ -184,6 +224,7 @@ class RequestSchema:
         "agent": Field(AGENT, is_optional=True, default={}),
         "limits": Field(LIMITS, is_optional=True, default={}),
         "mode": Field({"fast", "thinking-light", "thinking-heavy"}, is_optional=True, default="fast"),
+        "optimize": Field(OPTIMIZE, is_optional=True),
     }
     UPLOAD = {
         "role": Field({"cubin", "source_archive", "launch_manifest", "tensor", "file"}),
@@ -259,6 +300,25 @@ class RequestSchema:
         return value
 
     @staticmethod
+    def job(value: Any) -> dict[str, Any]:
+        """A job request with its mode's rules and defaults applied, as job-request.ts does."""
+        request = RequestSchema.parse(value, RequestSchema.JOB)
+        mode = request["mode"]
+        request["limits"].setdefault("max_attempts", MAP_MAX_ATTEMPTS_DEFAULT[mode])
+        if mode not in SET_THINKING_MODE:
+            if "optimize" in request:
+                raise ServiceError("invalid_request", f"Invalid optimize: not allowed in mode {mode}")
+            return request
+        if "optimize" not in request:
+            raise ServiceError("invalid_request", f"Invalid optimize: required in mode {mode}")
+        if "source_archive" not in request["inputs"]:
+            raise ServiceError("invalid_request", f"Invalid inputs.source_archive: required in mode {mode}")
+        for name, (default, low, high) in MAP_OPTIMIZE_TIER[mode].items():
+            value_cap = request["optimize"].setdefault(name, default)
+            RequestSchema.bounds(value_cap, Field(int, low=low, high=high), f"optimize.{name}", "")
+        return request
+
+    @staticmethod
     def bounds(size: int, field: Field, path: str, unit: str) -> None:
         if field.low is not None and size < field.low:
             raise ServiceError("invalid_request", f"Invalid {path}: too small, expected at least {field.low} {unit}".rstrip())
@@ -276,6 +336,8 @@ class FakeState:
         self.map_upload: dict[str, dict[str, Any]] = {}
         self.map_object: dict[str, bytes] = {}
         self.map_job: dict[str, dict[str, Any]] = {}
+        # job id -> the mode it was submitted in
+        self.map_job_mode: dict[str, str] = {}
         # idempotency key -> (digest of the canonical raw body, job id)
         self.map_idempotency: dict[str, tuple[str, str]] = {}
         self.list_job_order: list[str] = []
@@ -299,11 +361,15 @@ class FakeState:
         self.do_preempt_first_attempt = False
         self.is_trace_unusable = False
         self.do_deliver_analysis = False
+        # the optimization section a thinking job delivers instead of the fixture's, to exercise its checks
+        self.optimization_section: dict[str, Any] | None = None
         self.do_fail_job = False
         # whether admission refuses although the estimate said admissible, as when another job took the balance
         self.do_refuse_admission = False
         # submissions to drop without an answer, to exercise the retry under one key
         self.drop_submissions = 0
+        # the quote's typical range, or None before enough jobs settled
+        self.typical_micro_usd: dict[str, Any] | None = None
         # API requests to refuse as rate_limited before serving any
         self.rate_limited_requests = 0
         # long polls a gateway answers 503 without an envelope, before serving any
@@ -313,8 +379,14 @@ class FakeState:
         regex = re.compile(pattern)
         return [request for request in self.list_request if request["method"] == method and regex.match(request["path"])]
 
-    def is_admissible(self) -> bool:
-        return self.billing_status == "billable_active" and (self.available_micro_usd is None or self.available_micro_usd >= self.minimum_micro_usd)
+    def minimum_for(self, mode: str) -> int:
+        """The balance a job of the mode needs to start."""
+        if mode == "thinking-heavy":
+            return max(self.minimum_micro_usd, HEAVY_MINIMUM_MICRO_USD)
+        return self.minimum_micro_usd
+
+    def is_admissible(self, mode: str = "fast") -> bool:
+        return self.billing_status == "billable_active" and (self.available_micro_usd is None or self.available_micro_usd >= self.minimum_for(mode))
 
     def held_micro_usd(self) -> int:
         return sum(int(job["cost"]["held_micro_usd"] or 0) for job in self.map_job.values() if job["cost"]["charged_micro_usd"] is None and job["status"] not in SET_FINAL)
@@ -528,14 +600,21 @@ class FakeService(http.server.BaseHTTPRequestHandler):
             job["attempts"].append(self._attempt(1))
         if job["status"] in ("running", "finishing"):
             job["attempts"][-1]["status"] = job["status"]
-            job["progress"] = {"agent_turn": 14, "usage_micro_usd": "1958000"}
+            job["progress"] = {"agent_turn": 14, "usage_micro_usd": "1958000", "optimize": self._optimize_progress(job)}
         if job["status"] == "succeeded":
             with open(os.path.join(FIXTURE_DIRECTORY, "trace_sass_regions.json"), "rb") as trace_file:
                 trace = trace_file.read()
+            document = json.loads(trace)
             if state.do_deliver_analysis:
-                document = json.loads(trace)
                 with open(os.path.join(FIXTURE_DIRECTORY, "analysis_section.json"), "rb") as section_file:
                     document["sections"].append(json.load(section_file))
+            if job["optimize"] is not None:
+                if state.optimization_section is None:
+                    with open(os.path.join(FIXTURE_DIRECTORY, "optimization_section.json"), "rb") as section_file:
+                        document["sections"].append(json.load(section_file))
+                else:
+                    document["sections"].append(state.optimization_section)
+            if state.do_deliver_analysis or job["optimize"] is not None:
                 trace = json.dumps(document).encode()
             state.map_object[job["job_id"]] = trace
             job["attempts"][-1].update(status="succeeded", ended_at=TIMESTAMP)
@@ -554,9 +633,25 @@ class FakeService(http.server.BaseHTTPRequestHandler):
             job["cost"]["lines"] = list_line
             if state.is_trace_unusable:
                 job["cost"].update(charged_micro_usd="0", lines=[], not_charged_reason="unusable_result")
-            job["result"] = self._result_summary(job)
+            job["result"] = {**self._result_summary(job), "optimization": self._optimization_result(job)}
             if state.available_micro_usd is not None:
                 state.available_micro_usd -= int(job["cost"]["charged_micro_usd"])
+
+    @staticmethod
+    def _optimize_progress(job: dict[str, Any]) -> dict[str, Any] | None:
+        """The latest checkpoint of a thinking job's optimization: mid-way while it runs, writing while it finishes."""
+        if job["optimize"] is None:
+            return None
+        budget = job["optimize"]["max_wall_seconds"]
+        if job["status"] == "running":
+            return {"iteration": 3, "kept": 2, "reverted": 1, "best_speedup": 1.37, "elapsed_seconds": 1820, "budget_seconds": budget, "stage": "optimizing"}
+        return {"iteration": 6, "kept": 3, "reverted": 3, "best_speedup": 1.41, "elapsed_seconds": 3240, "budget_seconds": budget, "stage": "writing"}
+
+    @staticmethod
+    def _optimization_result(job: dict[str, Any]) -> dict[str, Any] | None:
+        if job["optimize"] is None:
+            return None
+        return {"status": "improved", "best_speedup": 1.41, "configs": 2, "correctness": "passed", "iterations": 6, "kept": 3, "reverted": 3}
 
     def _result_summary(self, job: dict[str, Any]) -> dict[str, Any]:
         data = FakeService.state.map_object[job["job_id"]]
@@ -591,7 +686,7 @@ class FakeService(http.server.BaseHTTPRequestHandler):
         if match := re.match(r"^/v1/uploads/([^/]+)/complete$", path):
             return self._complete(match.group(1), RequestSchema.parse(self._json(body), RequestSchema.COMPLETE))
         if path == "/v1/quotes":
-            return self._quote(RequestSchema.parse(self._json(body), RequestSchema.JOB))
+            return self._quote(RequestSchema.job(self._json(body)))
         if path == "/v1/jobs":
             return self._submit(self._json(body))
         if match := re.match(r"^/v1/jobs/([^/]+)/cancel$", path):
@@ -664,8 +759,6 @@ class FakeService(http.server.BaseHTTPRequestHandler):
         return FakeService._upload_view(upload)
 
     def _hardware(self, request: dict[str, Any]) -> dict[str, Any]:
-        if request.get("mode", "fast") != "fast":
-            raise ServiceError("mode_unavailable", "This mode is not available yet; submit a fast job")
         entry = next((entry for entry in FakeService.state.map_hardware["hardware"] if entry["id"] == request["hardware"]), None)
         if entry is None:
             raise ServiceError("hardware_unavailable", f"Unknown hardware {request['hardware']}; see GET /v1/hardware")
@@ -683,10 +776,17 @@ class FakeService(http.server.BaseHTTPRequestHandler):
         state = FakeService.state
         entry = self._hardware(request)
         rates = state.map_hardware["rates"]
-        map_agent = request["agent"]
+        mode = request["mode"]
+        map_optimize = request.get("optimize", {})
+        input_tokens = request["agent"]["max_input_tokens"] + map_optimize.get("max_input_tokens", 0)
+        output_tokens = request["agent"]["max_output_tokens"] + map_optimize.get("max_output_tokens", 0)
         attempts = request["limits"]["max_attempts"]
-        input_per_attempt = max(ceil_rate(map_agent["max_input_tokens"], int(rates[key]), MILLION) for key in LIST_INPUT_RATE)
-        tokens_per_attempt = input_per_attempt + ceil_rate(map_agent["max_output_tokens"], int(rates["agent_output_micro_usd_per_million"]), MILLION)
+        minimum = state.minimum_for(mode)
+        input_per_attempt = max(ceil_rate(input_tokens, int(rates[key]), MILLION) for key in LIST_INPUT_RATE)
+        tokens_per_attempt = input_per_attempt + ceil_rate(output_tokens, int(rates["agent_output_micro_usd_per_million"]), MILLION)
+        cost_cap_usd = request["limits"].get("max_attempt_cost_usd", MAP_ATTEMPT_COST_DEFAULT.get(mode))
+        if cost_cap_usd is not None:
+            tokens_per_attempt = min(tokens_per_attempt, cost_cap_usd * 1_000_000)
         map_cost = {
             "agent_tokens_per_attempt": str(tokens_per_attempt),
             "total": str(attempts * tokens_per_attempt),
@@ -696,17 +796,24 @@ class FakeService(http.server.BaseHTTPRequestHandler):
             "cuda_version": request.get("cuda_version", entry["default_cuda_version"]),
             "rates": rates,
             "bounds_per_attempt": {
-                "agent_input_tokens": map_agent["max_input_tokens"],
-                "agent_output_tokens": map_agent["max_output_tokens"],
+                "agent_input_tokens": input_tokens,
+                "agent_output_tokens": output_tokens,
             },
             "cost_at_bounds_micro_usd": map_cost,
-            "minimum_micro_usd": str(state.minimum_micro_usd),
+            "minimum_micro_usd": str(minimum),
             "available_micro_usd": None if state.available_micro_usd is None else str(state.available_micro_usd),
-            "admissible": state.is_admissible(),
+            "admissible": state.is_admissible(mode),
+            "typical_micro_usd": state.typical_micro_usd,
         }
+        if cost_cap_usd is not None:
+            quote["max_attempt_cost_usd"] = cost_cap_usd
+        if mode in SET_THINKING_MODE:
+            quote["notes"] = [NETWORK_NOTE]
         if not quote["admissible"]:
             quote["message"] = (
-                f"A job starts only while the workspace's available balance is at least {state.minimum_micro_usd} micro-USD; add credit"
+                f"A {mode} job needs at least ${minimum // MILLION} of available credit"
+                if mode == "thinking-heavy"
+                else f"A job starts only while the workspace's available balance is at least {minimum} micro-USD; add credit"
             )
         return quote
 
@@ -743,7 +850,7 @@ class FakeService(http.server.BaseHTTPRequestHandler):
         key = self.headers.get("Idempotency-Key")
         if key is None or not IDEMPOTENCY_KEY_PATTERN.match(key):
             raise ServiceError("invalid_request", "Invalid Idempotency-Key header: 1 to 255 characters of A-Z a-z 0-9 . _ : -")
-        request = RequestSchema.parse(raw_body, RequestSchema.JOB)
+        request = RequestSchema.job(raw_body)
         digest = hashlib.sha256(json.dumps(raw_body, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()).hexdigest()
         if key in state.map_idempotency:
             known_digest, job_id = state.map_idempotency[key]
@@ -755,7 +862,7 @@ class FakeService(http.server.BaseHTTPRequestHandler):
             raise ServiceError("too_many_jobs", f"The workspace has {state.max_queued} queued jobs; wait for one to start", retry_after_seconds=30)
         job_id = new_id("job_")
         self._claim_uploads(request["inputs"], job_id)
-        if state.do_refuse_admission or not state.is_admissible():
+        if state.do_refuse_admission or not state.is_admissible(request["mode"]):
             for upload in state.map_upload.values():
                 if upload["job_id"] == job_id:
                     upload.update(status="verified", job_id=None)
@@ -768,8 +875,9 @@ class FakeService(http.server.BaseHTTPRequestHandler):
                 else "The workspace's remaining spending limit is below the minimum balance a job needs"
             )
             raise ServiceError(code, message, details={"add_credit_url": ADD_CREDIT_URL})
+        minimum = state.minimum_for(request["mode"])
         if state.available_micro_usd is not None:
-            state.available_micro_usd -= state.minimum_micro_usd
+            state.available_micro_usd -= minimum
         state.map_job[job_id] = {
             "job_id": job_id,
             "account_id": ACCOUNT_ID,
@@ -780,13 +888,15 @@ class FakeService(http.server.BaseHTTPRequestHandler):
             "hardware": entry["id"],
             "cuda_version": request.get("cuda_version", entry["default_cuda_version"]),
             "agent": request["agent"],
+            "optimize": request.get("optimize"),
             "limits": request["limits"],
             "progress": None,
             "attempts": [],
-            "cost": {"held_micro_usd": str(state.minimum_micro_usd), "charged_micro_usd": None, "lines": []},
+            "cost": {"held_micro_usd": str(minimum), "charged_micro_usd": None, "lines": []},
             "result": None,
             "error": None,
         }
+        state.map_job_mode[job_id] = request["mode"]
         state.map_idempotency[key] = (digest, job_id)
         state.list_job_order.append(job_id)
         return state.map_job[job_id]

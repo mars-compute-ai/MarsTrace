@@ -1,0 +1,20 @@
+hardware = "h200"
+mode = "thinking-light"
+intent = """
+Make square_matrix_mul faster at n = 1024 and n = 2048 (int32 matrices of n x n, block
+(16, 16)) without changing its results. Trace it first at n = 1024, grid (64, 64).
+"""
+
+# built with: nvcc -cubin -arch=sm_90a -lineinfo -o matmul.cubin src/matmul.cu
+[workspace]
+cubins = ["matmul.cubin"]
+source = "src"
+
+[optimize]
+build = "./build.sh"
+run = "python3 run.py"
+verify = "python3 verify.py"
+kernel = "square_matrix_mul"
+
+[limits]
+max_attempts = 1
