@@ -21,7 +21,7 @@ marstrace show examples/matmul/marstrace-results/<job>/marstrace.json --stats
 一个 job 目录里放 `marstrace.toml`，以及它引用的文件：
 
 ```toml
-hardware = "h200"   # marstrace hardware 列出的硬件 id；cubin 要按它的架构编译
+hardware = "h200"   # 或 "b200"；cubin 要按对应架构编译（sm_90a 或 sm_100a）
 intent = """
 How long each thread spends in the dot-product loop of square_matrix_mul, and how evenly the
 blocks run, at n = 256: int32 matrices a, b and c of 256 x 256, a and b random, launched with
@@ -75,8 +75,7 @@ claude plugin install marstrace@marscompute
 ## 目前支持的范围
 
 - 模式：fast，即 trace 加分析。用来优化 kernel 的 `thinking-light` 和 `thinking-heavy` 还未开放。
-- GPU：H200（`sm_90a`）、B200（`sm_100a`），已开通的账号还有 B300（`sm_103a`）。
-  `marstrace hardware` 列出你的账号能用的硬件。
+- GPU：H200、B200。`marstrace hardware` 列出你的账号能用的硬件。
 - CUDA：13.0。
 - 输入：最多 8 个 cubin（必须是 ELF cubin，不接受 PTX）。另外可以附源码、launch 描述文件、safetensors 输入和其他文件，合计不超过 256 MiB。
 
