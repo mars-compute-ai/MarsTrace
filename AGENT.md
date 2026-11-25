@@ -84,7 +84,7 @@ Conventional Commits form, with no agent attribution.
 4. Install the tag into a fresh environment
    (`pip install 'git+https://github.com/mars-compute-ai/MarsTrace@vX.Y.Z'`) and check
    `pip show mars-trace` and `marstrace --help`.
-5. Update the version the README's quick start installs.
+5. Update the version the README's quick start and the `marstrace-remote` skill install.
 
 ## Using the client
 

@@ -27,7 +27,7 @@ marstrace show examples/matmul/marstrace-results/<job>/marstrace.json --stats
 A job directory holds a `marstrace.toml` and the files it names:
 
 ```toml
-hardware = "h200"   # or "b200"; build the cubin for its architecture (sm_90a or sm_100a)
+hardware = "h200"   # a hardware id of marstrace hardware; build the cubin for its architecture
 intent = """
 How long each thread spends in the dot-product loop of square_matrix_mul, and how evenly the
 blocks run, at n = 256: int32 matrices a, b and c of 256 x 256, a and b random, launched with
@@ -96,7 +96,8 @@ environment, as [.mcp.json](.mcp.json) does, and load the skills from
 
 - Mode `fast`: a trace and its analysis. The modes `thinking-light` and `thinking-heavy`,
   which will optimize a kernel, are not offered yet.
-- GPUs: H200 and B200.
+- GPUs: H200 (`sm_90a`) and B200 (`sm_100a`), and B300 (`sm_103a`) on accounts it is enabled
+  for. `marstrace hardware` lists the hardware your account can use.
 - CUDA 13.0.
 - Inputs: up to 8 cubins (ELF cubins, not PTX), plus optional source, a launch manifest,
   safetensors inputs and other files, 256 MiB in all.

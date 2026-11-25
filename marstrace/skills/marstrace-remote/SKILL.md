@@ -39,7 +39,7 @@ browser and shell; the agent cannot do them:
 Then check the client and the account:
 
 ```bash
-pip install git+https://github.com/mars-compute-ai/MarsTrace
+pip install 'git+https://github.com/mars-compute-ai/MarsTrace@v0.2.1'   # the version the README installs
 marstrace hardware      # hardware ids, GPU, architecture, CUDA versions, token rates, agent model and limits
 marstrace credit        # available balance, the minimum a job needs to start, the page to add credit
 ```
@@ -80,7 +80,7 @@ Settle these with the user before writing anything:
 | CUDA C++ | `nvcc -cubin -arch=sm_90a -lineinfo -o k.cubin k.cu` (no GPU needed) |
 | Triton, torch.compile | run it once, then `marstrace cubin find <name> --copy-to my-job` |
 | TileLang | run it once, then `marstrace cubin find <name> --copy-to my-job` |
-| CuTeDSL | have CuTeDSL keep its cubins in a directory (see its documentation on dumping compiled kernels), then `marstrace cubin find <name> --dir <that directory> --copy-to my-job` |
+| CuTeDSL | compile it with `CUTE_DSL_KEEP=cubin CUTE_DSL_DUMP_DIR=<dir> CUTE_DSL_LINEINFO=1` (older releases: `CUTE_DSL_KEEP_CUBIN=1`); `CUTE_DSL_ARCH=sm_103a` targets another GPU and compiles without one. Then `marstrace cubin find <name> --dir <dir> --copy-to my-job` |
 | only PTX at hand | `ptxas -arch=sm_90a -lineinfo -o k.cubin k.ptx`; MarsTrace takes cubins only |
 
 A cached cubin is built for the GPU the user ran it on. Check with
@@ -129,6 +129,12 @@ max_attempts = 2                  # 1 to 3, 2 when absent: how often a failed at
   cares about, a launch manifest, or source the agent can build; without one it derives
   the launch from source and spends turns on it. State the problem size in `intent`. A
   driver script that launches the kernel as the user does is the surest of the three.
+- **A CuTeDSL kernel takes its arguments as a struct its host code builds** (TMA
+  descriptors, layouts), so a driver must run that host code. Export it with the
+  compiled function's `export_to_c(dir, name)`, link the object and the DSL's
+  `libcuda_dialect_runtime_static.a` into a small C driver with `-lcuda`, and send the
+  driver, the object and the archive in `files`: the driver then runs with the CUDA
+  driver alone. The object embeds the cubin, so send the same cubin in `cubins`.
 - **A launch manifest** is JSON whose `schema_version` is `marscompute.kernel-launch`. The
   agent on the GPU host reads the rest as a description, so name the kernel, the launch
   shape, the buffers and the arguments plainly:
