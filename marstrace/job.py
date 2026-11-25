@@ -24,8 +24,12 @@ class JobLimits:
 
     ATTEMPTS_KEY = "max_attempts"
     ATTEMPTS_MAX = 3
-    # attempts the service gives a request that leaves max_attempts out
-    ATTEMPTS_DEFAULT = 2
+    # mode -> attempts the service gives a request that leaves max_attempts out
+    MAP_ATTEMPTS_DEFAULT = {
+        "fast": 2,
+        "thinking-light": 2,
+        "thinking-heavy": 3,
+    }
 
     max_attempts: int | None = None
 
@@ -56,13 +60,19 @@ class JobLimits:
             )
         return cls(max_attempts=map_limits.get(JobLimits.ATTEMPTS_KEY))
 
-    def attempts(self) -> int:
+    def attempts(self, mode: str) -> int:
         """The most attempts the job takes.
 
+        Args:
+            mode: the job's mode, whose default applies when the manifest leaves
+                ``max_attempts`` out
+
         Returns:
-            ``max_attempts``, or the service's default when the manifest leaves it out
+            ``max_attempts``, or the service's default for the mode
         """
-        return JobLimits.ATTEMPTS_DEFAULT if self.max_attempts is None else self.max_attempts
+        if self.max_attempts is None:
+            return JobLimits.MAP_ATTEMPTS_DEFAULT[mode]
+        return self.max_attempts
 
     def to_api(self) -> dict[str, Any] | None:
         """The limits the job request takes.
@@ -181,6 +191,180 @@ class AgentOptions:
             maximum = map_agent_hardware["maximums"][key]
             if value > maximum:
                 raise ManifestError(f"[agent] {key} {value} exceeds the service's maximum {maximum}")
+        return map_api
+
+
+@dataclass
+class OptimizeOptions:
+    """The ``[optimize]`` table of a thinking job: how the agent builds, runs and checks the
+    kernel in the root of the source tree, and the budget of the stage that optimizes it.
+
+    Args:
+        map_command: ``build``, ``run`` and ``verify``, each a shell command; ``run`` and
+            ``verify`` are always set
+        kernel: a regular expression selecting the target kernel by name, or None
+        map_cap: the caps the manifest sets; an absent one takes the tier's default
+    """
+
+    COMMAND_KEY_BUILD = "build"
+    COMMAND_KEY_RUN = "run"
+    COMMAND_KEY_VERIFY = "verify"
+    KERNEL_KEY = "kernel"
+    # command key -> what it does, for the message of a missing one
+    MAP_COMMAND = {
+        COMMAND_KEY_BUILD: "builds the source tree",
+        COMMAND_KEY_RUN: "launches the target kernel at its workload",
+        COMMAND_KEY_VERIFY: "exits 0 when the results are correct",
+    }
+    SET_REQUIRED_COMMAND = {
+        COMMAND_KEY_RUN,
+        COMMAND_KEY_VERIFY,
+    }
+    COMMAND_CHARACTERS_MAX = 4096
+    KERNEL_CHARACTERS_MAX = 256
+    # mode -> cap key -> (lowest value, highest value)
+    MAP_TIER_BOUND = {
+        "thinking-light": {
+            "max_turns": (1, 1000),
+            "max_input_tokens": (1, 60_000_000),
+            "max_output_tokens": (1, 1_000_000),
+            "max_wall_seconds": (600, 3600),
+        },
+        "thinking-heavy": {
+            "max_turns": (1, 4000),
+            "max_input_tokens": (1, 250_000_000),
+            "max_output_tokens": (1, 3_000_000),
+            "max_wall_seconds": (600, 18000),
+        },
+    }
+    # mode -> cap key -> the value the service takes when the manifest leaves it out
+    MAP_TIER_DEFAULT = {
+        "thinking-light": {
+            "max_turns": 400,
+            "max_input_tokens": 40_000_000,
+            "max_output_tokens": 400_000,
+            "max_wall_seconds": 3600,
+        },
+        "thinking-heavy": {
+            "max_turns": 2000,
+            "max_input_tokens": 150_000_000,
+            "max_output_tokens": 1_500_000,
+            "max_wall_seconds": 18000,
+        },
+    }
+
+    map_command: dict[str, str]
+    kernel: str | None = None
+    map_cap: dict[str, int] = field(default_factory=dict)
+
+    @staticmethod
+    def _check_text(
+        value: Any,
+        where: str,
+        characters_max: int,
+    ) -> None:
+        """Check that a value is a non-blank string of at most ``characters_max`` characters without NUL."""
+        if (
+            not isinstance(
+                value,  # obj
+                str,    # class_or_tuple
+            )
+            or not value.strip()
+        ):
+            raise ManifestError(f"{where} must be a non-empty string")
+        if len(value) > characters_max:
+            raise ManifestError(f"{where} holds at most {characters_max} characters, not {len(value)}")
+        if "\0" in value:
+            raise ManifestError(f"{where} may not hold a NUL character")
+
+    @classmethod
+    def from_table(
+        cls,
+        map_optimize: Any,
+        mode: str,
+    ) -> "OptimizeOptions":
+        """Read and check the ``[optimize]`` table of a thinking job.
+
+        Args:
+            map_optimize: the table
+            mode: ``thinking-light`` or ``thinking-heavy``, whose bounds the caps keep
+
+        Returns:
+            the options
+
+        Raises:
+            ManifestError: a key is unknown, missing or out of range, or ``kernel`` is not a
+                regular expression
+        """
+        map_bound = OptimizeOptions.MAP_TIER_BOUND[mode]
+        JobManifest.check_table(
+            value=map_optimize,
+            set_key={
+                *OptimizeOptions.MAP_COMMAND,
+                OptimizeOptions.KERNEL_KEY,
+                *map_bound,
+            },
+            where="[optimize]",
+        )
+        for key in sorted(OptimizeOptions.SET_REQUIRED_COMMAND):
+            if key not in map_optimize:
+                raise ManifestError(
+                    f"[optimize] {key} is required in mode {mode}: the shell command that "
+                    f"{OptimizeOptions.MAP_COMMAND[key]}"
+                )
+        for key in OptimizeOptions.MAP_COMMAND:
+            if key in map_optimize:
+                OptimizeOptions._check_text(
+                    value=map_optimize[key],
+                    where=f"[optimize] {key}",
+                    characters_max=OptimizeOptions.COMMAND_CHARACTERS_MAX,
+                )
+        kernel = map_optimize.get(OptimizeOptions.KERNEL_KEY)
+        if kernel is not None:
+            OptimizeOptions._check_text(
+                value=kernel,
+                where=f"[optimize] {OptimizeOptions.KERNEL_KEY}",
+                characters_max=OptimizeOptions.KERNEL_CHARACTERS_MAX,
+            )
+            try:
+                re.compile(kernel)
+            except re.error as err:
+                raise ManifestError(
+                    f"[optimize] {OptimizeOptions.KERNEL_KEY} is not a regular expression: {err}"
+                ) from err
+        for key, (low, high) in map_bound.items():
+            if key in map_optimize:
+                JobManifest.check_integer(
+                    value=map_optimize[key],
+                    where=f"[optimize] {key} in mode {mode}",
+                    low=low,
+                    high=high,
+                )
+        return cls(
+            map_command={
+                key: map_optimize[key]
+                for key in OptimizeOptions.MAP_COMMAND
+                if key in map_optimize
+            },
+            kernel=kernel,
+            map_cap={
+                key: map_optimize[key]
+                for key in map_bound
+                if key in map_optimize
+            },
+        )
+
+    def to_api(self) -> dict[str, Any]:
+        """The ``optimize`` object of the job request.
+
+        Returns:
+            the commands, ``kernel`` when set, and the caps the manifest sets; the service
+            applies the tier's default to every other cap
+        """
+        map_api: dict[str, Any] = dict(self.map_command)
+        if self.kernel is not None:
+            map_api[OptimizeOptions.KERNEL_KEY] = self.kernel
+        map_api.update(self.map_cap)
         return map_api
 
 
@@ -478,9 +662,11 @@ class JobManifest:
             hardware's default
         intent: what the trace should answer, the job's prompt
         mode: ``fast`` (the trace and the analyser's summary of it), or ``thinking-light`` or
-            ``thinking-heavy``, which optimize the kernel and are not offered yet
+            ``thinking-heavy``, which trace the kernel and then optimize it
         workspace: the files the agent works with
-        agent: the session's budget
+        agent: the budget of the session that traces the kernel
+        optimize: how a thinking job builds, runs and checks the kernel, and the budget of the
+            stage that optimizes it; None in fast mode
         limits: the attempts
         list_binary: the workspace's cubins
     """
@@ -506,12 +692,18 @@ class JobManifest:
         "mode",
         "workspace",
         "agent",
+        "optimize",
         "limits",
     }
     CUDA_VERSION_PATTERN = re.compile(r"[1-9][0-9]*\.[0-9]+")
     MODE_DEFAULT = "fast"
     SET_MODE = {
         "fast",
+        "thinking-light",
+        "thinking-heavy",
+    }
+    # the modes that optimize the kernel after tracing it
+    SET_THINKING_MODE = {
         "thinking-light",
         "thinking-heavy",
     }
@@ -539,6 +731,7 @@ class JobManifest:
     mode: str = "fast"
     workspace: WorkspaceSpec
     agent: AgentOptions
+    optimize: OptimizeOptions | None = None
     limits: JobLimits = field(default_factory=JobLimits)
     list_binary: list[KernelBinary] = field(default_factory=list)
 
@@ -627,11 +820,19 @@ class JobManifest:
             raise ManifestError(f"{where} must be a CUDA version such as \"13.0\", not {value!r}")
 
     @classmethod
-    def load(cls, directory: str) -> "JobManifest":
+    def load(
+        cls,
+        directory: str,
+        mode_override: str | None = None,
+        map_optimize_override: dict[str, Any] | None = None,
+    ) -> "JobManifest":
         """Read and check the manifest of a job directory.
 
         Args:
             directory: the job directory, holding ``marstrace.toml``
+            mode_override: a mode overriding the manifest's ``mode``, or None
+            map_optimize_override: keys overriding those of the manifest's ``[optimize]``, or
+                None
 
         Returns:
             the manifest
@@ -655,6 +856,22 @@ class JobManifest:
                 map_manifest = tomllib.load(manifest_file)
             except tomllib.TOMLDecodeError as err:
                 raise ManifestError(f"{path}: {err}") from err
+        if mode_override is not None:
+            map_manifest["mode"] = mode_override
+        if (
+            map_optimize_override is not None
+            and isinstance(
+                map_manifest.get("optimize", {}),  # obj
+                dict,                              # class_or_tuple
+            )
+        ):
+            map_manifest["optimize"] = {
+                **map_manifest.get(
+                    "optimize",
+                    {},
+                ),
+                **map_optimize_override,
+            }
         JobManifest.check_table(
             value=map_manifest,
             set_key=JobManifest.SET_KEY,
@@ -680,6 +897,27 @@ class JobManifest:
         mode = map_manifest.get("mode", JobManifest.MODE_DEFAULT)
         if mode not in JobManifest.SET_MODE:
             raise ManifestError(f"{path}: 'mode' is one of {', '.join(sorted(JobManifest.SET_MODE))}")
+        optimize = None
+        if mode in JobManifest.SET_THINKING_MODE:
+            if "optimize" not in map_manifest:
+                raise ManifestError(
+                    f"{path}: [optimize] is required in mode {mode}: its run and verify commands "
+                    "launch the kernel and check its results"
+                )
+            if workspace.source is None:
+                raise ManifestError(
+                    f"{path}: [workspace] source is required in mode {mode}: the source tree the "
+                    "agent builds, runs and changes"
+                )
+            optimize = OptimizeOptions.from_table(
+                map_optimize=map_manifest["optimize"],
+                mode=mode,
+            )
+        elif "optimize" in map_manifest:
+            raise ManifestError(
+                f"{path}: [optimize] is taken only in mode thinking-light or thinking-heavy, "
+                f"not in mode {mode}"
+            )
         cuda_version = map_manifest.get("cuda_version")
         if cuda_version is not None:
             JobManifest.check_cuda_version(
@@ -699,6 +937,7 @@ class JobManifest:
                     {},
                 )
             ),
+            optimize=optimize,
             limits=JobLimits.from_table(
                 map_manifest.get(
                     "limits",
@@ -867,8 +1106,9 @@ class JobManifest:
             map_upload_ids: upload role to the ids of the verified uploads of that role
 
         Returns:
-            ``hardware``, ``prompt``, ``mode``, ``inputs``, ``agent``, ``cuda_version`` when
-            the manifest sets it, and ``limits`` when the manifest sets ``max_attempts``
+            ``hardware``, ``prompt``, ``mode``, ``inputs``, ``agent``, ``optimize`` in a
+            thinking mode, ``cuda_version`` when the manifest sets it, and ``limits`` when the
+            manifest sets ``max_attempts``
         """
         map_request = {
             "hardware": self.select_hardware(map_hardware)["id"],
@@ -877,6 +1117,8 @@ class JobManifest:
             "inputs": JobManifest.inputs(map_upload_ids),
             "agent": self.agent.to_api(map_hardware["agent"]),
         }
+        if self.optimize is not None:
+            map_request["optimize"] = self.optimize.to_api()
         if self.cuda_version is not None:
             map_request["cuda_version"] = self.cuda_version
         map_limits = self.limits.to_api()

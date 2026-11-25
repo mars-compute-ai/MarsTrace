@@ -237,7 +237,7 @@ class CommandLineTest(unittest.TestCase):
         status, output, error = self.run_cli("show", trace, "--analysis")
         self.assertIn("analysis: this report carries none", output)
 
-    def test_an_optimizing_mode_is_refused_and_an_unknown_one_is_caught_locally(self) -> None:
+    def test_a_thinking_mode_needs_its_optimize_table_and_an_unknown_mode_is_caught_locally(self) -> None:
         manifest = os.path.join(self.directory, "marstrace.toml")
         with open(manifest) as manifest_file:
             text = manifest_file.read()
@@ -245,7 +245,8 @@ class CommandLineTest(unittest.TestCase):
             manifest_file.write('mode = "thinking-light"\n' + text)
         status, output, error = self.run_cli("submit", self.directory, "--yes")
         self.assertNotEqual(status, 0)
-        self.assertIn("This mode is not available yet; submit a fast job", error + output)
+        self.assertIn("[optimize] is required in mode thinking-light", error + output)
+        self.assertEqual(self.fake.state.requests_to("POST", r"^/v1/uploads$"), [])
         with open(manifest, "w") as manifest_file:
             manifest_file.write('mode = "thinking"\n' + text)
         status, output, error = self.run_cli("estimate", self.directory)

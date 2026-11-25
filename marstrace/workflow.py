@@ -70,7 +70,7 @@ class QuotedJob:
                 "agent_input_tokens": map_bounds["agent_input_tokens"],
                 "agent_output_tokens": map_bounds["agent_output_tokens"],
             },
-            "max_attempts": self.manifest.limits.attempts(),
+            "max_attempts": self.manifest.limits.attempts(self.manifest.mode),
             "cost_at_bounds": {
                 "agent_tokens_per_attempt_usd": MarsTraceWorkflow.usd(map_cost["agent_tokens_per_attempt"]),
                 "total_usd": MarsTraceWorkflow.usd(map_cost["total"]),
