@@ -306,6 +306,8 @@ class FakeState:
         self.drop_submissions = 0
         # API requests to refuse as rate_limited before serving any
         self.rate_limited_requests = 0
+        # long polls a gateway answers 503 without an envelope, before serving any
+        self.unavailable_waits = 0
 
     def requests_to(self, method: str, pattern: str) -> list[dict[str, Any]]:
         regex = re.compile(pattern)
@@ -429,6 +431,10 @@ class FakeService(http.server.BaseHTTPRequestHandler):
         service_path = self._service_path()
         if service_path is None:
             self._send(404, b"not found")
+            return
+        if service_path.endswith("/wait") and FakeService.state.unavailable_waits > 0:
+            FakeService.state.unavailable_waits -= 1
+            self._send(503, b"<html><body>503 Service Temporarily Unavailable</body></html>")
             return
         self._dispatch(self._get, service_path)
 
