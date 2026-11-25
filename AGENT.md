@@ -14,6 +14,8 @@ trace a kernel. An agent that only uses the client should read
   - `schema.py`: the client's check of every answer.
   - `workflow.py`: the operations the commands and the MCP server share.
   - `analysis.py`: the delivered analysis, read for a person.
+  - `optimization.py`: a thinking job's delivered optimization: its files, checked and
+    written, and its summary, read for a person.
   - `mcp.py`: the stdio MCP server.
   - `cli.py`: the commands.
 - `marstrace/viewer/`: `marstrace show`. It is generated; see the constraints below.
@@ -60,8 +62,9 @@ Conventional Commits form, with no agent attribution.
 - **The viewer is generated.** Do not edit `marstrace/viewer/` by hand: the maintainers
   regenerate it from their own viewer, and a hand edit is lost. A fix to the viewer goes to
   the maintainers. A view only the client has, such as `show --analysis`, lives in the
-  client's modules (`DeliveredAnalysis.extend_show` in `analysis.py`) and is attached to
-  `show` after the viewer registers it.
+  client's modules (`DeliveredAnalysis.extend_show` in `analysis.py`,
+  `DeliveredOptimization.extend_show` in `optimization.py`) and is attached to `show` after
+  the viewer registers it.
 - **The service's API is the source of truth.** A change to the API changes `client.py`,
   `schema.py`, `job.py`, the fake service and `docs/protocol.md` together.
 

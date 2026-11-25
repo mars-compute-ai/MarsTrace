@@ -8,6 +8,7 @@ from marstrace.binary import DslCache, KernelBinary
 from marstrace.error import MarsTraceError
 from marstrace.guide import AgentGuide
 from marstrace.mcp import McpServer
+from marstrace.optimization import DeliveredOptimization
 from marstrace.viewer.cli.show import ShowCommand
 from marstrace.workflow import MarsTraceWorkflow, QuotedJob
 
@@ -253,21 +254,27 @@ class JobCommands:
 
     @staticmethod
     def _print_saved(list_path: list[str]) -> None:
-        """The files a fetch wrote, the quality of the trace, and the analysis it carries."""
-        for path in list_path:
-            print(f"saved     {path}")
+        """The report and manifest a fetch wrote, the quality of the trace, the analysis it
+        carries, and a thinking job's optimization with where its deliverables were written."""
+        trace_path, manifest_path = list_path[:2]
+        print(f"saved     {trace_path}")
+        print(f"saved     {manifest_path}")
         with open(
-            file=list_path[-1],
+            file=manifest_path,
             mode="r",
             encoding="utf-8",
         ) as manifest_file:
             map_manifest = json.load(manifest_file)
         print(f"quality   {map_manifest['quality']} {', '.join(map_manifest['reason_codes'])}".rstrip())
-        for path in list_path:
-            if os.path.basename(path) == MarsTraceWorkflow.RESULT_FILE:
-                analysis = DeliveredAnalysis.from_file(path)
-                if analysis is not None:
-                    print(analysis.text(), end="")
+        analysis = DeliveredAnalysis.from_file(trace_path)
+        if analysis is not None:
+            print(analysis.text(), end="")
+        optimization = DeliveredOptimization.from_file(trace_path)
+        if optimization is not None:
+            print(
+                optimization.text(DeliveredOptimization.directory_of(trace_path)),
+                end="",
+            )
 
     @staticmethod
     def jobs(args: argparse.Namespace) -> None:
@@ -304,7 +311,8 @@ class JobCommands:
 
     @staticmethod
     def fetch(args: argparse.Namespace) -> None:
-        """Download a succeeded job's marstrace.json and its result manifest, and print the analysis it carries."""
+        """Download a succeeded job's marstrace.json and its result manifest, write a thinking
+        job's deliverables, and print the analysis and the optimization."""
         list_path = JobCommands._workflow().fetch(
             job_id=args.job,
             output_directory=args.output or os.path.join(
@@ -481,7 +489,7 @@ class CommandLine:
 
         fetch = subparsers.add_parser(
             name="fetch",
-            help="download a succeeded job's marstrace.json and its result manifest",
+            help="download a succeeded job's marstrace.json and its result manifest, and a thinking job's deliverables",
         )
         fetch.add_argument("job")
         fetch.add_argument(
@@ -567,6 +575,7 @@ class CommandLine:
         CommandLine._add_binary_commands(subparsers)
         ShowCommand().register(subparsers)
         DeliveredAnalysis.extend_show(subparsers)
+        DeliveredOptimization.extend_show(subparsers)
         return parser
 
     @staticmethod

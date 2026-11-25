@@ -357,6 +357,8 @@ class FakeState:
         self.do_preempt_first_attempt = False
         self.is_trace_unusable = False
         self.do_deliver_analysis = False
+        # the optimization section a thinking job delivers instead of the fixture's, to exercise its checks
+        self.optimization_section: dict[str, Any] | None = None
         self.do_fail_job = False
         # whether admission refuses although the estimate said admissible, as when another job took the balance
         self.do_refuse_admission = False
@@ -596,10 +598,17 @@ class FakeService(http.server.BaseHTTPRequestHandler):
         if job["status"] == "succeeded":
             with open(os.path.join(FIXTURE_DIRECTORY, "trace_sass_regions.json"), "rb") as trace_file:
                 trace = trace_file.read()
+            document = json.loads(trace)
             if state.do_deliver_analysis:
-                document = json.loads(trace)
                 with open(os.path.join(FIXTURE_DIRECTORY, "analysis_section.json"), "rb") as section_file:
                     document["sections"].append(json.load(section_file))
+            if job["optimize"] is not None:
+                if state.optimization_section is None:
+                    with open(os.path.join(FIXTURE_DIRECTORY, "optimization_section.json"), "rb") as section_file:
+                        document["sections"].append(json.load(section_file))
+                else:
+                    document["sections"].append(state.optimization_section)
+            if state.do_deliver_analysis or job["optimize"] is not None:
                 trace = json.dumps(document).encode()
             state.map_object[job["job_id"]] = trace
             job["attempts"][-1].update(status="succeeded", ended_at=TIMESTAMP)

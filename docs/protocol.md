@@ -176,6 +176,36 @@ digest and size of the result manifest's `file`, and writes it next to
 `marstrace show <marstrace.json> --analysis` prints it again, and with `--json` gives its
 `data`. The MCP tool `marstrace_fetch` answers it as `analysis` and `analysis_text`.
 
+A thinking job's `marstrace.json` also holds at most one section of `type`
+`marscompute.optimization`, after the trace sections. Its `data` holds `status` (`improved`,
+`no_gain` or `incomplete`), `correctness`, `best_speedup`, `list_config` (per configuration
+its `name`, `baseline_us`, `best_us`, `speedup` and `correct`), `list_iteration` (per
+iteration its `name`, `verdict`, `speedup` and `summary`) and `list_file`, the deliverables as
+UTF-8 text, each with `path`, `sha256`, `size_bytes`, `media_type` and `text`:
+
+| Deliverable | Holds |
+| --- | --- |
+| `performance_report.md` | the time of every configuration before and after |
+| `code_modification_report.md` | what changed in the source |
+| `optimization_process_report.md` | how the agent got there |
+| `optimized.patch` | a unified diff against the uploaded tree, paths `a/` and `b/` |
+| `iterations/<iter>/hypothesis.md`, `code.patch`, `post_*.json` | each iteration's hypothesis, change and measurements |
+
+`marstrace fetch` writes every deliverable to `marstrace-results/<job>/optimization/<path>`.
+It refuses a path outside `[A-Za-z0-9._/-]{1,200}`, a path holding `..` or starting with
+`/`, and a text whose UTF-8 bytes differ from its `sha256` or `size_bytes`; then it writes
+none of them. It prints the status, the correctness, the best speedup, a table of the
+configurations, the iterations, and where `optimized.patch` and the reports were written.
+`marstrace show <marstrace.json> --optimization` prints the same again, and with `--json`
+gives the section's `data` without the texts.
+
+A thinking job's result is `usable` when every deliverable is present, every configuration
+passed `verify`, `optimized.patch` applies to the original tree and `best_speedup` is above
+1.0. It is `partial` otherwise, with the reason codes `no_speedup`,
+`deliverables_incomplete`, `patch_not_applicable`, `correctness_failed` (the patch is then
+dropped and the status is `incomplete`) and `optimize_time_limit_reached`. It is `unusable`
+when it holds neither a trace nor an optimization, and such a job is not charged.
+
 A job that ends without a usable trace still succeeds with `marstrace.json`, its
 `quality` `unusable` and reason codes that say why. A download URL lasts 10 minutes, and
 a result can be fetched for 30 days after the job ends.

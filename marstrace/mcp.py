@@ -11,6 +11,7 @@ from marstrace.analysis import DeliveredAnalysis
 from marstrace.binary import DslCache, KernelBinary
 from marstrace.error import MarsTraceError, ServiceError, ToolArgumentError
 from marstrace.guide import AgentGuide
+from marstrace.optimization import DeliveredOptimization
 from marstrace.viewer.cli.show import ShowCommand
 from marstrace.workflow import MarsTraceWorkflow
 
@@ -702,6 +703,7 @@ class McpServer:
         subparsers = parser.add_subparsers()
         ShowCommand().register(subparsers)
         DeliveredAnalysis.extend_show(subparsers)
+        DeliveredOptimization.extend_show(subparsers)
         list_option = map_arguments.get("options", [])
         output = io.StringIO()
         notes = io.StringIO()

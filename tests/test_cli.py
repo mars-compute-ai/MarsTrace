@@ -7,7 +7,7 @@ import tempfile
 import unittest
 import urllib.request
 from unittest import mock
-from fake_service import ADD_CREDIT_URL, API_KEY, EXAMPLE_DIRECTORY, FakeServer, agent_job, thinking_job
+from fake_service import ADD_CREDIT_URL, API_KEY, EXAMPLE_DIRECTORY, FIXTURE_DIRECTORY, FakeServer, agent_job, thinking_job
 from marstrace.cli import CommandLine
 
 
@@ -311,6 +311,46 @@ class CommandLineTest(unittest.TestCase):
             "optimized improved, best speedup 1.41x over 2 configuration(s), correctness passed, 6 iteration(s): 3 kept, 3 reverted",
             output,
         )
+
+    def test_fetch_writes_the_optimization_and_show_prints_it(self) -> None:
+        thinking_job(self.directory)
+        status, output, error = self.run_cli("submit", self.directory, "--yes", "--wait")
+        self.assertEqual(status, 0, error)
+        job_id = next(iter(self.fake.state.map_job))
+        results = os.path.join(self.directory, "marstrace-results", job_id)
+        optimization = os.path.join(results, "optimization")
+        self.assertIn("optimization: improved, correctness passed, best speedup 1.41x", output)
+        self.assertRegex(output, r"n1024\s+812.4\s+590.1\s+1.38x\s+yes")
+        self.assertIn(f"patch     {os.path.join(optimization, 'optimized.patch')}", output)
+        self.assertIn(f"reports   {os.path.join(optimization, 'performance_report.md')}", output)
+        self.assertNotIn(f"saved     {os.path.join(optimization, 'optimized.patch')}", output)
+        self.assertEqual(
+            sorted(os.listdir(optimization)),
+            ["code_modification_report.md", "iterations", "optimization_process_report.md", "optimized.patch", "performance_report.md"],
+        )
+        status, output, error = self.run_cli("fetch", job_id, "-o", os.path.join(self.directory, "again"))
+        self.assertEqual(status, 0, error)
+        self.assertTrue(os.path.isfile(os.path.join(self.directory, "again", "optimization", "optimized.patch")))
+        trace = os.path.join(results, "marstrace.json")
+        status, output, error = self.run_cli("show", trace, "--optimization")
+        self.assertEqual(status, 0, error)
+        self.assertIn("kept      iter_001_shared_tiles 1.41x", output)
+        self.assertIn(os.path.join(optimization, "optimized.patch"), output)
+        status, output, error = self.run_cli("show", trace, "--optimization", "--json")
+        self.assertEqual(json.loads(output)["list_config"][1]["name"], "n2048")
+        self.assertIn("mainloop", self.run_cli("show", trace, "--stats")[1])
+        self.assertIn("optimization: this report carries none", self.run_cli("show", os.path.join(self.directory, "again", "marstrace.json").replace("again", "missing"), "--optimization")[1])
+
+    def test_fetch_refuses_an_unsafe_deliverable(self) -> None:
+        thinking_job(self.directory)
+        with open(os.path.join(FIXTURE_DIRECTORY, "optimization_section.json")) as section_file:
+            section = json.load(section_file)
+        section["data"]["list_file"][0]["path"] = "../../escape.md"
+        self.fake.state.optimization_section = section
+        status, output, error = self.run_cli("submit", self.directory, "--yes", "--wait")
+        self.assertEqual(status, 1)
+        self.assertIn("unsafe path '../../escape.md'; nothing was written", error)
+        self.assertFalse(os.path.exists(os.path.join(self.directory, "marstrace-results", "escape.md")))
 
     def test_cubin_find_copies_into_the_workspace(self) -> None:
         cache = os.path.join(self.directory, "cache")

@@ -9,6 +9,7 @@ from typing import Any
 from marstrace.client import Credentials, MarsTraceClient
 from marstrace.error import MarsTraceError, ServiceError
 from marstrace.job import JobInput, JobManifest
+from marstrace.optimization import DeliveredOptimization
 
 
 @dataclass
@@ -163,29 +164,6 @@ class MarsTraceWorkflow:
         return f"${amount:.6f}"
 
     @staticmethod
-    def speedup_text(speedup: Any) -> str:
-        """A speedup as a reader quotes it.
-
-        Args:
-            speedup: baseline time over optimized time, or None
-
-        Returns:
-            e.g. ``1.37x``, or ``none yet`` when there is none
-        """
-        if (
-            isinstance(
-                speedup,  # obj
-                bool,     # class_or_tuple
-            )
-            or not isinstance(
-                speedup,       # obj
-                (int, float),  # class_or_tuple
-            )
-        ):
-            return "none yet"
-        return f"{speedup:.2f}x"
-
-    @staticmethod
     def optimize_progress_text(map_optimize: dict[str, Any]) -> str:
         """The progress of a thinking job's optimization stage, on one line.
 
@@ -199,7 +177,7 @@ class MarsTraceWorkflow:
         return (
             f"{map_optimize['stage']}, iteration {map_optimize['iteration']}: "
             f"{map_optimize['kept']} kept, {map_optimize['reverted']} reverted, "
-            f"best speedup {MarsTraceWorkflow.speedup_text(map_optimize['best_speedup'])}, "
+            f"best speedup {DeliveredOptimization.speedup_text(map_optimize['best_speedup'])}, "
             f"{map_optimize['elapsed_seconds']:.0f} s of {map_optimize['budget_seconds']:.0f} s"
         )
 
@@ -216,7 +194,7 @@ class MarsTraceWorkflow:
         """
         return (
             f"{map_optimization['status']}, best speedup "
-            f"{MarsTraceWorkflow.speedup_text(map_optimization['best_speedup'])} over "
+            f"{DeliveredOptimization.speedup_text(map_optimization['best_speedup'])} over "
             f"{map_optimization['configs']} configuration(s), correctness "
             f"{map_optimization['correctness']}, {map_optimization['iterations']} iteration(s): "
             f"{map_optimization['kept']} kept, {map_optimization['reverted']} reverted"
@@ -556,17 +534,20 @@ class MarsTraceWorkflow:
         job_id: str,
         output_directory: str,
     ) -> list[str]:
-        """Download a succeeded job's ``marstrace.json`` and write its result manifest beside it.
+        """Download a succeeded job's ``marstrace.json``, write its result manifest beside it,
+        and write a thinking job's deliverables under ``optimization/``.
 
         Args:
             job_id: the job
             output_directory: the directory the files land in
 
         Returns:
-            the paths written
+            the paths written: ``marstrace.json``, ``result-manifest.json``, then the
+            deliverables
 
         Raises:
-            ServiceError: the job has no result, or the file's bytes differ from its manifest
+            ServiceError: the job has no result, the file's bytes differ from its manifest, or
+                a deliverable's path is unsafe or its bytes differ from its digest
         """
         map_result = self._client.result(job_id)
         map_manifest = map_result["manifest"]
@@ -602,7 +583,15 @@ class MarsTraceWorkflow:
                 manifest_file,
                 indent=MarsTraceWorkflow.JSON_INDENT,
             )
-        return [
+        list_path = [
             trace_path,
             manifest_path,
         ]
+        try:
+            document = json.loads(data)
+        except ValueError:
+            document = None
+        optimization = DeliveredOptimization.from_document(document)
+        if optimization is not None:
+            list_path.extend(optimization.write_files(output_directory))
+        return list_path
