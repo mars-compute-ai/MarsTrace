@@ -104,6 +104,15 @@ class MarsTraceWorkflow:
         progress: called with a line of progress, or None to stay silent
     """
 
+    # why a queued job waits, by the queue's reason
+    MAP_QUEUE_REASON = {
+        "paused": "MarsTrace is not starting jobs right now",
+        "retry_wait": "waiting before the next attempt",
+        "service_capacity": "every GPU machine of MarsTrace is in use",
+        "workspace_limit": "your workspace already runs its {limit} jobs",
+        "dispatching": "starting now",
+    }
+
     UNUSABLE_REASON = "unusable_result"  # why a job whose trace is unusable is not charged
     FAILED_NO_RESULT_REASON = "failed_no_result"  # why a job that failed without a result is not charged
     MAP_NOT_CHARGED_NOTE = {
@@ -472,14 +481,6 @@ class MarsTraceWorkflow:
             the result
         """
         return self._client.result(job_id)
-
-    MAP_QUEUE_REASON = {
-        "paused": "MarsTrace is not starting jobs right now",
-        "retry_wait": "waiting before the next attempt",
-        "service_capacity": "every GPU machine of MarsTrace is in use",
-        "workspace_limit": "your workspace already runs its {limit} jobs",
-        "dispatching": "starting now",
-    }
 
     @staticmethod
     def queue_text(map_queue: dict[str, Any]) -> str:

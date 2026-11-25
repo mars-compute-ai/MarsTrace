@@ -9,7 +9,8 @@ import urllib.request
 from unittest import mock
 from fake_service import ADD_CREDIT_URL, API_KEY, EXAMPLE_DIRECTORY, FIXTURE_DIRECTORY, FakeServer, agent_job, thinking_job
 from marstrace.analysis import DeliveredAnalysis
-from marstrace.cli import CommandLine, JobCommands
+from marstrace.cli import CommandLine
+from marstrace.workflow import MarsTraceWorkflow
 
 
 class CommandLineTest(unittest.TestCase):
@@ -254,12 +255,12 @@ class CommandLineTest(unittest.TestCase):
 
     def test_a_queued_job_says_why_it_waits(self) -> None:
         self.assertEqual(
-            JobCommands.queue_text({"reason": "workspace_limit", "position": 2, "workspace_dispatched_limit": 2}),
+            MarsTraceWorkflow.queue_text({"reason": "workspace_limit", "position": 2, "workspace_dispatched_limit": 2}),
             "your workspace already runs its 2 jobs; number 2 in its queue",
         )
         self.assertIn(
             "next attempt at 2026-11-25T05:00:00Z",
-            JobCommands.queue_text({"reason": "retry_wait", "next_attempt_at": "2026-11-25T05:00:00Z"}),
+            MarsTraceWorkflow.queue_text({"reason": "retry_wait", "next_attempt_at": "2026-11-25T05:00:00Z"}),
         )
 
     def test_a_trace_without_an_analysis_says_so(self) -> None:

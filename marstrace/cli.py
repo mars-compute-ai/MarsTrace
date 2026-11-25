@@ -43,7 +43,6 @@ class JobCommands:
             )
         )
 
-    queue_text = staticmethod(MarsTraceWorkflow.queue_text)
 
     @staticmethod
     def print_job(map_job: dict[str, Any]) -> None:
@@ -62,7 +61,7 @@ class JobCommands:
         if map_job["ended_at"]:
             print(f"ended     {map_job['ended_at']}")
         if isinstance(map_job.get("queue"), dict):
-            print(f"queued    {JobCommands.queue_text(map_job['queue'])}")
+            print(f"queued    {MarsTraceWorkflow.queue_text(map_job['queue'])}")
         if map_progress:
             print(
                 f"progress  agent turn {map_progress['agent_turn']}, "
