@@ -325,6 +325,46 @@ class SitePairing:
             payload=record.timestamp,
         )
 
+    @staticmethod
+    def _order_key(
+        row_position: int,
+        record: SiteTraceRecord,
+        is_end: bool,
+        start_timestamp: int,
+        region_id: int,
+        position: int,
+    ) -> tuple[int, int, int, int, int, int]:
+        """Where one boundary of a paired interval goes in the run's scope records.
+
+        Each row runs in time order. At one timestamp, the ends that close an interval
+        begun earlier come first, so intervals that meet lie back to back rather than
+        nested; then the rest in the order their region saw them, so an interval that
+        begins and ends at the same timestamp, which a clock coarser than the region
+        gives, has its start before its end. Sorted the other way, its end finds no
+        open start, and its start stays open until a later pass of the region closes
+        it: one interval as long as the run.
+
+        Args:
+            row_position: the row's place among the run's rows
+            record: the boundary's site record
+            is_end: whether the boundary closes its interval
+            start_timestamp: when the boundary's interval began
+            region_id: the boundary's region
+            position: the boundary's place among its region's boundaries on the row
+
+        Returns:
+            the sort key
+        """
+        closes_earlier = is_end and start_timestamp < record.timestamp
+        return (
+            row_position,
+            record.timestamp,
+            0 if closes_earlier else 1,
+            region_id,
+            position,
+            0 if is_end else 1,
+        )
+
     @classmethod
     def _pair_period(
         cls,
@@ -334,30 +374,31 @@ class SitePairing:
         region: SiteRegion,
         list_nb_interval: list[int],
         set_row: set,
-        list_keyed_out: list[tuple[tuple[int, int, int, int, int], ScopeTraceRecord]],
+        list_keyed_out: list[tuple[tuple[int, int, int, int, int, int], ScopeTraceRecord]],
     ) -> None:
         """Pair a period region: each firing of its site opens an interval the row's next closes.
 
         A row's last firing opens nothing, and a row that fired once makes no interval;
         neither is a dropped boundary. At the firing where one interval ends and the next
-        begins, the end sorts first, so the intervals lie back to back.
+        begins, the end sorts first, so the intervals lie back to back; see :meth:`_order_key`.
         """
         for row, list_row_record in map_row_record.items():
             list_firing = [record for record in list_row_record if record.site_id == region.enter_site]
             for order, (start, end) in enumerate(zip(list_firing, list_firing[1:])):
                 list_nb_interval[region_id] += 1
                 set_row.add(row)
-                for type_str, record, rank in (
-                    ("SCOPE_START", start, 1),
-                    ("SCOPE_END", end, 0),
+                for type_str, record, position in (
+                    ("SCOPE_START", start, order),
+                    ("SCOPE_END", end, order + 1),
                 ):
                     list_keyed_out.append((
-                        (
-                            map_row_position[row],
-                            record.timestamp,
-                            rank,
-                            region_id,
-                            order,
+                        cls._order_key(
+                            row_position=map_row_position[row],
+                            record=record,
+                            is_end=type_str == "SCOPE_END",
+                            start_timestamp=start.timestamp,
+                            region_id=region_id,
+                            position=position,
                         ),
                         cls._scope_record(
                             record=record,
@@ -401,8 +442,8 @@ class SitePairing:
         list_nb_interval = [0] * nb_region
         list_nb_dropped = [0] * nb_region
         list_set_row: list[set] = [set() for _ in range(nb_region)]
-        # (row, timestamp, end before start, region, order in the row) -> scope record
-        list_keyed_out: list[tuple[tuple[int, int, int, int, int], ScopeTraceRecord]] = []
+        # the order key of _order_key -> scope record
+        list_keyed_out: list[tuple[tuple[int, int, int, int, int, int], ScopeTraceRecord]] = []
 
         # each region pairs on its own records, so a site may close one region and open the
         # next, or open several
@@ -447,21 +488,25 @@ class SitePairing:
                 list_set_row[region_id].add(boundary_pair.end.global_tid)
 
             # every enter opens a scope; a leave closes one only where it found its enter
-            set_paired_end = {id(boundary_pair.end) for boundary_pair in boundary_pairing.list_pair}
+            map_end_start_timestamp = {
+                id(boundary_pair.end): boundary_pair.start.timestamp
+                for boundary_pair in boundary_pairing.list_pair
+            }
             for order, record in enumerate(list_row_ordered):
                 if record.site_id in map_enter:
                     type_str = "SCOPE_START"
-                elif id(record) in set_paired_end:
+                elif id(record) in map_end_start_timestamp:
                     type_str = "SCOPE_END"
                 else:
                     continue
                 list_keyed_out.append((
-                    (
-                        map_row_position[record.global_tid],
-                        record.timestamp,
-                        0 if type_str == "SCOPE_END" else 1,
-                        region_id,
-                        order,
+                    cls._order_key(
+                        row_position=map_row_position[record.global_tid],
+                        record=record,
+                        is_end=type_str == "SCOPE_END",
+                        start_timestamp=map_end_start_timestamp.get(id(record), record.timestamp),
+                        region_id=region_id,
+                        position=order,
                     ),
                     ScopeTraceRecord(
                         global_tid=record.global_tid,
