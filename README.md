@@ -134,7 +134,9 @@ issue or contact MarsCompute to ask for access.
 
 - Mode `fast`: a trace and its analysis.
 - Modes `thinking-light` and `thinking-heavy`: a trace, then an optimized kernel with its patch
-  and reports; `thinking-heavy` runs up to five hours.
+  and reports; `thinking-heavy` runs up to five hours. A run may end earlier when it has
+  measured and ruled out every candidate change; the process report lists them, and you pay
+  only for the tokens it used.
 - Very large persistent kernels (a launch of thousands of blocks of which one per SM runs, such
   as FlashAttention 4): per-iteration timings may come out `partial`, because a trace keeps
   100,000 records; per-tile timings are delivered.
