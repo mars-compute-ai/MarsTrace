@@ -135,6 +135,11 @@ max_attempts = 2                  # 1 to 3, 2 when absent: how often a failed at
   `libcuda_dialect_runtime_static.a` into a small C driver with `-lcuda`, and send the
   driver, the object and the archive in `files`: the driver then runs with the CUDA
   driver alone. The object embeds the cubin, so send the same cubin in `cubins`.
+  Also send the header `export_to_c` wrote and the driver's source, in `source` or
+  `files`: the tracer records a kernel launched inside its own process, so the agent
+  links the object into a small library from that header and calls it in-process; the
+  driver executable on its own cannot be traced. For a thinking job, a `run` command
+  that launches the kernel from Python in-process works as well.
   Say in `intent` that the kernel is launched through that driver. In a launch
   manifest, describe the grid, block and shared memory, but leave out `arguments`:
   the kernel's parameters are the block the host code packs (many more than the
