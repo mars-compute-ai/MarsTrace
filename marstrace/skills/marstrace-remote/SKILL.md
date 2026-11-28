@@ -1,6 +1,6 @@
 ---
 name: marstrace-remote
-description: Trace the timeline inside one CUDA kernel on an H200 or B200 with MarsTrace, without a local GPU. Gather the kernel's cubins (from nvcc, Triton, torch.compile, TileLang or CuTeDSL output), and optionally its source, a launch description, input data and a driver script, into a workspace that an agent on the GPU host traces within the caps you set. Then estimate the cost, submit, fetch marstrace.json and read it; or, in the thinking modes, have the agent optimize the kernel against your run and verify commands and fetch the patch and reports. A job starts once the workspace's balance reaches a minimum and is charged the agent tokens it actually used, failed attempts included, or nothing when its trace is unusable or it fails without a result. Works through the `marstrace` CLI or its stdio MCP server (`marstrace mcp`). Use when the user wants per-phase durations, pipeline bubbles or warp-role scheduling inside a kernel.
+description: Trace the timeline inside one CUDA kernel on an H200, B200 or B300 with MarsTrace, without a local GPU. Gather the kernel's cubins (from nvcc, Triton, torch.compile, TileLang or CuTeDSL output), and optionally its source, a launch description, input data and a driver script, into a workspace that an agent on the GPU host traces within the caps you set. Then estimate the cost, submit, fetch marstrace.json and read it; or, in the thinking modes, have the agent optimize the kernel against your run and verify commands and fetch the patch and reports. A job starts once the workspace's balance reaches a minimum and is charged the agent tokens it actually used, failed attempts included, or nothing when its trace is unusable or it fails without a result. Works through the `marstrace` CLI or its stdio MCP server (`marstrace mcp`). Use when the user wants per-phase durations, pipeline bubbles or warp-role scheduling inside a kernel.
 ---
 
 # Tracing a kernel with MarsTrace
@@ -60,9 +60,10 @@ plugin.
 
 Settle these with the user before writing anything:
 
-- **The hardware.** Pick a hardware id from `marstrace hardware`: `h200` or `b200`, among
-  those it shows as available; `marstrace hardware` lists the hardware the account can use.
-  A cubin runs only on the SM version it was built for: H200 is `sm_90a`, B200 `sm_100a`.
+- **The hardware.** Pick a hardware id from `marstrace hardware`: `h200`, `b200` or `b300`,
+  among those it shows as available; `marstrace hardware` lists the hardware the account can
+  use. A cubin runs only on the SM version it was built for: H200 is `sm_90a`, B200
+  `sm_100a`, B300 `sm_103a` (which needs CUDA 12.9 or later to build).
 - **The CUDA version.** The agent's CUDA toolkit is one of the versions `marstrace hardware`
   lists for the hardware, the one marked default unless `cuda_version` names another. Pick
   the version the user builds with, or one at least as new as the toolkit that built the
