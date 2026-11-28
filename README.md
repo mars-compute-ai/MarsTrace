@@ -52,7 +52,7 @@ The agent prepares the job, shows you its estimated cost, submits it, and reads 
 
 The thinking modes need your source code, plus commands to build, run and check it. The agent keeps a change only if it is measurably faster and still passes your check.
 
-GPUs: H200 and B200, with CUDA 13.0.
+GPUs: H200, B200 and B300, with CUDA 13.0.
 
 ## Billing
 
